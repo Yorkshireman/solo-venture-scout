@@ -1,0 +1,45 @@
+# Solo Venture Scout
+
+Solo Venture Scout is a reusable Codex skill for discovering and evaluating commercially promising software opportunities that fit the constraints of a solo developer.
+
+## Language
+
+**Solo Venture Scout**:
+The skill being designed in this repository. It explores markets, rejects weak candidates, and recommends an opportunity for downstream validation and product planning.
+_Avoid_: Idea generator, startup generator
+
+**Opportunity**:
+A narrowly defined potential software business for a specific customer facing a specific costly problem in a specific situation.
+_Avoid_: App idea, concept
+
+**Public Research**:
+Read-only evidence gathering from publicly accessible sources that does not interact with prospects or publish on the developer's behalf.
+_Avoid_: Validation
+
+**External Validation Action**:
+An action that interacts with prospective customers or the market, including outreach, publishing, collecting personal data, or accepting money; it requires explicit human approval.
+_Avoid_: Public research
+
+**Scouting Campaign**:
+A resumable investigation that applies one developer's constraints to broad market research and progressively records evidence, candidates, rejections, and decisions.
+_Avoid_: Search, run
+
+**Leading Opportunity**:
+The strongest surviving opportunity after public research and comparison; it is promising enough to validate but is not yet a validated business.
+_Avoid_: Validated opportunity, winning idea
+
+**No Qualifying Opportunity**:
+The valid outcome when no candidate clears the campaign's evidence and suitability gates within its research budget.
+_Avoid_: Failed campaign
+
+**Opportunity Brief**:
+The terminal handoff from a successful Scouting Campaign: an evidence-backed description of a Leading Opportunity that the user may give to Wayfinder, not a product specification.
+_Avoid_: Product spec, implementation plan, opportunity dossier
+
+**Value Hypothesis**:
+A provisional statement of the smallest customer outcome that might address an Opportunity, recorded for Wayfinder to challenge rather than as a settled product boundary.
+_Avoid_: MVP specification, feature list
+
+**No Qualifying Opportunity Report**:
+The terminal record of an unsuccessful Scouting Campaign, explaining its search coverage, rejections, uncertainty, and whether a different campaign is justified; it is not a Wayfinder handoff.
+_Avoid_: Opportunity Brief, failure report
