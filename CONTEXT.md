@@ -12,9 +12,21 @@ _Avoid_: Idea generator, startup generator
 A narrowly defined potential software business for a specific customer facing a specific costly problem in a specific situation.
 _Avoid_: App idea, concept
 
+**Campaign Research**:
+Read-only evidence gathering for a Scouting Campaign, comprising autonomous Public Research and approval-gated Approved Research.
+_Avoid_: Validation, market outreach
+
 **Public Research**:
-Read-only evidence gathering from publicly accessible sources that does not interact with prospects or publish on the developer's behalf.
-_Avoid_: Validation
+Campaign Research using publicly accessible Sources that may proceed autonomously after Campaign Intake confirmation.
+_Avoid_: Approved Research, validation
+
+**Approved Research**:
+Campaign Research using an authenticated or otherwise restricted Source under explicit, scoped developer approval.
+_Avoid_: Public Research, external validation
+
+**Research Approval**:
+An affirmative, recorded, and scoped developer authorisation for Approved Research or Research Expenditure that never authorises unlawful activity or an External Validation Action.
+_Avoid_: Standing permission, implied consent
 
 **External Validation Action**:
 An action that interacts with prospective customers or the market, including outreach, publishing, collecting personal data, or accepting money; it requires explicit human approval.
@@ -61,7 +73,7 @@ The append-only audit record of every atomic statement or unanswered question th
 _Avoid_: Research notes, browsing history
 
 **Source**:
-The public origin from which an Observation was obtained, identified precisely enough for a later reader to locate what the Scout examined and when.
+The origin from which an Observation was obtained during Campaign Research, identified precisely enough for an authorised later reader to locate what the Scout examined and when.
 _Avoid_: Evidence, citation
 
 **Observation**:
@@ -83,6 +95,14 @@ _Avoid_: Recency, access date
 **Research Expenditure**:
 Developer-approved paid access to a Source, charged against the Research Budget and recorded without payment credentials.
 _Avoid_: Operating cost, implicit spend
+
+**Excluded Market**:
+A market whose intended activity falls outside Solo Venture Scout's non-overridable safety boundary and cannot produce an eligible Opportunity.
+_Avoid_: Elevated-risk market, user exclusion
+
+**Elevated-Risk Market**:
+A market that may remain eligible but requires Opportunity-specific Research Approval because of material legal, regulatory, safety, or exploitation risk.
+_Avoid_: Excluded market, ordinary market
 
 **Assumption**:
 An explicitly unsupported premise retained in the Evidence Ledger so it cannot be mistaken for observed evidence. Every material Assumption links to the Evidence Gap that would test or resolve it and never counts as supporting evidence.
