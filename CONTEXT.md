@@ -20,6 +20,10 @@ _Avoid_: Industry, product category, solution idea
 A bounded, source-led scan of heterogeneous external maps of economic activity and problem signals that generates Exploration Threads, including controlled random sampling and novelty checks.
 _Avoid_: Brainstorming, market questionnaire
 
+**Source Family**:
+A broad kind of external map or problem-signal source used to measure Discovery Sweep diversity. Different Source Families broaden coverage but do not by themselves establish independent evidence.
+_Avoid_: Source Lineage, publisher count
+
 **Novelty Probe**:
 A deliberately speculative discovery exercise that generates unusual Exploration Threads through cross-domain transfer, change combinations, inversion, or recombination, while recording its derivation as Assumptions and granting it no evidential credit.
 _Avoid_: App idea, supporting evidence, intuition
@@ -27,6 +31,14 @@ _Avoid_: App idea, supporting evidence, intuition
 **Breadth Gate**:
 A Campaign Decision that bounded discovery coverage, a viable comparison set, and diminishing returns justify shifting most research from exploration to Opportunity deepening while retaining an open-world discovery allowance.
 _Avoid_: Market exhausted, comprehensive coverage
+
+**Exclusion Gate**:
+A disqualifying test that rejects an Opportunity only when sufficient affirmative evidence establishes the excluded condition; missing evidence leaves the gate unresolved.
+_Avoid_: Qualification Gate, assumed failure
+
+**Qualification Gate**:
+An eligibility test that an Opportunity passes only when sufficient affirmative evidence establishes the required condition; missing evidence leaves the gate unresolved.
+_Avoid_: Exclusion Gate, assumed pass
 
 **Costly Problem**:
 A problem with a credible material consequence for a specific customer in a specific situation, such as lost money, wasted skilled time, blocked revenue, operational risk, compliance exposure, or recurring workaround expenditure.
@@ -77,7 +89,7 @@ A developer condition whose violation makes an Opportunity ineligible for the Sc
 _Avoid_: Preference, soft constraint
 
 **Preference**:
-A non-fatal developer condition used to compare otherwise eligible Opportunities.
+A non-fatal developer condition used to compare otherwise eligible Opportunities, with `minor`, `important`, or `major` importance confirmed during Campaign Intake.
 _Avoid_: Hard constraint, requirement
 
 **Advantage**:
@@ -152,16 +164,56 @@ _Avoid_: Certainty score, source confidence
 An auditable conclusion that changes Opportunity formation, rejection, comparison, or terminal handoff. It records its Campaign Intake version, applicable rule, linked Evidence Ledger entries, rationale, confidence, limitations, and time.
 _Avoid_: Bare decision, result
 
+**Opportunity Disposition**:
+The versioned current decision status of an Opportunity within a Scouting Campaign: active, rejected, or unresolved when the campaign ends. New evidence or Campaign Intake revisions may supersede the current disposition through an explicit Campaign Decision, while history is retained; Leading Opportunity is a terminal role, not a disposition.
+_Avoid_: Candidate lifecycle, research stage
+
+**Eligible Opportunity**:
+An Opportunity whose Exclusion Gates and Qualification Gates have all passed under the current Campaign Intake and Evidence Ledger, making it eligible for comparison but not necessarily the Leading Opportunity.
+_Avoid_: Candidate, finalist, qualified idea
+
+**Decision Value**:
+The expected usefulness of a research action in changing an Opportunity gate, comparison, or terminal decision relative to the Research Budget it consumes.
+_Avoid_: Research volume, interestingness, evidence accumulation
+
+**Deepened Opportunity**:
+An Opportunity allocated Campaign Research beyond its equal shallow formation allowance because further evidence could change a gate, comparison, or terminal decision.
+_Avoid_: Deep candidate, favourite idea
+
+**Required Input**:
+The ranges of time, cash, acquisition effort, operating burden, irreversible downside, and opportunity cost needed to test an Opportunity and reach an initial sellable outcome. It is a vector of constraints and exposures, not a single effort score or implementation plan.
+_Avoid_: Build estimate, total cost score
+
+**Potential Output**:
+The evidence-backed range of commercial outcomes, scale, durability, and strategic leverage an Opportunity could produce. It is not a forecast and unsupported upside receives no comparison credit.
+_Avoid_: Guaranteed return, speculative upside
+
+**Outcome Uncertainty**:
+The variation in an Opportunity's possible commercial results even when the supporting evidence is credible. It is distinct from Evidence Confidence, which assesses the warrant for the claims describing that variation.
+_Avoid_: Evidence Confidence, failure probability
+
+**Input–Output Asymmetry**:
+The relationship between an Opportunity's Required Input and Potential Output; low bounded input with credible high upside is a comparison advantage even when Outcome Uncertainty is substantial.
+_Avoid_: Expected-value score, cheap lottery ticket
+
+**Non-Dominated Opportunity**:
+An Eligible Opportunity for which no other Eligible Opportunity requires no more material input, offers no less credible output, fits the confirmed Developer Profile at least as well, and is materially better on at least one comparison dimension.
+_Avoid_: Winner, highest-scoring candidate
+
 **Leading Opportunity**:
 The strongest surviving opportunity after public research and comparison; it is promising enough to validate but is not yet a validated business.
 _Avoid_: Validated opportunity, winning idea
 
+**Developer-Selected Opportunity**:
+A Non-Dominated Opportunity chosen by the developer after an Inconclusive Comparison Report without being reclassified as the Leading Opportunity.
+_Avoid_: Leading Opportunity, Scout recommendation
+
 **No Qualifying Opportunity**:
-The valid outcome when no candidate clears the campaign's evidence and suitability gates within its research budget.
+The valid outcome when no Opportunity becomes eligible within the Research Budget.
 _Avoid_: Failed campaign
 
 **Opportunity Brief**:
-The terminal handoff from a successful Scouting Campaign: an evidence-backed description of a Leading Opportunity that the user may give to Wayfinder, not a product specification.
+An evidence-backed handoff describing either a Leading Opportunity or a Developer-Selected Opportunity that the user may give to Wayfinder, not a product specification. It preserves whether the Scout recommended the Opportunity or the developer selected it from an inconclusive comparison.
 _Avoid_: Product spec, implementation plan, opportunity dossier
 
 **Value Hypothesis**:
@@ -169,5 +221,9 @@ A provisional statement of the smallest customer outcome that might address an O
 _Avoid_: MVP specification, feature list
 
 **No Qualifying Opportunity Report**:
-The terminal record of an unsuccessful Scouting Campaign, explaining its search coverage, rejections, uncertainty, and whether a different campaign is justified; it is not a Wayfinder handoff.
+The terminal record of a Scouting Campaign with no Eligible Opportunity, explaining its search coverage, rejections, uncertainty, and whether a different campaign is justified; it is not a Wayfinder handoff.
 _Avoid_: Opportunity Brief, failure report
+
+**Inconclusive Comparison Report**:
+The terminal record produced when one or more Opportunities qualified but the Research Budget could not establish a defensible stand-out leader. It preserves the non-dominated comparison, explains the unresolved trade-offs, and lets the developer stop, extend research, or select Opportunities for separate downstream work.
+_Avoid_: No Qualifying Opportunity Report, forced ranking
