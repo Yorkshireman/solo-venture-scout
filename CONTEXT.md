@@ -56,6 +56,58 @@ _Avoid_: Success metric, aspiration
 The explicit limits on a Scouting Campaign's research effort, sources, candidate depth, and paid spend; paid spend is zero unless the developer authorizes otherwise.
 _Avoid_: Token budget, unlimited research
 
+**Evidence Ledger**:
+The append-only audit record of every atomic statement or unanswered question that could change Opportunity formation, rejection, comparison, confidence, or terminal handoff. Stable entries may become active, superseded, or retracted, but corrections and changed assessments never erase the campaign's historical decision basis.
+_Avoid_: Research notes, browsing history
+
+**Source**:
+The public origin from which an Observation was obtained, identified precisely enough for a later reader to locate what the Scout examined and when.
+_Avoid_: Evidence, citation
+
+**Observation**:
+An atomic, neutrally represented statement found directly in a Source and recorded with a traceable location and temporal context. It reports what the Source says, not that the statement is objectively true.
+_Avoid_: Fact, finding
+
+**Inference**:
+An atomic conclusion derived from linked Observations or other Inferences rather than stated directly by a Source. Its reasoning preserves both material support and material challenge.
+_Avoid_: Observation, fact
+
+**Source Lineage**:
+The provenance relationship between Sources that reveals shared authorship, datasets, publications, syndication, or other common origins. Multiple Sources provide independent evidence only when their relevant origins are genuinely independent.
+_Avoid_: Citation count, URL count
+
+**Source Freshness**:
+How well a Source's publication, update, access, and effective periods match the time sensitivity of the Observation drawn from it.
+_Avoid_: Recency, access date
+
+**Research Expenditure**:
+Developer-approved paid access to a Source, charged against the Research Budget and recorded without payment credentials.
+_Avoid_: Operating cost, implicit spend
+
+**Assumption**:
+An explicitly unsupported premise retained in the Evidence Ledger so it cannot be mistaken for observed evidence. Every material Assumption links to the Evidence Gap that would test or resolve it and never counts as supporting evidence.
+_Avoid_: Inference, fact
+
+**Evidence Gap**:
+A material unanswered question whose resolution could change an Opportunity decision or terminal handoff. It records the affected decisions and the condition that would count as resolution; missing evidence is not silently treated as evidence of absence.
+_Avoid_: Missing data, research backlog
+
+**Contradiction**:
+A recorded relationship between incompatible Evidence Ledger entries that preserves the disputed proposition, scope, and reconciliation status rather than silently choosing one as true.
+_Avoid_: Error, duplicate
+
+**Source Credibility**:
+A contextual assessment of how fit a Source is for a particular Observation, considering directness, relevant expertise, methodology, incentives, verifiability, and limitations. It is not a universal rating of a publisher.
+_Avoid_: Trusted source, publisher score
+
+**Evidence Confidence**:
+An ordinal, reasoned assessment of how strongly the Evidence Ledger warrants an Inference or material Campaign Decision after accounting for credibility, independence, freshness, Contradictions, and Evidence Gaps. It is not a probability or a rating attached to an Observation.
+_Avoid_: Certainty score, source confidence
+
+**Campaign Decision**:
+An auditable conclusion that changes Opportunity formation, rejection, comparison, or terminal handoff. It records its Campaign Intake version, applicable rule, linked Evidence Ledger entries, rationale, confidence, limitations, and time.
+_Avoid_: Bare decision, result
+
 **Leading Opportunity**:
 The strongest surviving opportunity after public research and comparison; it is promising enough to validate but is not yet a validated business.
 _Avoid_: Validated opportunity, winning idea
