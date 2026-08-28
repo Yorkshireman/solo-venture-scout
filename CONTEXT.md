@@ -12,6 +12,30 @@ _Avoid_: Idea generator, startup generator
 A narrowly defined potential software business for a specific customer facing a specific costly problem in a specific situation.
 _Avoid_: App idea, concept
 
+**Exploration Thread**:
+A provisional combination of customer group, situation or workflow, and problem family examined before evidence is strong enough to form an Opportunity.
+_Avoid_: Industry, product category, solution idea
+
+**Discovery Sweep**:
+A bounded, source-led scan of heterogeneous external maps of economic activity and problem signals that generates Exploration Threads, including controlled random sampling and novelty checks.
+_Avoid_: Brainstorming, market questionnaire
+
+**Novelty Probe**:
+A deliberately speculative discovery exercise that generates unusual Exploration Threads through cross-domain transfer, change combinations, inversion, or recombination, while recording its derivation as Assumptions and granting it no evidential credit.
+_Avoid_: App idea, supporting evidence, intuition
+
+**Breadth Gate**:
+A Campaign Decision that bounded discovery coverage, a viable comparison set, and diminishing returns justify shifting most research from exploration to Opportunity deepening while retaining an open-world discovery allowance.
+_Avoid_: Market exhausted, comprehensive coverage
+
+**Costly Problem**:
+A problem with a credible material consequence for a specific customer in a specific situation, such as lost money, wasted skilled time, blocked revenue, operational risk, compliance exposure, or recurring workaround expenditure.
+_Avoid_: Annoyance, broad desire, speculative need
+
+**Problem Signal**:
+An Observation that points toward a possible Costly Problem through a material consequence or committed behavior such as expenditure, workaround effort, switching, escalation, or measurable loss; it directs further research but is not sufficient evidence by itself.
+_Avoid_: Complaint, feature request, proof
+
 **Campaign Research**:
 Read-only evidence gathering for a Scouting Campaign, comprising autonomous Public Research and approval-gated Approved Research.
 _Avoid_: Validation, market outreach
