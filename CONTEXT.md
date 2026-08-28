@@ -52,6 +52,10 @@ _Avoid_: Complaint, feature request, proof
 Read-only evidence gathering for a Scouting Campaign, comprising autonomous Public Research and approval-gated Approved Research.
 _Avoid_: Validation, market outreach
 
+**Research Assignment**:
+A versioned, bounded specification of read-only Campaign Research delegated against a named decision or Evidence Gap and reserved Research Budget capacity.
+_Avoid_: Research prompt, autonomous campaign
+
 **Public Research**:
 Campaign Research using publicly accessible Sources that may proceed autonomously after Campaign Intake confirmation.
 _Avoid_: Approved Research, validation
@@ -59,6 +63,10 @@ _Avoid_: Approved Research, validation
 **Approved Research**:
 Campaign Research using an authenticated or otherwise restricted Source under explicit, scoped developer approval.
 _Avoid_: Public Research, external validation
+
+**Research Result Package**:
+An immutable, stable-identity submission from a bounded read-only researcher for coordinator validation and import into a Scouting Campaign. Its contents are proposed research material, not Evidence Ledger entries, until accepted.
+_Avoid_: Research notes, evidence bundle
 
 **Research Approval**:
 An affirmative, recorded, and scoped developer authorisation for Approved Research or Research Expenditure that never authorises unlawful activity or an External Validation Action.
@@ -83,6 +91,10 @@ _Avoid_: User account, résumé
 **Campaign Intake**:
 The developer-confirmed, versioned baseline for a Scouting Campaign, combining a dated Developer Profile snapshot with its Commercial Outcome Target, capacity, risk tolerance, and Research Budget.
 _Avoid_: Prompt, questionnaire
+
+**Pending Decision**:
+A persisted human choice whose explicit response is required before a Scouting Campaign may take the dependent action. Explanations and informational actions leave it unresolved, and silence never counts as consent.
+_Avoid_: Prompt, assumed approval
 
 **Hard Constraint**:
 A developer condition whose violation makes an Opportunity ineligible for the Scouting Campaign.
