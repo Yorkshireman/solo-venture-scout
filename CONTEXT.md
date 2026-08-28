@@ -213,17 +213,17 @@ The valid outcome when no Opportunity becomes eligible within the Research Budge
 _Avoid_: Failed campaign
 
 **Opportunity Brief**:
-An evidence-backed handoff describing either a Leading Opportunity or a Developer-Selected Opportunity that the user may give to Wayfinder, not a product specification. It preserves whether the Scout recommended the Opportunity or the developer selected it from an inconclusive comparison.
+An immutable, evidence-backed terminal handoff for exactly one Leading Opportunity or Developer-Selected Opportunity that preserves selection provenance and exposes a provisional Value Hypothesis and audit pointers without becoming a product specification. Each brief may enter one separate, human-invoked Wayfinder effort.
 _Avoid_: Product spec, implementation plan, opportunity dossier
 
 **Value Hypothesis**:
-A provisional statement of the smallest customer outcome that might address an Opportunity, recorded for Wayfinder to challenge rather than as a settled product boundary.
+A visibly provisional statement of the smallest customer outcome that might address an Opportunity, together with its evidence limits and disconfirmation conditions. It is recorded for Wayfinder to challenge and never settles features, delivery design, or a product boundary.
 _Avoid_: MVP specification, feature list
 
 **No Qualifying Opportunity Report**:
-The terminal record of a Scouting Campaign with no Eligible Opportunity, explaining its search coverage, rejections, uncertainty, and whether a different campaign is justified; it is not a Wayfinder handoff.
+The immutable terminal record of a Scouting Campaign with no Eligible Opportunity, separating affirmatively rejected Opportunities from unresolved Opportunities and explaining coverage, Research Budget use, uncertainty, and possible continuation conditions. It is not a Wayfinder handoff.
 _Avoid_: Opportunity Brief, failure report
 
 **Inconclusive Comparison Report**:
-The terminal record produced when one or more Opportunities qualified but the Research Budget could not establish a defensible stand-out leader. It preserves the non-dominated comparison, explains the unresolved trade-offs, and lets the developer stop, extend research, or select Opportunities for separate downstream work.
+The immutable terminal record produced when one or more Opportunities qualified but the Scouting Campaign could not establish a defensible stand-out leader. It compares Eligible Non-Dominated Opportunities without forced ranking, exposes unresolved contenders and trade-offs, and lets the developer stop, extend research, or select Opportunities for separate downstream work.
 _Avoid_: No Qualifying Opportunity Report, forced ranking
