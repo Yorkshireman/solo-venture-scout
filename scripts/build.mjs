@@ -3,7 +3,7 @@ import path from "node:path";
 import { build } from "esbuild";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
-const skillSource = path.join(repositoryRoot, "skill");
+const skillSource = path.join(repositoryRoot, "skill", "solo-venture-scout");
 const standaloneSkill = path.join(
   outputRoot,
   "standalone",

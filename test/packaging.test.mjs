@@ -32,6 +32,18 @@ test("build generates byte-identical standalone and plugin skill trees", async (
   }
 });
 
+test("source skill folder matches its declared name", async () => {
+  const sourceSkill = path.join(
+    repositoryRoot,
+    "skill",
+    "solo-venture-scout",
+  );
+  const skill = await readFile(path.join(sourceSkill, "SKILL.md"), "utf8");
+  const declaredName = skill.match(/^name:\s*(.+)$/m)?.[1];
+
+  assert.equal(declaredName, path.basename(sourceSkill));
+});
+
 test("generated Scout is explicit-invocation-only in a skills-only plugin", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-policy-");
 
