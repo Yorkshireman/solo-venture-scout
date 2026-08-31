@@ -1,0 +1,6 @@
+interface:
+  display_name: "Solo Venture Scout"
+  short_description: "Find evidence-backed solo software opportunities"
+  default_prompt: "Use $solo-venture-scout to start or resume a Scouting Campaign."
+policy:
+  allow_implicit_invocation: false

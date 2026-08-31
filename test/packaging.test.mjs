@@ -1,0 +1,143 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import test from "node:test";
+
+const execFileAsync = promisify(execFile);
+const repositoryRoot = path.resolve(import.meta.dirname, "..");
+
+/** @param {string} root */
+async function filesUnder(root) {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
+    .sort();
+}
+
+test("build generates byte-identical standalone and plugin skill trees", async () => {
+  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-build-"));
+
+  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
+    cwd: repositoryRoot,
+    env: { ...process.env, SVS_DIST_DIR: outputRoot },
+  });
+
+  const standalone = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const pluginSkill = path.join(
+    outputRoot,
+    "plugin",
+    "solo-venture-scout",
+    "skills",
+    "solo-venture-scout",
+  );
+  const files = await filesUnder(standalone);
+
+  assert.deepEqual(files, await filesUnder(pluginSkill));
+  for (const file of files) {
+    assert.deepEqual(
+      await readFile(path.join(standalone, file)),
+      await readFile(path.join(pluginSkill, file)),
+      `${file} differs between generated distributions`,
+    );
+  }
+});
+
+test("generated Scout is explicit-invocation-only in a skills-only plugin", async () => {
+  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-policy-"));
+
+  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
+    cwd: repositoryRoot,
+    env: { ...process.env, SVS_DIST_DIR: outputRoot },
+  });
+
+  const skillMetadata = await readFile(
+    path.join(
+      outputRoot,
+      "standalone",
+      "solo-venture-scout",
+      "agents",
+      "openai.yaml",
+    ),
+    "utf8",
+  );
+  assert.match(skillMetadata, /allow_implicit_invocation:\s*false/);
+
+  const manifest = JSON.parse(
+    await readFile(
+      path.join(
+        outputRoot,
+        "plugin",
+        "solo-venture-scout",
+        ".codex-plugin",
+        "plugin.json",
+      ),
+      "utf8",
+    ),
+  );
+  assert.equal(manifest.name, "solo-venture-scout");
+  assert.equal(manifest.skills, "./skills/");
+  assert.equal("apps" in manifest, false);
+  assert.equal("mcpServers" in manifest, false);
+});
+
+test("package command creates standalone and plugin release archives", async () => {
+  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-package-"));
+  const environment = { ...process.env, SVS_DIST_DIR: outputRoot };
+
+  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
+    cwd: repositoryRoot,
+    env: environment,
+  });
+  await execFileAsync(process.execPath, ["scripts/package.mjs"], {
+    cwd: repositoryRoot,
+    env: environment,
+  });
+
+  for (const archive of [
+    "solo-venture-scout-standalone-0.1.0.tgz",
+    "solo-venture-scout-plugin-0.1.0.tgz",
+  ]) {
+    const archiveStat = await stat(path.join(outputRoot, "packages", archive));
+    assert.equal(archiveStat.isFile(), true);
+    assert.ok(archiveStat.size > 0);
+  }
+});
+
+test("package validation checks the generated artifacts that ship", async () => {
+  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-validate-"));
+  const environment = { ...process.env, SVS_DIST_DIR: outputRoot };
+
+  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
+    cwd: repositoryRoot,
+    env: environment,
+  });
+  await execFileAsync(process.execPath, ["scripts/package.mjs"], {
+    cwd: repositoryRoot,
+    env: environment,
+  });
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ["scripts/validate-packages.mjs"],
+    { cwd: repositoryRoot, env: environment },
+  );
+
+  const report = JSON.parse(stdout);
+  assert.equal(report.valid, true);
+  assert.ok(report.identicalSkillFiles >= 4);
+  assert.deepEqual(report.archives, [
+    "solo-venture-scout-plugin-0.1.0.tgz",
+    "solo-venture-scout-standalone-0.1.0.tgz",
+  ]);
+  assert.deepEqual(report.versions, {
+    release: "0.1.0",
+    campaignFormat: "0.1.0",
+    records: "0.1.0",
+    commandEnvelope: "0.1.0",
+    researchPackages: "0.1.0",
+    renderTemplates: "0.1.0",
+  });
+});
