@@ -4,12 +4,9 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { filesUnder } from "./lib/files-under.mjs";
+import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
 const execFileAsync = promisify(execFile);
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const outputRoot = path.resolve(
-  process.env.SVS_DIST_DIR ?? path.join(repositoryRoot, "dist"),
-);
 const standalone = path.join(outputRoot, "standalone", "solo-venture-scout");
 const pluginRoot = path.join(outputRoot, "plugin", "solo-venture-scout");
 const pluginSkill = path.join(pluginRoot, "skills", "solo-venture-scout");

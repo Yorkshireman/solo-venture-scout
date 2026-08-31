@@ -33,7 +33,7 @@ export async function buildPackagedScout(prefix) {
  * @param {readonly string[]} args
  * @param {RunOptions} [options]
  */
-export function run(command, args, options = {}) {
+export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
     let stdout = "";

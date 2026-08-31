@@ -88,14 +88,41 @@ const realEffects: KernelEffects = {
 };
 
 export async function executeCommand(
-  command: PreflightCommand,
+  command: unknown,
   effects: KernelEffects = realEffects,
 ) {
-  if (command.envelopeVersion !== contracts.commandEnvelope) {
+  if (!isRecord(command)) {
     return {
       envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
+      requestId: "unknown",
+      command: "unknown",
+      ok: false as const,
+      error: {
+        code: "SVS-COMMAND-INVALID",
+        message: "Kernel command envelope must be a JSON object.",
+        action: `Send one JSON object using command envelope ${contracts.commandEnvelope} and retry.`,
+        details: ["command must be a JSON object."],
+      },
+    };
+  }
+
+  const requestId =
+    typeof command.requestId === "string" && command.requestId.trim() !== ""
+      ? command.requestId
+      : "unknown";
+  const receivedCommand =
+    typeof command.command === "string" && command.command.trim() !== ""
+      ? command.command
+      : "unknown";
+
+  if (
+    typeof command.envelopeVersion === "string" &&
+    command.envelopeVersion !== contracts.commandEnvelope
+  ) {
+    return {
+      envelopeVersion: contracts.commandEnvelope,
+      requestId,
+      command: receivedCommand,
       ok: false as const,
       error: {
         code: "SVS-COMMAND-ENVELOPE-UNSUPPORTED",
@@ -105,11 +132,10 @@ export async function executeCommand(
     };
   }
 
-  const receivedCommand = (command as { command?: unknown }).command;
-  if (receivedCommand !== "preflight") {
+  if (typeof command.command === "string" && receivedCommand !== "preflight") {
     return {
       envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
+      requestId,
       command: receivedCommand,
       ok: false as const,
       error: {
@@ -121,11 +147,17 @@ export async function executeCommand(
   }
 
   const invalidFields = validatePreflightFields(command);
+  if (typeof command.envelopeVersion !== "string") {
+    invalidFields.unshift("envelopeVersion must be a string.");
+  }
+  if (command.command !== "preflight") {
+    invalidFields.push('command must be "preflight".');
+  }
   if (invalidFields.length > 0) {
     return {
       envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
+      requestId,
+      command: receivedCommand,
       ok: false as const,
       error: {
         code: "SVS-COMMAND-INVALID",
@@ -136,14 +168,17 @@ export async function executeCommand(
     };
   }
 
+  const preflightCommand = command as unknown as PreflightCommand;
   const nodeMajor = Number.parseInt(effects.nodeVersion.split(".")[0] ?? "", 10);
   let storageWritable = true;
   try {
-    storageWritable = await effects.probeWritableStorage(command.payload.storagePath);
+    storageWritable = await effects.probeWritableStorage(
+      preflightCommand.payload.storagePath,
+    );
   } catch {
     storageWritable = false;
   }
-  const routes = command.payload.retrievalRoutes
+  const routes = preflightCommand.payload.retrievalRoutes
     .filter((route) => route.available && route.public && route.lawful)
     .map((route) => route.id);
   const diagnostics = [];
@@ -157,7 +192,7 @@ export async function executeCommand(
   if (!storageWritable) {
     diagnostics.push({
       code: "SVS-PREFLIGHT-STORAGE-NOT-WRITABLE",
-      message: `Campaign storage is not writable: ${command.payload.storagePath}`,
+      message: `Campaign storage is not writable: ${preflightCommand.payload.storagePath}`,
       action:
         "Choose an existing writable directory and rerun $solo-venture-scout; no Campaign state was created.",
     });
@@ -173,8 +208,8 @@ export async function executeCommand(
 
   return {
     envelopeVersion: contracts.commandEnvelope,
-    requestId: command.requestId,
-    command: command.command,
+    requestId: preflightCommand.requestId,
+    command: preflightCommand.command,
     ok: true as const,
     result: {
       ready: diagnostics.length === 0,
@@ -187,7 +222,7 @@ export async function executeCommand(
           major: nodeMajor,
         },
         storage: {
-          path: path.resolve(command.payload.storagePath),
+          path: path.resolve(preflightCommand.payload.storagePath),
           writable: storageWritable,
         },
         publicRetrieval: {
@@ -206,7 +241,7 @@ async function runCli() {
     input += chunk;
   }
 
-  const command = JSON.parse(input) as PreflightCommand;
+  const command: unknown = JSON.parse(input);
   const response = await executeCommand(command);
   process.stdout.write(`${JSON.stringify(response)}\n`);
   if (!response.ok) {

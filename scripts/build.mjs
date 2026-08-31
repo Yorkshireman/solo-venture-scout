@@ -1,11 +1,8 @@
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const outputRoot = path.resolve(
-  process.env.SVS_DIST_DIR ?? path.join(repositoryRoot, "dist"),
-);
 const skillSource = path.join(repositoryRoot, "skill");
 const standaloneSkill = path.join(
   outputRoot,

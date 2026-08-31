@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { buildPackagedScout, run } from "./support/packaged-scout.mjs";
+import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
 
 test("packaged preflight reports a ready environment without creating Campaign state", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-ready-");
@@ -26,7 +26,7 @@ test("packaged preflight reports a ready environment without creating Campaign s
       ],
     },
   };
-  const result = await run(process.execPath, [kernelPath], {
+  const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify(command)}\n`,
   });
 
@@ -53,7 +53,7 @@ test("packaged preflight stops with an actionable retrieval diagnostic before Ca
     command: "preflight",
     payload: { storagePath, retrievalRoutes: [] },
   };
-  const result = await run(process.execPath, [kernelPath], {
+  const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify(command)}\n`,
   });
 
@@ -90,7 +90,7 @@ test("packaged preflight identifies storage that cannot hold Campaign state", as
       ],
     },
   };
-  const result = await run(process.execPath, [kernelPath], {
+  const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify(command)}\n`,
   });
 
@@ -124,7 +124,7 @@ test("kernel command envelope deterministically diagnoses an unsupported Node ru
       `}, { nodeVersion: "22.18.0", probeWritableStorage: async () => true });\n` +
       `process.stdout.write(JSON.stringify(response));\n`,
   );
-  const result = await run(process.execPath, [harnessPath], { input: "" });
+  const result = await runProcess(process.execPath, [harnessPath], { input: "" });
 
   assert.equal(result.code, 0, result.stderr);
   const response = JSON.parse(result.stdout);
@@ -142,7 +142,7 @@ test("packaged kernel fails closed on an unsupported command-envelope version", 
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-envelope-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
 
-  const result = await run(process.execPath, [kernelPath], {
+  const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify({
       envelopeVersion: "9.0.0",
       requestId: "unsupported-envelope-1",
@@ -175,7 +175,7 @@ test("packaged kernel rejects non-boolean public-retrieval claims", async () => 
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-route-shape-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
 
-  const result = await run(process.execPath, [kernelPath], {
+  const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify({
       envelopeVersion: "0.1.0",
       requestId: "invalid-route-1",
@@ -220,7 +220,7 @@ test("kernel rejects unsupported commands before performing effects", async () =
       `}, { nodeVersion: "24.0.0", probeWritableStorage: async () => { storageProbed = true; return true; } });\n` +
       `process.stdout.write(JSON.stringify({ response, storageProbed }));\n`,
   );
-  const result = await run(process.execPath, [harnessPath], { input: "" });
+  const result = await runProcess(process.execPath, [harnessPath], { input: "" });
 
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
@@ -236,5 +236,25 @@ test("kernel rejects unsupported commands before performing effects", async () =
       },
     },
     storageProbed: false,
+  });
+});
+
+test("packaged kernel returns a structured error for a non-object envelope", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-null-command-");
+
+  const result = await runProcess(process.execPath, [kernelPath], { input: "null\n" });
+
+  assert.equal(result.code, 3);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    envelopeVersion: "0.1.0",
+    requestId: "unknown",
+    command: "unknown",
+    ok: false,
+    error: {
+      code: "SVS-COMMAND-INVALID",
+      message: "Kernel command envelope must be a JSON object.",
+      action: "Send one JSON object using command envelope 0.1.0 and retry.",
+      details: ["command must be a JSON object."],
+    },
   });
 });

@@ -2,12 +2,9 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
 const execFileAsync = promisify(execFile);
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const outputRoot = path.resolve(
-  process.env.SVS_DIST_DIR ?? path.join(repositoryRoot, "dist"),
-);
 const packageMetadata = JSON.parse(
   await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
 );
