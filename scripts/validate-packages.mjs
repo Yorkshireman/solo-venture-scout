@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { filesUnder } from "./lib/files-under.mjs";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -13,15 +14,6 @@ const standalone = path.join(outputRoot, "standalone", "solo-venture-scout");
 const pluginRoot = path.join(outputRoot, "plugin", "solo-venture-scout");
 const pluginSkill = path.join(pluginRoot, "skills", "solo-venture-scout");
 const semver = /^\d+\.\d+\.\d+$/;
-
-/** @param {string} root */
-async function filesUnder(root) {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
-    .sort();
-}
 
 const standaloneFiles = await filesUnder(standalone);
 assert.deepEqual(

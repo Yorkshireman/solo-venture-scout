@@ -24,6 +24,51 @@ type PreflightCommand = {
   };
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validatePreflightFields(command: unknown): string[] {
+  const details: string[] = [];
+  if (!isRecord(command)) {
+    return ["command must be a JSON object."];
+  }
+  if (typeof command.requestId !== "string" || command.requestId.trim() === "") {
+    details.push("requestId must be a non-empty string.");
+  }
+  if (!isRecord(command.payload)) {
+    details.push("payload must be an object.");
+    return details;
+  }
+  if (
+    typeof command.payload.storagePath !== "string" ||
+    command.payload.storagePath.trim() === ""
+  ) {
+    details.push("payload.storagePath must be a non-empty string.");
+  }
+  if (!Array.isArray(command.payload.retrievalRoutes)) {
+    details.push("payload.retrievalRoutes must be an array.");
+    return details;
+  }
+  for (const [index, route] of command.payload.retrievalRoutes.entries()) {
+    if (!isRecord(route)) {
+      details.push(`payload.retrievalRoutes[${index}] must be an object.`);
+      continue;
+    }
+    if (typeof route.id !== "string" || route.id.trim() === "") {
+      details.push(`payload.retrievalRoutes[${index}].id must be a non-empty string.`);
+    }
+    for (const field of ["available", "public", "lawful"] as const) {
+      if (typeof route[field] !== "boolean") {
+        details.push(
+          `payload.retrievalRoutes[${index}].${field} must be a boolean.`,
+        );
+      }
+    }
+  }
+  return details;
+}
+
 export type KernelEffects = {
   nodeVersion: string;
   probeWritableStorage: (storagePath: string) => Promise<boolean>;
@@ -56,6 +101,37 @@ export async function executeCommand(
         code: "SVS-COMMAND-ENVELOPE-UNSUPPORTED",
         message: `Command envelope ${command.envelopeVersion} is not supported.`,
         action: `Use command envelope ${contracts.commandEnvelope} and retry.`,
+      },
+    };
+  }
+
+  const receivedCommand = (command as { command?: unknown }).command;
+  if (receivedCommand !== "preflight") {
+    return {
+      envelopeVersion: contracts.commandEnvelope,
+      requestId: command.requestId,
+      command: receivedCommand,
+      ok: false as const,
+      error: {
+        code: "SVS-COMMAND-UNSUPPORTED",
+        message: `Kernel command ${String(receivedCommand)} is not supported.`,
+        action: `Use the preflight command with envelope ${contracts.commandEnvelope}.`,
+      },
+    };
+  }
+
+  const invalidFields = validatePreflightFields(command);
+  if (invalidFields.length > 0) {
+    return {
+      envelopeVersion: contracts.commandEnvelope,
+      requestId: command.requestId,
+      command: command.command,
+      ok: false as const,
+      error: {
+        code: "SVS-COMMAND-INVALID",
+        message: "Preflight command is invalid.",
+        action: "Correct the reported fields and retry without creating Campaign state.",
+        details: invalidFields,
       },
     };
   }

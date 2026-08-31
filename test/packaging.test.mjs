@@ -1,30 +1,16 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
-
-const execFileAsync = promisify(execFile);
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
-
-/** @param {string} root */
-async function filesUnder(root) {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
-    .sort();
-}
+import { filesUnder } from "../scripts/lib/files-under.mjs";
+import {
+  buildPackagedScout,
+  execFileAsync,
+  repositoryRoot,
+} from "./support/packaged-scout.mjs";
 
 test("build generates byte-identical standalone and plugin skill trees", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-build-"));
-
-  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: outputRoot },
-  });
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-build-");
 
   const standalone = path.join(outputRoot, "standalone", "solo-venture-scout");
   const pluginSkill = path.join(
@@ -47,12 +33,7 @@ test("build generates byte-identical standalone and plugin skill trees", async (
 });
 
 test("generated Scout is explicit-invocation-only in a skills-only plugin", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-policy-"));
-
-  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: outputRoot },
-  });
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-policy-");
 
   const skillMetadata = await readFile(
     path.join(
@@ -85,13 +66,9 @@ test("generated Scout is explicit-invocation-only in a skills-only plugin", asyn
 });
 
 test("package command creates standalone and plugin release archives", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-package-"));
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-package-");
   const environment = { ...process.env, SVS_DIST_DIR: outputRoot };
 
-  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: environment,
-  });
   await execFileAsync(process.execPath, ["scripts/package.mjs"], {
     cwd: repositoryRoot,
     env: environment,
@@ -108,13 +85,9 @@ test("package command creates standalone and plugin release archives", async () 
 });
 
 test("package validation checks the generated artifacts that ship", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-validate-"));
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-validate-");
   const environment = { ...process.env, SVS_DIST_DIR: outputRoot };
 
-  await execFileAsync(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: environment,
-  });
   await execFileAsync(process.execPath, ["scripts/package.mjs"], {
     cwd: repositoryRoot,
     env: environment,

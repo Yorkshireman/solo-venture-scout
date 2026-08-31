@@ -1,43 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-
-const repositoryRoot = path.resolve(import.meta.dirname, "..");
-
-/** @typedef {import("node:child_process").SpawnOptions & { input?: string }} RunOptions */
-
-/**
- * @param {string} command
- * @param {readonly string[]} args
- * @param {RunOptions} [options]
- */
-function run(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, options);
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-    child.stderr?.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    if (options.input !== undefined) {
-      child.stdin?.end(options.input);
-    }
-  });
-}
+import { buildPackagedScout, run } from "./support/packaged-scout.mjs";
 
 test("packaged preflight reports a ready environment without creating Campaign state", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-ready-"));
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-ready-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
-  const build = await run(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: outputRoot },
-  });
-  assert.equal(build.code, 0, build.stderr);
 
   const command = {
     envelopeVersion: "0.1.0",
@@ -55,19 +26,9 @@ test("packaged preflight reports a ready environment without creating Campaign s
       ],
     },
   };
-  const result = await run(
-    process.execPath,
-    [
-      path.join(
-        outputRoot,
-        "standalone",
-        "solo-venture-scout",
-        "scripts",
-        "scout-kernel.mjs",
-      ),
-    ],
-    { input: `${JSON.stringify(command)}\n` },
-  );
+  const result = await run(process.execPath, [kernelPath], {
+    input: `${JSON.stringify(command)}\n`,
+  });
 
   assert.equal(result.code, 0, result.stderr);
   const response = JSON.parse(result.stdout);
@@ -83,13 +44,8 @@ test("packaged preflight reports a ready environment without creating Campaign s
 });
 
 test("packaged preflight stops with an actionable retrieval diagnostic before Campaign state exists", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-no-route-"));
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-no-route-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
-  const build = await run(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: outputRoot },
-  });
-  assert.equal(build.code, 0, build.stderr);
 
   const command = {
     envelopeVersion: "0.1.0",
@@ -97,19 +53,9 @@ test("packaged preflight stops with an actionable retrieval diagnostic before Ca
     command: "preflight",
     payload: { storagePath, retrievalRoutes: [] },
   };
-  const result = await run(
-    process.execPath,
-    [
-      path.join(
-        outputRoot,
-        "standalone",
-        "solo-venture-scout",
-        "scripts",
-        "scout-kernel.mjs",
-      ),
-    ],
-    { input: `${JSON.stringify(command)}\n` },
-  );
+  const result = await run(process.execPath, [kernelPath], {
+    input: `${JSON.stringify(command)}\n`,
+  });
 
   assert.equal(result.code, 2);
   const response = JSON.parse(result.stdout);
@@ -127,14 +73,11 @@ test("packaged preflight stops with an actionable retrieval diagnostic before Ca
 });
 
 test("packaged preflight identifies storage that cannot hold Campaign state", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-fail-"));
+  const { outputRoot, kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-storage-fail-",
+  );
   const storagePath = path.join(outputRoot, "not-a-directory");
   await writeFile(storagePath, "developer data\n");
-  const build = await run(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: path.join(outputRoot, "dist") },
-  });
-  assert.equal(build.code, 0, build.stderr);
 
   const command = {
     envelopeVersion: "0.1.0",
@@ -147,20 +90,9 @@ test("packaged preflight identifies storage that cannot hold Campaign state", as
       ],
     },
   };
-  const result = await run(
-    process.execPath,
-    [
-      path.join(
-        outputRoot,
-        "dist",
-        "standalone",
-        "solo-venture-scout",
-        "scripts",
-        "scout-kernel.mjs",
-      ),
-    ],
-    { input: `${JSON.stringify(command)}\n` },
-  );
+  const result = await run(process.execPath, [kernelPath], {
+    input: `${JSON.stringify(command)}\n`,
+  });
 
   assert.equal(result.code, 2);
   const response = JSON.parse(result.stdout);
@@ -177,20 +109,8 @@ test("packaged preflight identifies storage that cannot hold Campaign state", as
 });
 
 test("kernel command envelope deterministically diagnoses an unsupported Node runtime", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-node-fail-"));
-  const build = await run(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: path.join(outputRoot, "dist") },
-  });
-  assert.equal(build.code, 0, build.stderr);
-
-  const kernelPath = path.join(
-    outputRoot,
-    "dist",
-    "standalone",
-    "solo-venture-scout",
-    "scripts",
-    "scout-kernel.mjs",
+  const { outputRoot, kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-node-fail-",
   );
   const harnessPath = path.join(outputRoot, "unsupported-node.mjs");
   await writeFile(
@@ -219,39 +139,22 @@ test("kernel command envelope deterministically diagnoses an unsupported Node ru
 });
 
 test("packaged kernel fails closed on an unsupported command-envelope version", async () => {
-  const outputRoot = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-envelope-"));
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-envelope-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
-  const build = await run(process.execPath, ["scripts/build.mjs"], {
-    cwd: repositoryRoot,
-    env: { ...process.env, SVS_DIST_DIR: outputRoot },
-  });
-  assert.equal(build.code, 0, build.stderr);
 
-  const result = await run(
-    process.execPath,
-    [
-      path.join(
-        outputRoot,
-        "standalone",
-        "solo-venture-scout",
-        "scripts",
-        "scout-kernel.mjs",
-      ),
-    ],
-    {
-      input: `${JSON.stringify({
-        envelopeVersion: "9.0.0",
-        requestId: "unsupported-envelope-1",
-        command: "preflight",
-        payload: {
-          storagePath,
-          retrievalRoutes: [
-            { id: "web", available: true, public: true, lawful: true },
-          ],
-        },
-      })}\n`,
-    },
-  );
+  const result = await run(process.execPath, [kernelPath], {
+    input: `${JSON.stringify({
+      envelopeVersion: "9.0.0",
+      requestId: "unsupported-envelope-1",
+      command: "preflight",
+      payload: {
+        storagePath,
+        retrievalRoutes: [
+          { id: "web", available: true, public: true, lawful: true },
+        ],
+      },
+    })}\n`,
+  });
 
   assert.equal(result.code, 3);
   assert.deepEqual(JSON.parse(result.stdout), {
@@ -266,4 +169,72 @@ test("packaged kernel fails closed on an unsupported command-envelope version", 
     },
   });
   assert.deepEqual(await readdir(storagePath), []);
+});
+
+test("packaged kernel rejects non-boolean public-retrieval claims", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-route-shape-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+
+  const result = await run(process.execPath, [kernelPath], {
+    input: `${JSON.stringify({
+      envelopeVersion: "0.1.0",
+      requestId: "invalid-route-1",
+      command: "preflight",
+      payload: {
+        storagePath,
+        retrievalRoutes: [
+          { id: "web", available: "false", public: true, lawful: true },
+        ],
+      },
+    })}\n`,
+  });
+
+  assert.equal(result.code, 3);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    envelopeVersion: "0.1.0",
+    requestId: "invalid-route-1",
+    command: "preflight",
+    ok: false,
+    error: {
+      code: "SVS-COMMAND-INVALID",
+      message: "Preflight command is invalid.",
+      action: "Correct the reported fields and retry without creating Campaign state.",
+      details: ["payload.retrievalRoutes[0].available must be a boolean."],
+    },
+  });
+  assert.deepEqual(await readdir(storagePath), []);
+});
+
+test("kernel rejects unsupported commands before performing effects", async () => {
+  const { outputRoot, kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-command-",
+  );
+  const harnessPath = path.join(outputRoot, "unsupported-command.mjs");
+  await writeFile(
+    harnessPath,
+    `import { executeCommand } from ${JSON.stringify(pathToFileURL(kernelPath).href)};\n` +
+      `let storageProbed = false;\n` +
+      `const response = await executeCommand({\n` +
+      `  envelopeVersion: "0.1.0", requestId: "unsupported-command-1", command: "createCampaign",\n` +
+      `  payload: { storagePath: "/unused", retrievalRoutes: [] }\n` +
+      `}, { nodeVersion: "24.0.0", probeWritableStorage: async () => { storageProbed = true; return true; } });\n` +
+      `process.stdout.write(JSON.stringify({ response, storageProbed }));\n`,
+  );
+  const result = await run(process.execPath, [harnessPath], { input: "" });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    response: {
+      envelopeVersion: "0.1.0",
+      requestId: "unsupported-command-1",
+      command: "createCampaign",
+      ok: false,
+      error: {
+        code: "SVS-COMMAND-UNSUPPORTED",
+        message: "Kernel command createCampaign is not supported.",
+        action: "Use the preflight command with envelope 0.1.0.",
+      },
+    },
+    storageProbed: false,
+  });
 });

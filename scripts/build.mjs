@@ -83,7 +83,7 @@ await writeFile(
         category: "Productivity",
         capabilities: ["Interactive", "Write"],
         websiteURL: "https://github.com/Yorkshireman/solo-venture-scout",
-        defaultPrompt: ["Start a Solo Venture Scout campaign."],
+        defaultPrompt: ["Start a Scouting Campaign with Solo Venture Scout."],
       },
     },
     null,
