@@ -206,10 +206,11 @@ paraphrase, settling the matching reservation:
 
 Use `null` for an unknown publication or update date and for whichever of publisher
 or originator is unknown; at least one of publisher or originator is required. The
-URL must be public HTTP or HTTPS without embedded credentials. The exact locator must
-let an authorised later reader find what was examined. The Observation must be one
-atomic neutral paraphrase linked to that Source, not an Inference or a copy of raw
-content.
+URL must be canonical public HTTP or HTTPS without embedded credentials, query data,
+or a fragment; put the precise location in `exactLocator`. The Source and Observation
+locators must match so an authorised later reader can find exactly what was examined.
+The Observation must be one atomic neutral paraphrase linked to that Source, not an
+Inference or a copy of raw content.
 
 The strict command has no fields for credentials, payment information, personal data,
 raw retrieved content, or active instructions. Do not add them. Success appends the

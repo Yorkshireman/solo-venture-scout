@@ -835,6 +835,9 @@ function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
       ) {
         details.push(`${field}.url must be a public HTTP or HTTPS URL without credentials.`);
       }
+      if (sourceUrl.search !== "" || sourceUrl.hash !== "") {
+        details.push(`${field}.url must use a canonical public URL without a query or fragment; use exactLocator for the precise location.`);
+      }
     } catch {
       details.push(`${field}.url must be a valid public HTTP or HTTPS URL.`);
     }
@@ -882,6 +885,9 @@ function validatePublicObservation(value: unknown, source: unknown): string[] {
   }
   if (isRecord(source) && value.sourceId !== source.id) {
     details.push(`${field}.sourceId must match payload.source.id.`);
+  }
+  if (isRecord(source) && value.exactLocator !== source.exactLocator) {
+    details.push(`${field}.exactLocator must match payload.source.exactLocator.`);
   }
   return details;
 }
@@ -1319,6 +1325,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     } else if (record.operation === "reserve-public-research") {
       if (
         intake === undefined ||
+        outcome.recordedAt < intake.confirmedAt ||
         !isRecord(outcome.reservation) ||
         validatePublicResearchReservation(outcome.reservation, "reservation").length > 0 ||
         record.reservationId !== outcome.reservation.id ||
@@ -2118,6 +2125,19 @@ async function reservePublicResearch(
           code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
           message: "Public Research requires a valid explicitly confirmed Campaign Intake.",
           action: "Complete and explicitly confirm Campaign Intake before reserving Public Research capacity.",
+        },
+      };
+    }
+    if (command.payload.reservedAt < before.intake.confirmedAt) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId: command.requestId,
+        command: command.command,
+        ok: false as const,
+        error: {
+          code: "SVS-RESEARCH-RESERVATION-INVALID",
+          message: "Public Research reservation cannot predate Campaign Intake confirmation.",
+          action: "Reserve capacity only after the confirmed Campaign Intake makes Public Research available.",
         },
       };
     }
