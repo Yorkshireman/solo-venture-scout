@@ -84,7 +84,7 @@ function retrieveControlledPublicSourceOutsideKernel(executionMarkerPath) {
     metadata: {
       id: "source-uk-small-business-late-payments",
       retrievalMode: "public-web",
-      url: "https://www.gov.uk/example/report?id=late-payments#results",
+      url: "https://www.gov.uk/example/report?author=business-department&session=2025#results",
       publisher: "UK Government",
       originator: null,
       publishedAt: "2025-11-20",

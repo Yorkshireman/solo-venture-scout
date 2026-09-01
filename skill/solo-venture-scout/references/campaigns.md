@@ -210,9 +210,9 @@ URL must be public HTTP or HTTPS without embedded credentials or sensitive query
 fragment data. The Source and Observation locators must match so an authorised later
 reader can find exactly what was examined. The Observation must be one atomic neutral
 paraphrase linked to that Source, not an Inference or a copy of raw content. The
-kernel also rejects obvious credentials, payment identifiers, unnecessary contact
-data, active instructions, and raw markup in accepted text fields; this is
-defense-in-depth and does not replace the coordinator's data-minimisation review.
+kernel also rejects obvious credential or payment assignments, imperative active
+instructions, and raw markup in accepted text fields; this is defense-in-depth and
+does not replace the coordinator's semantic data-minimisation review.
 
 The strict command has no fields for credentials, payment information, personal data,
 raw retrieved content, or active instructions. Do not add them. Success appends the

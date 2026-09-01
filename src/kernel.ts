@@ -804,10 +804,9 @@ function containsProhibitedPersistedContent(value: string): boolean {
   return [
     /\b(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|secret|authorization)\b\s*(?:[:=]|\bis\b)\s*\S+/i,
     /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
-    /\b[\w.+-]+@[\w.-]+\.[A-Z]{2,}\b/i,
     /\b(?:card|iban|bank account|routing number|sort code)\b.{0,24}(?:[:=]|\bis\b)\s*[A-Z0-9 -]{6,}/i,
     /<\/?[A-Z][^>]*>|```/i,
-    /\b(?:ignore|disregard|override)\b.{0,80}\b(?:instructions?|workflow|system prompt)\b/i,
+    /^\s*(?:ignore|disregard|override)\b.{0,80}\b(?:instructions?|workflow|system prompt)\b/i,
   ].some((pattern) => pattern.test(value));
 }
 
@@ -859,7 +858,7 @@ function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
       }
       const sensitiveQuery = [...sourceUrl.searchParams].some(
         ([name, parameterValue]) =>
-          /(?:pass|secret|token|api.?key|auth|session|credential|signature)/i.test(
+          /^(?:password|passwd|secret|token|access_token|refresh_token|api_key|apikey|authorization|auth_token|session_token|credential|signature|sig)$/i.test(
             name,
           ) || containsProhibitedPersistedContent(`${name}=${parameterValue}`),
       );
