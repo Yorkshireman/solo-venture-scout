@@ -138,6 +138,86 @@ to authoritative history, writes a private rebuildable `campaign-intake.json`, a
 makes Public Research available in the Work View. A replay with the identical
 request and payload adds no records; a changed payload with the same identity fails.
 
+## Reserve Public Research capacity
+
+Reserve exactly one ordinary Source unit before retrieving or substantively examining
+one public Source. Retrieval itself happens outside the kernel.
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "reserve-public-source-stable-request-id",
+  "command": "reservePublicResearch",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "reservedAt": "2026-08-31T09:20:00.000Z",
+    "reservation": {
+      "id": "stable-research-reservation-id",
+      "sourceUnits": 1,
+      "purpose": "Measure one named problem signal",
+      "retrievalRoute": "available-lawful-public-route"
+    }
+  }
+}
+```
+
+The active coordinator lease and a confirmed Campaign Intake are required. Ordinary
+reservations cannot exceed `sourceCap - adversarialSourceReserve`; outstanding and
+settled reservations both consume that hard capacity. Success appends reservation
+intent and outcome records, updates `research-budget.json`, and writes a checkpoint
+before external retrieval begins.
+
+## Record a Public Research Observation
+
+After read-only retrieval outside the kernel, import inert provenance and one neutral
+paraphrase, settling the matching reservation:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-public-observation-stable-request-id",
+  "command": "recordPublicResearchObservation",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T09:25:00.000Z",
+    "reservationId": "stable-research-reservation-id",
+    "source": {
+      "id": "stable-source-id",
+      "retrievalMode": "public-web",
+      "url": "https://public.example/research",
+      "publisher": "Example Publisher",
+      "originator": null,
+      "publishedAt": "2026-06-10",
+      "updatedAt": null,
+      "accessedAt": "2026-08-31T09:24:00.000Z",
+      "exactLocator": "Results, paragraph 3"
+    },
+    "observation": {
+      "id": "stable-observation-id",
+      "text": "Survey respondents reported spending staff time on the named workaround.",
+      "sourceId": "stable-source-id",
+      "exactLocator": "Results, paragraph 3"
+    }
+  }
+}
+```
+
+Use `null` for an unknown publication or update date and for whichever of publisher
+or originator is unknown; at least one of publisher or originator is required. The
+URL must be public HTTP or HTTPS without embedded credentials. The exact locator must
+let an authorised later reader find what was examined. The Observation must be one
+atomic neutral paraphrase linked to that Source, not an Inference or a copy of raw
+content.
+
+The strict command has no fields for credentials, payment information, personal data,
+raw retrieved content, or active instructions. Do not add them. Success appends the
+immutable Source and Observation to authoritative history, settles the reservation,
+rebuilds private `research-budget.json` and `evidence-ledger.json` projections, and
+writes a checkpoint. Replaying the identical request is idempotent; a reservation,
+Source identity, or Observation identity cannot be settled or imported twice.
+
 ## Resume
 
 ```json

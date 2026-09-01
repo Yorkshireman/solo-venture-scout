@@ -152,7 +152,7 @@ test("packaged Scout confirms and persists a versioned Campaign Intake", async (
       "Scouting Campaign created",
       "Campaign Intake version 1 confirmed",
     ],
-    nextPermittedActions: ["record-public-research-observation"],
+    nextPermittedActions: ["reserve-public-research"],
     publicResearchAvailable: true,
   });
 

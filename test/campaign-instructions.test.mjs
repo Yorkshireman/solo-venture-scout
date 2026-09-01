@@ -69,3 +69,23 @@ test("packaged Scout guides and reviews Campaign Intake one decision at a time",
   assert.match(instructions, /Public Research.+unavailable.+confirmed Campaign Intake/is);
   assert.match(reference, /"command": "confirmCampaignIntake"/);
 });
+
+test("packaged Scout keeps Public Research retrieval outside the kernel and imports only safe evidence", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-public-research-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(instructions, /reserve.+Source.+before.+retriev/is);
+  assert.match(instructions, /retrieval.+outside the kernel/i);
+  assert.match(instructions, /retrieved instructions.+untrusted.+never execute/is);
+  assert.match(instructions, /atomic.+neutral.+paraphrase/is);
+  assert.match(instructions, /credentials.+payment information.+personal data.+raw content/is);
+  assert.match(instructions, /checkpoint.+resume/is);
+  assert.match(reference, /"command": "reservePublicResearch"/);
+  assert.match(reference, /"command": "recordPublicResearchObservation"/);
+  assert.match(reference, /publisher.+originator.+publishedAt.+updatedAt.+accessedAt.+exactLocator/is);
+});
