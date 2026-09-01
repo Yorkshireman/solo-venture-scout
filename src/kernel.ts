@@ -774,6 +774,9 @@ function validatePublicResearchReservation(
     if (typeof value[textField] !== "string" || value[textField].trim() === "") {
       details.push(`${field}.${textField} must be a non-empty string.`);
     }
+    details.push(
+      ...validatePersistableText(value[textField], `${field}.${textField}`),
+    );
   }
   if (value.sourceUnits !== 1) {
     details.push(`${field}.sourceUnits must be exactly 1 for one substantive Source examination.`);
@@ -795,6 +798,25 @@ function validateReservePublicResearchFields(
 
 function isNullableNonEmptyString(value: unknown): value is string | null {
   return value === null || (typeof value === "string" && value.trim() !== "");
+}
+
+function containsProhibitedPersistedContent(value: string): boolean {
+  return [
+    /\b(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|secret|authorization)\b\s*(?:[:=]|\bis\b)\s*\S+/i,
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
+    /\b[\w.+-]+@[\w.-]+\.[A-Z]{2,}\b/i,
+    /\b(?:card|iban|bank account|routing number|sort code)\b.{0,24}(?:[:=]|\bis\b)\s*[A-Z0-9 -]{6,}/i,
+    /<\/?[A-Z][^>]*>|```/i,
+    /\b(?:ignore|disregard|override)\b.{0,80}\b(?:instructions?|workflow|system prompt)\b/i,
+  ].some((pattern) => pattern.test(value));
+}
+
+function validatePersistableText(value: unknown, field: string): string[] {
+  return typeof value === "string" && containsProhibitedPersistedContent(value)
+    ? [
+        `${field} must not contain sensitive, personal, payment, active-instruction, or raw content.`,
+      ]
+    : [];
 }
 
 function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
@@ -835,8 +857,17 @@ function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
       ) {
         details.push(`${field}.url must be a public HTTP or HTTPS URL without credentials.`);
       }
-      if (sourceUrl.search !== "" || sourceUrl.hash !== "") {
-        details.push(`${field}.url must use a canonical public URL without a query or fragment; use exactLocator for the precise location.`);
+      const sensitiveQuery = [...sourceUrl.searchParams].some(
+        ([name, parameterValue]) =>
+          /(?:pass|secret|token|api.?key|auth|session|credential|signature)/i.test(
+            name,
+          ) || containsProhibitedPersistedContent(`${name}=${parameterValue}`),
+      );
+      if (
+        sensitiveQuery ||
+        (sourceUrl.hash !== "" && containsProhibitedPersistedContent(sourceUrl.hash))
+      ) {
+        details.push(`${field}.url must not contain credential-bearing or sensitive query or fragment data.`);
       }
     } catch {
       details.push(`${field}.url must be a valid public HTTP or HTTPS URL.`);
@@ -850,6 +881,15 @@ function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
   }
   if (value.publisher === null && value.originator === null) {
     details.push(`${field} must identify a publisher or originator.`);
+  }
+  for (const textField of [
+    "id",
+    "retrievalMode",
+    "publisher",
+    "originator",
+    "exactLocator",
+  ] as const) {
+    details.push(...validatePersistableText(value[textField], `${field}.${textField}`));
   }
   for (const dateField of ["publishedAt", "updatedAt"] as const) {
     if (value[dateField] !== null && !isIsoDate(value[dateField])) {
@@ -882,6 +922,9 @@ function validatePublicObservation(value: unknown, source: unknown): string[] {
   }
   if (typeof value.text === "string" && (value.text.includes("\n") || value.text.length > 1_000)) {
     details.push(`${field}.text must be one atomic, copyright-conscious paraphrase of at most 1000 characters.`);
+  }
+  for (const textField of ["id", "text", "sourceId", "exactLocator"] as const) {
+    details.push(...validatePersistableText(value[textField], `${field}.${textField}`));
   }
   if (isRecord(source) && value.sourceId !== source.id) {
     details.push(`${field}.sourceId must match payload.source.id.`);
