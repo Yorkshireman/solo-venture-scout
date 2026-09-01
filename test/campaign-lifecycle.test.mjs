@@ -72,6 +72,7 @@ test("packaged Scout creates a private durable Scouting Campaign", async () => {
         pause: null,
         completedWork: ["Scouting Campaign created"],
         nextPermittedActions: ["confirm-campaign-intake"],
+        publicResearchAvailable: false,
       },
       lease: {
         coordinatorId: "coordinator-primary",
@@ -166,6 +167,7 @@ test("packaged Scout inspects a Scouting Campaign from its explicit path", async
         pause: null,
         completedWork: ["Scouting Campaign created"],
         nextPermittedActions: ["confirm-campaign-intake"],
+        publicResearchAvailable: false,
       },
       lease: {
         coordinatorId: "coordinator-primary",
@@ -280,6 +282,7 @@ test("packaged Scout resumes validated state in a later session", async () => {
         pause: null,
         completedWork: ["Scouting Campaign created"],
         nextPermittedActions: ["confirm-campaign-intake"],
+        publicResearchAvailable: false,
       },
       lease: {
         coordinatorId: "coordinator-later-session",

@@ -55,6 +55,89 @@ succeeds only when it finds exactly one direct Scouting Campaign. Inspection val
 the manifest, authoritative records, Work View, latest checkpoint, and lease without
 changing Campaign state.
 
+## Confirm Campaign Intake
+
+The coordinator sends the complete review that the developer explicitly confirmed.
+Profile values use `known` with a non-empty value, `unknown`, `none`, or
+`not-applicable` with a rationale. Do not omit a profile area or encode one of these
+states as an empty string.
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "confirm-intake-stable-request-id",
+  "command": "confirmCampaignIntake",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "confirmedAt": "2026-08-31T09:15:00.000Z",
+    "intake": {
+      "version": 1,
+      "explicitlyConfirmed": true,
+      "developerProfileSnapshot": {
+        "capturedAt": "2026-08-31T09:10:00.000Z",
+        "capacity": { "state": "known", "value": "15 hours per week" },
+        "capabilities": { "state": "known", "value": "TypeScript and operations software" },
+        "access": { "state": "none" },
+        "boundaries": { "state": "known", "value": "No regulated medical decisions" },
+        "operatingPreferences": { "state": "unknown" },
+        "riskTolerance": { "state": "known", "value": "Low irreversible downside" }
+      },
+      "commercialOutcomeTarget": {
+        "amount": 10000,
+        "currency": "GBP",
+        "metric": "monthly recurring revenue",
+        "deadline": "2027-08-31"
+      },
+      "statements": [
+        {
+          "id": "constraint-no-employees",
+          "text": "Must not require employees",
+          "classification": "hard-constraint"
+        },
+        {
+          "id": "preference-low-support",
+          "text": "Prefer a low support burden",
+          "classification": "preference",
+          "importance": "major"
+        },
+        {
+          "id": "advantage-operations",
+          "text": "Has operations domain access",
+          "classification": "advantage",
+          "rationale": "Existing relationships shorten access paths"
+        }
+      ],
+      "researchBudget": {
+        "profile": "quick",
+        "sourceCap": 30,
+        "discoverySweepCap": 4,
+        "sourceFamilyMinimum": 3,
+        "deepenedOpportunityCap": 2,
+        "minimumComparisonSet": 2,
+        "adversarialSourceReserve": 6,
+        "paidSpendCap": { "amount": 0, "currency": "GBP" }
+      }
+    }
+  }
+}
+```
+
+Named profiles must be sent with all expanded values so the developer can see and
+confirm them. Quick expands to `30 / 4 / 3 / 2 / 2`, standard to
+`100 / 8 / 5 / 4 / 3`, and deep to `250 / 14 / 7 / 6 / 4` for Source cap,
+Discovery Sweep cap, Source Family minimum, Deepened Opportunity cap, and minimum
+comparison set respectively. The adversarial Source reserve is twenty percent of the
+Source cap: 6, 20, or 50. Custom requires every limit explicitly. Paid spend defaults
+to zero only when that visible value is explicitly confirmed.
+
+The kernel rejects omissions, inconsistent named-profile expansions, logical
+conflicts, unsafe unknown boundaries or risk tolerance, and anything other than an
+explicit first version confirmation. Success appends the complete immutable intake
+to authoritative history, writes a private rebuildable `campaign-intake.json`, and
+makes Public Research available in the Work View. A replay with the identical
+request and payload adds no records; a changed payload with the same identity fails.
+
 ## Resume
 
 ```json

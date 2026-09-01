@@ -54,8 +54,47 @@ After successful preflight and the location checks:
 4. On an error, report its action and stop. Do not choose another path, overwrite an
    existing path, or relocate the Campaign.
 
-This release stops at `confirm-campaign-intake`; do not begin Campaign Intake or
-Campaign Research yet.
+Continue with Campaign Intake. Public Research remains unavailable until the kernel
+records a valid confirmed Campaign Intake.
+
+## Confirm Campaign Intake
+
+Guide the developer one decision at a time. Explain why each decision matters, offer
+suggested choices when useful, and cover all of these areas before review:
+
+1. A concrete Commercial Outcome Target: amount, currency, financial metric, and
+   deadline.
+2. The dated Developer Profile snapshot copied into this Campaign: capacity,
+   capabilities, access, boundaries, operating preferences, and risk tolerance.
+   Never store a reference to an external profile as Campaign authority.
+3. Atomic statements classified explicitly as a Hard Constraint, Preference, or
+   Advantage. Give each Preference a confirmed `minor`, `important`, or `major`
+   importance. Record why each Advantage creates relevant leverage; it is not market
+   evidence.
+4. A Research Budget: quick, standard, deep, or custom. Explain that limits are
+   ceilings, not quotas, and that twenty percent of the Source cap is reserved for
+   adversarial research.
+
+Keep `unknown`, `none`, and reasoned `not applicable` distinct; do not collapse any
+of them into an empty value. Resolve logical conflicts and unsafe omissions before
+confirmation. In particular, unknown boundaries or risk tolerance cannot safely
+authorise Public Research.
+
+Only propose these agreed safe defaults: zero paid spend and the published limits of
+a named Research Budget profile. Keep every proposed safe default visible and ask
+the developer to confirm it; silence or continuing the conversation is not consent.
+Custom budgets have no default limits.
+
+Before writing, show a concise review containing warnings, Hard Constraints,
+Preferences and their importance, Advantages and their rationale, unknowns, the
+Commercial Outcome Target, and the fully expanded Research Budget. Ask for explicit
+confirmation. Informational questions or review changes do not confirm the intake.
+
+After explicit confirmation, create a stable request identity and run
+`confirmCampaignIntake` exactly as described in
+[references/campaigns.md](references/campaigns.md). Report the persisted intake
+version, snapshot date, expanded budget, current phase, and next permitted actions.
+On an error, report its action and keep Public Research unavailable.
 
 ## Inspect a Scouting Campaign
 
@@ -80,5 +119,5 @@ native agent state:
 4. If another coordinator holds the lease or validation fails, report the returned
    action and stop without continuing Campaign work.
 
-Replaying the same create or resume request is safe. Reuse its request identity and
-payload for a retry; do not invent a different Campaign path.
+Replaying the same create, resume, or intake-confirmation request is safe. Reuse its
+request identity and payload for a retry; do not invent a different Campaign path.
