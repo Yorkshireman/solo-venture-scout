@@ -80,6 +80,10 @@ _Avoid_: Public research
 A resumable investigation that applies one developer's constraints to broad market research and progressively records evidence, candidates, rejections, and decisions.
 _Avoid_: Search, run
 
+**Work View**:
+The rebuildable current projection of a Scouting Campaign's authoritative history, summarising completed work, the current phase or pause, and next permitted actions. It is never itself authoritative.
+_Avoid_: Campaign state, conversation summary
+
 **Solo Developer**:
 The single accountable owner-builder of an Opportunity, which must be able to reach its Commercial Outcome Target without requiring a cofounder or employee. Paid services and bounded contractor work are compatible when they fit the developer's declared constraints.
 _Avoid_: Startup team, founding team

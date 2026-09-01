@@ -215,7 +215,7 @@ test("kernel rejects unsupported commands before performing effects", async () =
     `import { executeCommand } from ${JSON.stringify(pathToFileURL(kernelPath).href)};\n` +
       `let storageProbed = false;\n` +
       `const response = await executeCommand({\n` +
-      `  envelopeVersion: "0.1.0", requestId: "unsupported-command-1", command: "createCampaign",\n` +
+      `  envelopeVersion: "0.1.0", requestId: "unsupported-command-1", command: "deleteCampaign",\n` +
       `  payload: { storagePath: "/unused", retrievalRoutes: [] }\n` +
       `}, { nodeVersion: "24.0.0", probeWritableStorage: async () => { storageProbed = true; return true; } });\n` +
       `process.stdout.write(JSON.stringify({ response, storageProbed }));\n`,
@@ -227,12 +227,12 @@ test("kernel rejects unsupported commands before performing effects", async () =
     response: {
       envelopeVersion: "0.1.0",
       requestId: "unsupported-command-1",
-      command: "createCampaign",
+      command: "deleteCampaign",
       ok: false,
       error: {
         code: "SVS-COMMAND-UNSUPPORTED",
-        message: "Kernel command createCampaign is not supported.",
-        action: "Use the preflight command with envelope 0.1.0.",
+        message: "Kernel command deleteCampaign is not supported.",
+        action: "Use a supported command with envelope 0.1.0.",
       },
     },
     storageProbed: false,
