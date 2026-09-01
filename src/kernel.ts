@@ -59,6 +59,17 @@ type InspectCampaignCommand = {
   };
 };
 
+type InspectEvidenceCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "inspectEvidence";
+  payload: {
+    campaignPath?: string;
+    searchPath?: string;
+    entryIds: string[];
+  };
+};
+
 type ResumeCampaignCommand = {
   envelopeVersion: string;
   requestId: string;
@@ -189,10 +200,10 @@ type PublicObservation = {
   exactLocator: string;
 };
 
-type EvidenceLevel = "unknown" | "low" | "medium" | "high";
+type EvidenceConfidenceLevel = "unknown" | "low" | "medium" | "high";
 
 type EvidenceConfidence = {
-  level: EvidenceLevel;
+  level: EvidenceConfidenceLevel;
   limitingFactors: string[];
 };
 
@@ -210,20 +221,31 @@ type SourceLineage = {
   independence: "dependent";
 };
 
-type ContextualAssessment = {
-  level: EvidenceLevel;
+type SourceCredibilityAssessment = "unknown" | "low" | "medium" | "high";
+
+type SourceFreshnessAssessment = "unknown" | "low" | "medium" | "high";
+
+type SourceCredibility = {
+  type: "source-credibility";
+  id: string;
+  sourceId: string;
+  observationId: string;
+  intendedUse: string;
+  assessment: SourceCredibilityAssessment;
   rationale: string;
   limitations: string[];
 };
 
-type SourceAssessment = {
-  type: "source-assessment";
+type SourceFreshness = {
+  type: "source-freshness";
   id: string;
   sourceId: string;
   observationId: string;
-  use: string;
-  credibility: ContextualAssessment;
-  freshness: ContextualAssessment & { timeSensitivity: string };
+  intendedUse: string;
+  assessment: SourceFreshnessAssessment;
+  timeSensitivity: string;
+  rationale: string;
+  limitations: string[];
 };
 
 type EvidenceGap = {
@@ -278,7 +300,8 @@ type Correction = {
 
 type ReasoningEntry =
   | SourceLineage
-  | SourceAssessment
+  | SourceCredibility
+  | SourceFreshness
   | EvidenceGap
   | Assumption
   | Inference
@@ -325,7 +348,8 @@ type EvidenceLedger = {
   sources: PublicSource[];
   observations: PublicObservation[];
   sourceLineages: SourceLineage[];
-  sourceAssessments: SourceAssessment[];
+  sourceCredibilities: SourceCredibility[];
+  sourceFreshnesses: SourceFreshness[];
   evidenceGaps: EvidenceGap[];
   assumptions: Assumption[];
   inferences: Inference[];
@@ -351,7 +375,9 @@ type WorkView = {
   publicResearchAvailable: boolean;
   reasoning?: {
     evidenceLedgerPath: "evidence-ledger.json";
+    evidenceInspectionCommand: "inspectEvidence";
     activeInferenceIds: string[];
+    reassessmentInferenceIds: string[];
     openEvidenceGapIds: string[];
     unresolvedContradictionIds: string[];
     correctionIds: string[];
@@ -522,6 +548,25 @@ function validateResumeCampaignFields(command: Record<string, unknown>): string[
   ) {
     details.push("payload.leaseExpiresAt must be later than payload.resumedAt.");
   }
+  return details;
+}
+
+function validateInspectEvidenceFields(command: Record<string, unknown>): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validateInspectCampaignFields({ payload: command.payload });
+  const locator = command.payload.campaignPath === undefined
+    ? "searchPath"
+    : "campaignPath";
+  if (!hasOnlyFields(command.payload, [locator, "entryIds"])) {
+    details.push(
+      "payload must contain one Campaign locator and only the requested Evidence Ledger entry identities.",
+    );
+  }
+  details.push(
+    ...validateEntryIdList(command.payload.entryIds, "payload.entryIds", false),
+  );
   return details;
 }
 
@@ -1125,32 +1170,15 @@ function validateReasoningTextFields(
   return details;
 }
 
-function validateContextualAssessment(
+function validateAssessmentLimitations(
   value: unknown,
   field: string,
-  freshness: boolean,
 ): string[] {
-  const fields = freshness
-    ? ["level", "timeSensitivity", "rationale", "limitations"]
-    : ["level", "rationale", "limitations"];
-  if (!isRecord(value) || !hasOnlyFields(value, fields)) {
-    return [`${field} must contain a contextual assessment and its limitations.`];
-  }
   const details: string[] = [];
-  if (!["unknown", "low", "medium", "high"].includes(String(value.level))) {
-    details.push(`${field}.level must be unknown, low, medium, or high.`);
-  }
-  details.push(
-    ...validateReasoningTextFields(
-      value,
-      field,
-      freshness ? ["timeSensitivity", "rationale"] : ["rationale"],
-    ),
-  );
-  if (!Array.isArray(value.limitations) || value.limitations.length === 0) {
+  if (!Array.isArray(value) || value.length === 0) {
     details.push(`${field}.limitations must contain at least one explicit limitation.`);
   } else {
-    for (const [index, limitation] of value.limitations.entries()) {
+    for (const [index, limitation] of value.entries()) {
       if (typeof limitation !== "string" || limitation.trim() === "") {
         details.push(`${field}.limitations[${index}] must be a non-empty string.`);
       }
@@ -1202,7 +1230,7 @@ function validateSourceLineage(value: unknown, field: string): string[] {
   return details;
 }
 
-function validateSourceAssessment(value: unknown, field: string): string[] {
+function validateSourceCredibility(value: unknown, field: string): string[] {
   if (
     !isRecord(value) ||
     !hasOnlyFields(value, [
@@ -1210,32 +1238,60 @@ function validateSourceAssessment(value: unknown, field: string): string[] {
       "id",
       "sourceId",
       "observationId",
-      "use",
-      "credibility",
-      "freshness",
+      "intendedUse",
+      "assessment",
+      "rationale",
+      "limitations",
     ]) ||
-    value.type !== "source-assessment"
+    value.type !== "source-credibility"
   ) {
-    return [`${field} must be a complete contextual Source assessment.`];
+    return [`${field} must be a complete contextual Source Credibility entry.`];
   }
-  return [
-    ...validateReasoningTextFields(value, field, [
+  const details = validateReasoningTextFields(value, field, [
       "id",
       "sourceId",
       "observationId",
-      "use",
-    ]),
-    ...validateContextualAssessment(
-      value.credibility,
-      `${field}.credibility`,
-      false,
-    ),
-    ...validateContextualAssessment(
-      value.freshness,
-      `${field}.freshness`,
-      true,
-    ),
-  ];
+      "intendedUse",
+      "rationale",
+    ]);
+  if (!["unknown", "low", "medium", "high"].includes(String(value.assessment))) {
+    details.push(`${field}.assessment must be unknown, low, medium, or high.`);
+  }
+  details.push(...validateAssessmentLimitations(value.limitations, field));
+  return details;
+}
+
+function validateSourceFreshness(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "sourceId",
+      "observationId",
+      "intendedUse",
+      "assessment",
+      "timeSensitivity",
+      "rationale",
+      "limitations",
+    ]) ||
+    value.type !== "source-freshness"
+  ) {
+    return [`${field} must be a complete contextual Source Freshness entry.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "sourceId",
+    "observationId",
+    "intendedUse",
+    "timeSensitivity",
+    "rationale",
+  ]);
+  if (!["unknown", "low", "medium", "high"].includes(String(value.assessment))) {
+    details.push(`${field}.assessment must be unknown, low, medium, or high.`);
+  }
+  details.push(...validateAssessmentLimitations(value.limitations, field));
+  return details;
 }
 
 function validateEvidenceGap(value: unknown, field: string): string[] {
@@ -1480,8 +1536,10 @@ function validateReasoningEntry(value: unknown, field: string): string[] {
   switch (value.type) {
     case "source-lineage":
       return validateSourceLineage(value, field);
-    case "source-assessment":
-      return validateSourceAssessment(value, field);
+    case "source-credibility":
+      return validateSourceCredibility(value, field);
+    case "source-freshness":
+      return validateSourceFreshness(value, field);
     case "evidence-gap":
       return validateEvidenceGap(value, field);
     case "assumption":
@@ -1647,7 +1705,8 @@ type AuthoritativeHistoryRebuild = {
   sources: PublicSource[];
   observations: PublicObservation[];
   sourceLineages: SourceLineage[];
-  sourceAssessments: SourceAssessment[];
+  sourceCredibilities: SourceCredibility[];
+  sourceFreshnesses: SourceFreshness[];
   evidenceGaps: EvidenceGap[];
   assumptions: Assumption[];
   inferences: Inference[];
@@ -1671,6 +1730,177 @@ type AuthoritativeOperationDescriptor = {
 
 function invalidAuthoritativeRecord(sequence: number): never {
   throw new Error(`authoritative record ${sequence} is invalid`);
+}
+
+type ReasoningState = Omit<EvidenceLedger, "campaignId">;
+
+function invalidatedEvidenceIds(state: ReasoningState): Set<string> {
+  const invalidatedIds = new Set(
+    state.corrections.map((correction) => correction.targetEntryId),
+  );
+  let foundDependentInference = true;
+  while (foundDependentInference) {
+    foundDependentInference = false;
+    for (const inference of state.inferences) {
+      if (
+        !invalidatedIds.has(inference.id) &&
+        [...inference.supportingEntryIds, ...inference.challengingEntryIds].some(
+          (identity) => invalidatedIds.has(identity),
+        )
+      ) {
+        invalidatedIds.add(inference.id);
+        foundDependentInference = true;
+      }
+    }
+  }
+  return invalidatedIds;
+}
+
+function allReasoningEntryIds(state: ReasoningState): Set<string> {
+  return new Set([
+    ...state.sources.map((source) => source.id),
+    ...state.observations.map((observation) => observation.id),
+    ...state.sourceLineages.map((lineage) => lineage.id),
+    ...state.sourceCredibilities.map((credibility) => credibility.id),
+    ...state.sourceFreshnesses.map((freshness) => freshness.id),
+    ...state.evidenceGaps.map((gap) => gap.id),
+    ...state.assumptions.map((assumption) => assumption.id),
+    ...state.inferences.map((inference) => inference.id),
+    ...state.contradictions.map((contradiction) => contradiction.id),
+    ...state.corrections.map((correction) => correction.id),
+  ]);
+}
+
+function applyReasoningEntries(
+  state: ReasoningState,
+  entries: ReasoningEntry[],
+): string | undefined {
+  const allEntryIds = allReasoningEntryIds(state);
+  const sourceIds = new Set(state.sources.map((source) => source.id));
+  const observationsById = new Map(
+    state.observations.map((observation) => [observation.id, observation]),
+  );
+  const evidenceGapIds = new Set(state.evidenceGaps.map((gap) => gap.id));
+  const contradictableEntryIds = new Set([
+    ...state.observations.map((observation) => observation.id),
+    ...state.assumptions.map((assumption) => assumption.id),
+    ...state.inferences.map((inference) => inference.id),
+  ]);
+  const correctableEntryIds = new Set(
+    [...allEntryIds].filter(
+      (identity) =>
+        !state.corrections.some((correction) => correction.id === identity),
+    ),
+  );
+  const correctedEntryIds = new Set(
+    state.corrections.map((correction) => correction.targetEntryId),
+  );
+  const availableEvidenceIds = new Set<string>();
+  const refreshAvailableEvidence = () => {
+    const invalidatedIds = invalidatedEvidenceIds(state);
+    availableEvidenceIds.clear();
+    for (const identity of [
+      ...state.observations.map((observation) => observation.id),
+      ...state.inferences.map((inference) => inference.id),
+    ]) {
+      if (!invalidatedIds.has(identity)) {
+        availableEvidenceIds.add(identity);
+      }
+    }
+  };
+  refreshAvailableEvidence();
+
+  for (const entry of entries) {
+    if (
+      validateReasoningEntry(entry, "entry").length > 0 ||
+      allEntryIds.has(entry.id)
+    ) {
+      return entry.id;
+    }
+    switch (entry.type) {
+      case "source-lineage":
+        if (!entry.sourceIds.every((identity) => sourceIds.has(identity))) {
+          return entry.sourceIds.find((identity) => !sourceIds.has(identity));
+        }
+        state.sourceLineages.push(entry);
+        break;
+      case "source-credibility":
+        if (
+          !sourceIds.has(entry.sourceId) ||
+          observationsById.get(entry.observationId)?.sourceId !== entry.sourceId
+        ) {
+          return `${entry.sourceId}/${entry.observationId}`;
+        }
+        state.sourceCredibilities.push(entry);
+        break;
+      case "source-freshness":
+        if (
+          !sourceIds.has(entry.sourceId) ||
+          observationsById.get(entry.observationId)?.sourceId !== entry.sourceId
+        ) {
+          return `${entry.sourceId}/${entry.observationId}`;
+        }
+        state.sourceFreshnesses.push(entry);
+        break;
+      case "evidence-gap":
+        state.evidenceGaps.push(entry);
+        evidenceGapIds.add(entry.id);
+        break;
+      case "assumption":
+        if (!evidenceGapIds.has(entry.evidenceGapId)) {
+          return entry.evidenceGapId;
+        }
+        state.assumptions.push(entry);
+        contradictableEntryIds.add(entry.id);
+        break;
+      case "inference": {
+        const unavailableEvidenceId = [
+          ...entry.supportingEntryIds,
+          ...entry.challengingEntryIds,
+        ].find((identity) => !availableEvidenceIds.has(identity));
+        if (unavailableEvidenceId !== undefined) {
+          return unavailableEvidenceId;
+        }
+        state.inferences.push(entry);
+        availableEvidenceIds.add(entry.id);
+        contradictableEntryIds.add(entry.id);
+        break;
+      }
+      case "contradiction": {
+        const incompatibleEntryId = entry.entryIds.find(
+          (identity) => !contradictableEntryIds.has(identity),
+        );
+        if (incompatibleEntryId !== undefined) {
+          return incompatibleEntryId;
+        }
+        state.contradictions.push(entry);
+        break;
+      }
+      case "correction":
+        if (
+          !correctableEntryIds.has(entry.targetEntryId) ||
+          correctedEntryIds.has(entry.targetEntryId)
+        ) {
+          return entry.targetEntryId;
+        }
+        if (
+          entry.action === "supersede" &&
+          (entry.replacementEntryId === null ||
+            !correctableEntryIds.has(entry.replacementEntryId))
+        ) {
+          return entry.replacementEntryId ?? "missing replacement";
+        }
+        state.corrections.push(entry);
+        correctedEntryIds.add(entry.targetEntryId);
+        refreshAvailableEvidence();
+        break;
+    }
+    allEntryIds.add(entry.id);
+    if (entry.type !== "correction") {
+      correctableEntryIds.add(entry.id);
+    }
+  }
+  return undefined;
 }
 
 const authoritativeOperationDescriptors = {
@@ -1797,136 +2027,13 @@ const authoritativeOperationDescriptors = {
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
       }
-      const availableEvidenceIds = new Set([
-        ...history.observations.map((observation) => observation.id),
-        ...history.inferences.map((inference) => inference.id),
-      ]);
-      const allEntryIds = new Set([
-        ...history.sources.map((source) => source.id),
-        ...history.observations.map((observation) => observation.id),
-        ...history.sourceLineages.map((lineage) => lineage.id),
-        ...history.sourceAssessments.map((assessment) => assessment.id),
-        ...history.evidenceGaps.map((gap) => gap.id),
-        ...history.assumptions.map((assumption) => assumption.id),
-        ...history.inferences.map((inference) => inference.id),
-        ...history.contradictions.map((contradiction) => contradiction.id),
-        ...history.corrections.map((correction) => correction.id),
-      ]);
-      const sourceIds = new Set(history.sources.map((source) => source.id));
-      const evidenceGapIds = new Set(history.evidenceGaps.map((gap) => gap.id));
-      const contradictableEntryIds = new Set([
-        ...history.observations.map((observation) => observation.id),
-        ...history.assumptions.map((assumption) => assumption.id),
-        ...history.inferences.map((inference) => inference.id),
-      ]);
-      const correctableEntryIds = new Set(
-        [...allEntryIds].filter(
-          (identity) =>
-            !history.corrections.some((correction) => correction.id === identity),
-        ),
-      );
-      const correctedEntryIds = new Set(
-        history.corrections.map((correction) => correction.targetEntryId),
-      );
-      for (const correctedEntryId of correctedEntryIds) {
-        availableEvidenceIds.delete(correctedEntryId);
-      }
-      for (const entry of outcome.entries) {
-        if (
-          validateReasoningEntry(entry, "entry").length > 0 ||
-          !isRecord(entry) ||
-          typeof entry.id !== "string" ||
-          allEntryIds.has(entry.id)
-        ) {
-          invalidAuthoritativeRecord(outcomeSequence);
-        }
-        switch (entry.type) {
-          case "source-lineage": {
-            const lineage = entry as unknown as SourceLineage;
-            if (!lineage.sourceIds.every((identity) => sourceIds.has(identity))) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.sourceLineages.push(lineage);
-            break;
-          }
-          case "source-assessment": {
-            const assessment = entry as unknown as SourceAssessment;
-            const observation = history.observations.find(
-              (candidate) => candidate.id === assessment.observationId,
-            );
-            if (
-              !sourceIds.has(assessment.sourceId) ||
-              observation?.sourceId !== assessment.sourceId
-            ) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.sourceAssessments.push(assessment);
-            break;
-          }
-          case "evidence-gap": {
-            const gap = entry as unknown as EvidenceGap;
-            history.evidenceGaps.push(gap);
-            evidenceGapIds.add(gap.id);
-            break;
-          }
-          case "assumption": {
-            const assumption = entry as unknown as Assumption;
-            if (!evidenceGapIds.has(assumption.evidenceGapId)) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.assumptions.push(assumption);
-            contradictableEntryIds.add(assumption.id);
-            break;
-          }
-          case "inference": {
-            const inference = entry as unknown as Inference;
-            if (
-              ![
-                ...inference.supportingEntryIds,
-                ...inference.challengingEntryIds,
-              ].every((identity) => availableEvidenceIds.has(identity))
-            ) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.inferences.push(inference);
-            availableEvidenceIds.add(inference.id);
-            contradictableEntryIds.add(inference.id);
-            break;
-          }
-          case "contradiction": {
-            const contradiction = entry as unknown as Contradiction;
-            if (
-              !contradiction.entryIds.every((identity) =>
-                contradictableEntryIds.has(identity),
-              )
-            ) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.contradictions.push(contradiction);
-            break;
-          }
-          case "correction": {
-            const correction = entry as unknown as Correction;
-            if (
-              !correctableEntryIds.has(correction.targetEntryId) ||
-              correctedEntryIds.has(correction.targetEntryId) ||
-              (correction.action === "supersede" &&
-                !correctableEntryIds.has(correction.replacementEntryId!))
-            ) {
-              invalidAuthoritativeRecord(outcomeSequence);
-            }
-            history.corrections.push(correction);
-            correctedEntryIds.add(correction.targetEntryId);
-            availableEvidenceIds.delete(correction.targetEntryId);
-            break;
-          }
-          default:
-            invalidAuthoritativeRecord(outcomeSequence);
-        }
-        allEntryIds.add(entry.id);
-        if (entry.type !== "correction") {
-          correctableEntryIds.add(entry.id);
-        }
+      if (
+        applyReasoningEntries(
+          history,
+          outcome.entries as unknown as ReasoningEntry[],
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
       }
     },
   },
@@ -2177,7 +2284,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     sources: [],
     observations: [],
     sourceLineages: [],
-    sourceAssessments: [],
+    sourceCredibilities: [],
+    sourceFreshnesses: [],
     evidenceGaps: [],
     assumptions: [],
     inferences: [],
@@ -2251,7 +2359,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     sources,
     observations,
     sourceLineages,
-    sourceAssessments,
+    sourceCredibilities,
+    sourceFreshnesses,
     evidenceGaps,
     assumptions,
     inferences,
@@ -2292,7 +2401,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
   }
   if (
     sourceLineages.length > 0 ||
-    sourceAssessments.length > 0 ||
+    sourceCredibilities.length > 0 ||
+    sourceFreshnesses.length > 0 ||
     evidenceGaps.length > 0 ||
     assumptions.length > 0 ||
     inferences.length > 0 ||
@@ -2302,9 +2412,22 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     const correctedEntryIds = new Set(
       corrections.map((correction) => correction.targetEntryId),
     );
+    const invalidatedIds = invalidatedEvidenceIds({
+      sources,
+      observations,
+      sourceLineages,
+      sourceCredibilities,
+      sourceFreshnesses,
+      evidenceGaps,
+      assumptions,
+      inferences,
+      contradictions,
+      corrections,
+    });
     const reasoningEntryCount =
       sourceLineages.length +
-      sourceAssessments.length +
+      sourceCredibilities.length +
+      sourceFreshnesses.length +
       evidenceGaps.length +
       assumptions.length +
       inferences.length +
@@ -2315,8 +2438,16 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     );
     workView.reasoning = {
       evidenceLedgerPath: "evidence-ledger.json",
+      evidenceInspectionCommand: "inspectEvidence",
       activeInferenceIds: inferences
-        .filter((inference) => !correctedEntryIds.has(inference.id))
+        .filter((inference) => !invalidatedIds.has(inference.id))
+        .map((inference) => inference.id),
+      reassessmentInferenceIds: inferences
+        .filter(
+          (inference) =>
+            invalidatedIds.has(inference.id) &&
+            !correctedEntryIds.has(inference.id),
+        )
         .map((inference) => inference.id),
       openEvidenceGapIds: evidenceGaps
         .filter(
@@ -2369,7 +2500,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     sources,
     observations,
     sourceLineages,
-    sourceAssessments,
+    sourceCredibilities,
+    sourceFreshnesses,
     evidenceGaps,
     assumptions,
     inferences,
@@ -2662,6 +2794,70 @@ async function inspectCampaign(command: InspectCampaignCommand) {
         message: "Scouting Campaign could not be located and validated.",
         action:
           "Check the explicit Campaign path and preserve its contents for recovery; do not continue the Campaign.",
+        details: [error instanceof Error ? error.message : "unknown validation error"],
+      },
+    };
+  }
+}
+
+function evidenceEntriesById(evidenceLedger: EvidenceLedger) {
+  return new Map<string, Record<string, unknown>>([
+    ...evidenceLedger.sources.map(
+      (source) => [source.id, { type: "source", ...source }] as const,
+    ),
+    ...evidenceLedger.observations.map(
+      (observation) =>
+        [observation.id, { type: "observation", ...observation }] as const,
+    ),
+    ...[
+      ...evidenceLedger.sourceLineages,
+      ...evidenceLedger.sourceCredibilities,
+      ...evidenceLedger.sourceFreshnesses,
+      ...evidenceLedger.evidenceGaps,
+      ...evidenceLedger.assumptions,
+      ...evidenceLedger.inferences,
+      ...evidenceLedger.contradictions,
+      ...evidenceLedger.corrections,
+    ].map((entry) => [entry.id, entry] as const),
+  ]);
+}
+
+async function inspectEvidence(command: InspectEvidenceCommand) {
+  try {
+    const { campaignPath, locatedBy } = await locateCampaign(command.payload);
+    const campaign = await loadCampaign(campaignPath);
+    if (campaign.evidenceLedger === undefined) {
+      throw new Error("Evidence Ledger is not available before Campaign Intake confirmation");
+    }
+    const entriesById = evidenceEntriesById(campaign.evidenceLedger);
+    const missingEntryId = command.payload.entryIds.find(
+      (identity) => !entriesById.has(identity),
+    );
+    if (missingEntryId !== undefined) {
+      throw new Error(`Evidence Ledger entry ${missingEntryId} was not found`);
+    }
+    return {
+      envelopeVersion: contracts.commandEnvelope,
+      requestId: command.requestId,
+      command: command.command,
+      ok: true as const,
+      result: {
+        locatedBy,
+        campaign: campaign.campaign,
+        entries: command.payload.entryIds.map((identity) => entriesById.get(identity)),
+      },
+    };
+  } catch (error) {
+    return {
+      envelopeVersion: contracts.commandEnvelope,
+      requestId: command.requestId,
+      command: command.command,
+      ok: false as const,
+      error: {
+        code: "SVS-EVIDENCE-INSPECTION-INVALID",
+        message: "Requested Evidence Ledger entries could not be inspected.",
+        action:
+          "Use stable entry identities from the validated Work View and preserve Campaign state when validation fails.",
         details: [error instanceof Error ? error.message : "unknown validation error"],
       },
     };
@@ -3325,7 +3521,7 @@ async function recordEvidenceReasoning(
     campaign: LoadedCampaign,
   ) => ({
     recorded,
-    evidenceLedger: campaign.evidenceLedger,
+    recordedEntries: command.payload.entries,
     workView: campaign.workView,
   });
 
@@ -3387,146 +3583,29 @@ async function recordEvidenceReasoning(
     },
     validateAfterLease({ before }) {
       const ledger = before!.evidenceLedger!;
-      const allEntryIds = new Set([
-        ...ledger.sources.map((source: PublicSource) => source.id),
-        ...ledger.observations.map(
-          (observation: PublicObservation) => observation.id,
-        ),
-        ...ledger.sourceLineages.map((lineage: SourceLineage) => lineage.id),
-        ...ledger.sourceAssessments.map(
-          (assessment: SourceAssessment) => assessment.id,
-        ),
-        ...ledger.evidenceGaps.map((gap: EvidenceGap) => gap.id),
-        ...ledger.assumptions.map((assumption: Assumption) => assumption.id),
-        ...ledger.inferences.map((inference: Inference) => inference.id),
-        ...ledger.contradictions.map(
-          (contradiction: Contradiction) => contradiction.id,
-        ),
-        ...ledger.corrections.map((correction: Correction) => correction.id),
-      ]);
-      const sourceIds = new Set(
-        ledger.sources.map((source: PublicSource) => source.id),
+      const invalidLink = applyReasoningEntries(
+        {
+          sources: ledger.sources,
+          observations: ledger.observations,
+          sourceLineages: [...ledger.sourceLineages],
+          sourceCredibilities: [...ledger.sourceCredibilities],
+          sourceFreshnesses: [...ledger.sourceFreshnesses],
+          evidenceGaps: [...ledger.evidenceGaps],
+          assumptions: [...ledger.assumptions],
+          inferences: [...ledger.inferences],
+          contradictions: [...ledger.contradictions],
+          corrections: [...ledger.corrections],
+        },
+        command.payload.entries,
       );
-      const observationsById = new Map(
-        ledger.observations.map((observation: PublicObservation) => [
-          observation.id,
-          observation,
-        ]),
-      );
-      const availableEvidenceIds = new Set([
-        ...ledger.observations.map(
-          (observation: PublicObservation) => observation.id,
-        ),
-        ...ledger.inferences.map((inference: Inference) => inference.id),
-      ]);
-      const evidenceGapIds = new Set(
-        ledger.evidenceGaps.map((gap: EvidenceGap) => gap.id),
-      );
-      const contradictableEntryIds = new Set([
-        ...ledger.observations.map(
-          (observation: PublicObservation) => observation.id,
-        ),
-        ...ledger.assumptions.map((assumption: Assumption) => assumption.id),
-        ...ledger.inferences.map((inference: Inference) => inference.id),
-      ]);
-      const correctableEntryIds = new Set(
-        [...allEntryIds].filter(
-          (identity) =>
-            !ledger.corrections.some(
-              (correction: Correction) => correction.id === identity,
-            ),
-        ),
-      );
-      const correctedEntryIds = new Set(
-        ledger.corrections.map(
-          (correction: Correction) => correction.targetEntryId,
-        ),
-      );
-      for (const correctedEntryId of correctedEntryIds) {
-        availableEvidenceIds.delete(correctedEntryId);
-      }
-      for (const entry of command.payload.entries) {
-        if (allEntryIds.has(entry.id)) {
-          return {
-            code: "SVS-EVIDENCE-IDENTITY-CONFLICT",
-            message:
-              "Evidence reasoning identity is already present in the Evidence Ledger.",
-            action:
-              "Use a stable unique entry identity or replay the original reasoning request.",
-          };
-        }
-        let invalidLink: string | undefined;
-        switch (entry.type) {
-          case "source-lineage":
-            invalidLink = entry.sourceIds.find(
-              (identity) => !sourceIds.has(identity),
-            );
-            break;
-          case "source-assessment":
-            if (
-              !sourceIds.has(entry.sourceId) ||
-              observationsById.get(entry.observationId)?.sourceId !== entry.sourceId
-            ) {
-              invalidLink = `${entry.sourceId}/${entry.observationId}`;
-            }
-            break;
-          case "evidence-gap":
-            evidenceGapIds.add(entry.id);
-            break;
-          case "assumption":
-            if (!evidenceGapIds.has(entry.evidenceGapId)) {
-              invalidLink = entry.evidenceGapId;
-            } else {
-              contradictableEntryIds.add(entry.id);
-            }
-            break;
-          case "inference":
-            invalidLink = [
-              ...entry.supportingEntryIds,
-              ...entry.challengingEntryIds,
-            ].find((identity) => !availableEvidenceIds.has(identity));
-            if (invalidLink === undefined) {
-              availableEvidenceIds.add(entry.id);
-              contradictableEntryIds.add(entry.id);
-            }
-            break;
-          case "contradiction":
-            invalidLink = entry.entryIds.find(
-              (identity) => !contradictableEntryIds.has(identity),
-            );
-            break;
-          case "correction":
-            if (
-              !correctableEntryIds.has(entry.targetEntryId) ||
-              correctedEntryIds.has(entry.targetEntryId)
-            ) {
-              invalidLink = entry.targetEntryId;
-            } else if (
-              entry.action === "supersede" &&
-              (entry.replacementEntryId === null ||
-                !correctableEntryIds.has(entry.replacementEntryId))
-            ) {
-              invalidLink = entry.replacementEntryId ?? "missing replacement";
-            } else {
-              correctedEntryIds.add(entry.targetEntryId);
-              availableEvidenceIds.delete(entry.targetEntryId);
-            }
-            break;
-        }
-        if (invalidLink !== undefined) {
-          return {
+      return invalidLink === undefined
+        ? undefined
+        : {
             code: "SVS-EVIDENCE-LINK-INVALID",
-            message: `Evidence reasoning links unknown or incompatible entry ${invalidLink}.`,
+            message: `Evidence reasoning links an unknown, duplicate, corrected, or incompatible entry ${invalidLink}.`,
             action:
-              "Link each entry only to compatible Sources, Observations, prior Inferences, Assumptions, or Evidence Gaps already in the Campaign or earlier in this request.",
+              "Link each entry only to compatible active Sources, Observations, prior Inferences, Assumptions, or Evidence Gaps already in the Campaign or earlier in this request.",
           };
-        }
-        allEntryIds.add(entry.id);
-        if (entry.type !== "correction") {
-          correctableEntryIds.add(entry.id);
-        }
-      }
-      return undefined;
     },
     records({ before }) {
       return evidenceReasoningRecords(
@@ -3737,6 +3816,7 @@ export async function executeCommand(
       "preflight",
       "createCampaign",
       "inspectCampaign",
+      "inspectEvidence",
       "resumeCampaign",
       "confirmCampaignIntake",
       "reservePublicResearch",
@@ -3799,6 +3879,29 @@ export async function executeCommand(
       };
     }
     return inspectCampaign(command as unknown as InspectCampaignCommand);
+  }
+
+  if (command.command === "inspectEvidence") {
+    const invalidFields = validateInspectEvidenceFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-COMMAND-INVALID",
+          message: "Evidence inspection command is invalid.",
+          action:
+            "Provide one Campaign locator and the stable Evidence Ledger entry identities from the Work View.",
+          details: invalidFields,
+        },
+      };
+    }
+    return inspectEvidence(command as unknown as InspectEvidenceCommand);
   }
 
   if (command.command === "resumeCampaign") {

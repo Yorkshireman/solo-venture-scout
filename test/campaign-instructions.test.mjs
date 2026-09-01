@@ -111,7 +111,8 @@ test("packaged Scout derives auditable reasoning without blurring evidence types
   assert.match(reference, /"command": "recordEvidenceReasoning"/);
   for (const entryType of [
     "source-lineage",
-    "source-assessment",
+    "source-credibility",
+    "source-freshness",
     "evidence-gap",
     "assumption",
     "inference",

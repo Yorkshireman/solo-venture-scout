@@ -160,9 +160,10 @@ Observations needed by the reasoning:
 7. Append a correction to supersede or retract an entry; never delete or rewrite the
    historical entry or the basis on which an earlier decision was made.
 
-After a successful write, use the Work View's stable reasoning pointers for current
-work. Do not load the entire Evidence Ledger unless the named decision, gap,
-contradiction, correction, or audit requires it.
+After a successful write, use the Work View's stable reasoning pointers and
+`inspectEvidence` for current work. Reassess every Inference transitively affected by a
+corrected entry. Do not load the entire Evidence Ledger unless the named decision,
+gap, contradiction, correction, or audit requires it.
 
 ## Inspect a Scouting Campaign
 

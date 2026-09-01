@@ -20,6 +20,21 @@ async function runKernel(kernelPath, command) {
 /**
  * @param {string} kernelPath
  * @param {string} campaignPath
+ * @param {string[]} entryIds
+ * @param {string} requestId
+ */
+async function inspectEvidence(kernelPath, campaignPath, entryIds, requestId) {
+  return runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId,
+    command: "inspectEvidence",
+    payload: { campaignPath, entryIds },
+  });
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {string} campaignPath
  */
 async function createCampaignWithObservation(kernelPath, campaignPath) {
   const commands = [
@@ -195,14 +210,33 @@ test("an Inference preserves its scope, reasoning, material evidence links, and 
 
   assert.equal(recorded.code, 0, recorded.stderr);
   assert.equal(recorded.response.result.recorded, true);
-  assert.deepEqual(recorded.response.result.evidenceLedger.inferences, [inference]);
+  assert.equal(Object.hasOwn(recorded.response.result, "evidenceLedger"), false);
+  const inspected = await inspectEvidence(
+    kernelPath,
+    campaignPath,
+    ["observation-follow-up-time", "inference-late-payments-have-admin-cost"],
+    "inspect-inference-reasoning-1",
+  );
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(inspected.response.result.entries, [
+    {
+      type: "observation",
+      id: "observation-follow-up-time",
+      text: "Surveyed businesses reported staff time spent following up overdue invoices.",
+      sourceId: "source-late-payments",
+      exactLocator: "Results, paragraph 2",
+    },
+    inference,
+  ]);
   assert.equal(
-    Object.hasOwn(recorded.response.result.evidenceLedger.observations[0], "confidence"),
+    Object.hasOwn(inspected.response.result.entries[0], "confidence"),
     false,
   );
   assert.deepEqual(recorded.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
+    evidenceInspectionCommand: "inspectEvidence",
     activeInferenceIds: ["inference-late-payments-have-admin-cost"],
+    reassessmentInferenceIds: [],
     openEvidenceGapIds: [],
     unresolvedContradictionIds: [],
     correctionIds: [],
@@ -226,22 +260,25 @@ test("reasoning keeps unsupported premises, provenance assessments, and incompat
       independence: "dependent",
     },
     {
-      type: "source-assessment",
-      id: "assessment-follow-up-time-for-cost",
+      type: "source-credibility",
+      id: "credibility-follow-up-time-for-cost",
       sourceId: "source-late-payments",
       observationId: "observation-follow-up-time",
-      use: "Assess whether late-payment follow-up is a current Costly Problem.",
-      credibility: {
-        level: "medium",
-        rationale: "The survey directly asked businesses about the workflow.",
-        limitations: ["The sampling method is not reported."],
-      },
-      freshness: {
-        level: "high",
-        timeSensitivity: "Invoice workflows may change as automation adoption changes.",
-        rationale: "The survey predates this assessment by three months.",
-        limitations: ["No update date is available."],
-      },
+      intendedUse: "Assess whether late-payment follow-up is a current Costly Problem.",
+      assessment: "medium",
+      rationale: "The survey directly asked businesses about the workflow.",
+      limitations: ["The sampling method is not reported."],
+    },
+    {
+      type: "source-freshness",
+      id: "freshness-follow-up-time-for-cost",
+      sourceId: "source-late-payments",
+      observationId: "observation-follow-up-time",
+      intendedUse: "Assess whether late-payment follow-up is a current Costly Problem.",
+      assessment: "high",
+      timeSensitivity: "Invoice workflows may change as automation adoption changes.",
+      rationale: "The survey predates this assessment by three months.",
+      limitations: ["No update date is available."],
     },
     {
       type: "evidence-gap",
@@ -297,18 +334,22 @@ test("reasoning keeps unsupported premises, provenance assessments, and incompat
   });
 
   assert.equal(recorded.code, 0, recorded.stderr);
-  const ledger = recorded.response.result.evidenceLedger;
-  assert.deepEqual(ledger.sourceLineages, [entries[0]]);
-  assert.deepEqual(ledger.sourceAssessments, [entries[1]]);
-  assert.deepEqual(ledger.evidenceGaps, [entries[2]]);
-  assert.deepEqual(ledger.assumptions, [entries[3]]);
-  assert.deepEqual(ledger.inferences, [entries[4]]);
-  assert.deepEqual(ledger.contradictions, [entries[5]]);
-  assert.equal(Object.hasOwn(ledger.assumptions[0], "confidence"), false);
-  assert.equal(Object.hasOwn(ledger.assumptions[0], "supportingEntryIds"), false);
+  assert.equal(Object.hasOwn(recorded.response.result, "evidenceLedger"), false);
+  const inspected = await inspectEvidence(
+    kernelPath,
+    campaignPath,
+    entries.map((entry) => entry.id),
+    "inspect-auditable-reasoning-1",
+  );
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(inspected.response.result.entries, entries);
+  assert.equal(Object.hasOwn(inspected.response.result.entries[4], "confidence"), false);
+  assert.equal(Object.hasOwn(inspected.response.result.entries[4], "supportingEntryIds"), false);
   assert.deepEqual(recorded.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
+    evidenceInspectionCommand: "inspectEvidence",
     activeInferenceIds: ["inference-manual-follow-up-can-be-costly"],
+    reassessmentInferenceIds: [],
     openEvidenceGapIds: ["gap-independent-admin-cost"],
     unresolvedContradictionIds: ["contradiction-follow-up-time"],
     correctionIds: [],
@@ -414,25 +455,30 @@ test("Corrections supersede and retract reasoning without deleting its historica
     },
   });
   assert.equal(resumed.code, 0, resumed.stderr);
-  const inspected = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "inspect-corrected-reasoning-1",
-    command: "inspectCampaign",
-    payload: { campaignPath },
-  });
+  const inspected = await inspectEvidence(
+    kernelPath,
+    campaignPath,
+    [
+      "inference-admin-cost-original",
+      "inference-admin-cost-narrowed",
+      "correction-narrow-admin-cost",
+      "correction-retract-admin-cost",
+    ],
+    "inspect-corrected-reasoning-1",
+  );
 
   assert.equal(inspected.code, 0, inspected.stderr);
-  assert.deepEqual(inspected.response.result.evidenceLedger.inferences, [
+  assert.deepEqual(inspected.response.result.entries, [
     originalInference,
     replacementInference,
-  ]);
-  assert.deepEqual(inspected.response.result.evidenceLedger.corrections, [
     supersedingCorrection,
     retractingCorrection,
   ]);
-  assert.deepEqual(inspected.response.result.workView.reasoning, {
+  assert.deepEqual(resumed.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
+    evidenceInspectionCommand: "inspectEvidence",
     activeInferenceIds: [],
+    reassessmentInferenceIds: [],
     openEvidenceGapIds: [],
     unresolvedContradictionIds: [],
     correctionIds: [
@@ -442,7 +488,7 @@ test("Corrections supersede and retract reasoning without deleting its historica
   });
 });
 
-test("retracted reasoning receives no evidential credit in a later Inference", async () => {
+test("retracting evidence withdraws transitive credit and flags dependent Inferences", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-retracted-evidence-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "retracted-evidence");
@@ -473,16 +519,20 @@ test("retracted reasoning receives no evidential credit in a later Inference", a
         originalInference,
         {
           type: "correction",
-          id: "correction-retract-unsupported-cost",
-          targetEntryId: "inference-retracted-admin-cost",
+          id: "correction-retract-source-observation",
+          targetEntryId: "observation-follow-up-time",
           action: "retract",
           replacementEntryId: null,
-          rationale: "The Observation does not quantify a material financial consequence.",
+          rationale: "The Source issued a retraction for the reported survey result.",
         },
       ],
     },
   });
   assert.equal(seeded.code, 0, seeded.stderr);
+  assert.deepEqual(seeded.response.result.workView.reasoning.activeInferenceIds, []);
+  assert.deepEqual(seeded.response.result.workView.reasoning.reassessmentInferenceIds, [
+    "inference-retracted-admin-cost",
+  ]);
   const recordsBefore = await readFile(path.join(campaignPath, "records.jsonl"));
 
   const result = await runKernel(kernelPath, {

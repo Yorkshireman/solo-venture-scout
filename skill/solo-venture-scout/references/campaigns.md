@@ -246,22 +246,25 @@ an earlier one from the same request.
         "independence": "dependent"
       },
       {
-        "type": "source-assessment",
-        "id": "assessment-source-for-workaround-cost",
+        "type": "source-credibility",
+        "id": "credibility-source-for-workaround-cost",
         "sourceId": "stable-source-id",
         "observationId": "stable-observation-id",
-        "use": "Assess whether the named workaround consumes material staff time.",
-        "credibility": {
-          "level": "medium",
-          "rationale": "The Source directly surveyed the affected operators.",
-          "limitations": ["The sampling method is incompletely described."]
-        },
-        "freshness": {
-          "level": "high",
-          "timeSensitivity": "Workflow adoption may change within a year.",
-          "rationale": "The survey was published three months before assessment.",
-          "limitations": ["No update date is available."]
-        }
+        "intendedUse": "Assess whether the named workaround consumes material staff time.",
+        "assessment": "medium",
+        "rationale": "The Source directly surveyed the affected operators.",
+        "limitations": ["The sampling method is incompletely described."]
+      },
+      {
+        "type": "source-freshness",
+        "id": "freshness-source-for-workaround-cost",
+        "sourceId": "stable-source-id",
+        "observationId": "stable-observation-id",
+        "intendedUse": "Assess whether the named workaround consumes material staff time.",
+        "assessment": "high",
+        "timeSensitivity": "Workflow adoption may change within a year.",
+        "rationale": "The survey was published three months before assessment.",
+        "limitations": ["No update date is available."]
       },
       {
         "type": "evidence-gap",
@@ -321,7 +324,8 @@ include the explicit (possibly empty) set of material challenges. Evidence Confi
 uses only `unknown`, `low`, `medium`, or `high`, always with limiting factors, and is
 not accepted on an Observation or Assumption. An Assumption has no support or
 confidence fields and must link an existing or earlier Evidence Gap. Source
-assessments bind one Source to one of its Observations and state the intended use;
+Credibility and Source Freshness each bind one Source to one of its Observations and
+state the intended use;
 shared-origin Source Lineage always records those Sources as dependent.
 
 Contradictions retain both or all incompatible entries even after reconciliation.
@@ -329,7 +333,28 @@ Corrections append `supersede` with a different replacement identity or `retract
 `null`; the target remains in authoritative history. Success checkpoints the append,
 rebuilds `evidence-ledger.json`, and adds only current Inference, open Evidence Gap,
 unresolved Contradiction, and Correction identities plus the stable Ledger path to the
-Work View. Inspection therefore need not load the entire Evidence Ledger.
+Work View. If a Correction invalidates evidence used by an Inference, that Inference
+is removed from current evidence and listed for reassessment; its dependent Inferences
+are handled transitively.
+
+Inspect only the entries named by a Work View without returning the entire Evidence
+Ledger:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "inspect-evidence-stable-request-id",
+  "command": "inspectEvidence",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "entryIds": ["inference-narrowed-workaround-cost", "gap-independent-cost-measure"]
+  }
+}
+```
+
+The bounded `searchPath` locator may replace `campaignPath`. The command validates the
+Campaign and returns the requested entries in request order without changing state or
+returning unrelated Evidence Ledger content. An unknown identity fails the whole read.
 
 ## Resume
 
