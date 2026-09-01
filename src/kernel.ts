@@ -189,6 +189,102 @@ type PublicObservation = {
   exactLocator: string;
 };
 
+type EvidenceLevel = "unknown" | "low" | "medium" | "high";
+
+type EvidenceConfidence = {
+  level: EvidenceLevel;
+  limitingFactors: string[];
+};
+
+type SourceLineage = {
+  type: "source-lineage";
+  id: string;
+  sourceIds: string[];
+  sharedOrigin: string;
+  relationship:
+    | "shared-authorship"
+    | "shared-dataset"
+    | "syndication"
+    | "republication"
+    | "other";
+  independence: "dependent";
+};
+
+type ContextualAssessment = {
+  level: EvidenceLevel;
+  rationale: string;
+  limitations: string[];
+};
+
+type SourceAssessment = {
+  type: "source-assessment";
+  id: string;
+  sourceId: string;
+  observationId: string;
+  use: string;
+  credibility: ContextualAssessment;
+  freshness: ContextualAssessment & { timeSensitivity: string };
+};
+
+type EvidenceGap = {
+  type: "evidence-gap";
+  id: string;
+  question: string;
+  affectedDecisionIds: string[];
+  resolutionCriteria: string;
+  resolutionMethod: string;
+  status: "open" | "resolved";
+  resolution: string | null;
+};
+
+type Assumption = {
+  type: "assumption";
+  id: string;
+  text: string;
+  scope: string;
+  evidenceGapId: string;
+};
+
+type Inference = {
+  type: "inference";
+  id: string;
+  text: string;
+  scope: string;
+  reasoning: string;
+  supportingEntryIds: string[];
+  challengingEntryIds: string[];
+  confidence: EvidenceConfidence;
+};
+
+type Contradiction = {
+  type: "contradiction";
+  id: string;
+  entryIds: string[];
+  disputedProposition: string;
+  disputedScope: string;
+  attemptedReconciliation: string;
+  resolutionStatus: "unresolved" | "partially-resolved" | "resolved";
+  resolution: string | null;
+};
+
+type Correction = {
+  type: "correction";
+  id: string;
+  targetEntryId: string;
+  action: "supersede" | "retract";
+  replacementEntryId: string | null;
+  rationale: string;
+};
+
+type ReasoningEntry =
+  | SourceLineage
+  | SourceAssessment
+  | EvidenceGap
+  | Assumption
+  | Inference
+  | Contradiction
+  | Correction;
+
 type RecordPublicResearchObservationCommand = {
   envelopeVersion: string;
   requestId: string;
@@ -200,6 +296,18 @@ type RecordPublicResearchObservationCommand = {
     reservationId: string;
     source: PublicSource;
     observation: PublicObservation;
+  };
+};
+
+type RecordEvidenceReasoningCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordEvidenceReasoning";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    entries: ReasoningEntry[];
   };
 };
 
@@ -216,6 +324,13 @@ type EvidenceLedger = {
   campaignId: string;
   sources: PublicSource[];
   observations: PublicObservation[];
+  sourceLineages: SourceLineage[];
+  sourceAssessments: SourceAssessment[];
+  evidenceGaps: EvidenceGap[];
+  assumptions: Assumption[];
+  inferences: Inference[];
+  contradictions: Contradiction[];
+  corrections: Correction[];
 };
 
 type CampaignLocator = {
@@ -234,6 +349,13 @@ type WorkView = {
   completedWork: string[];
   nextPermittedActions: string[];
   publicResearchAvailable: boolean;
+  reasoning?: {
+    evidenceLedgerPath: "evidence-ledger.json";
+    activeInferenceIds: string[];
+    openEvidenceGapIds: string[];
+    unresolvedContradictionIds: string[];
+    correctionIds: string[];
+  };
 };
 
 type CoordinatorLease = {
@@ -247,7 +369,8 @@ type AuthoritativeOperation =
   | "resume-campaign"
   | "confirm-campaign-intake"
   | "reserve-public-research"
-  | "record-public-research-observation";
+  | "record-public-research-observation"
+  | "record-evidence-reasoning";
 
 type CampaignOperation = {
   campaignId: string;
@@ -960,6 +1083,448 @@ function validateRecordPublicResearchObservationFields(
   return details;
 }
 
+function validateEntryIdList(
+  value: unknown,
+  field: string,
+  allowEmpty: boolean,
+): string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    return [`${field} must be ${allowEmpty ? "an" : "a non-empty"} array of stable Evidence Ledger entry identities.`];
+  }
+  const details: string[] = [];
+  const identities = new Set<string>();
+  for (const [index, identity] of value.entries()) {
+    if (typeof identity !== "string" || identity.trim() === "") {
+      details.push(`${field}[${index}] must be a non-empty string.`);
+    } else if (identities.has(identity)) {
+      details.push(`${field} must not contain duplicate identities.`);
+    } else {
+      identities.add(identity);
+    }
+  }
+  return details;
+}
+
+function validateReasoningTextFields(
+  value: Record<string, unknown>,
+  field: string,
+  textFields: string[],
+): string[] {
+  const details: string[] = [];
+  for (const textField of textFields) {
+    if (typeof value[textField] !== "string" || value[textField].trim() === "") {
+      details.push(`${field}.${textField} must be a non-empty string.`);
+    }
+    details.push(
+      ...validatePersistableText(
+        value[textField],
+        `${field}.${textField}`,
+      ),
+    );
+  }
+  return details;
+}
+
+function validateContextualAssessment(
+  value: unknown,
+  field: string,
+  freshness: boolean,
+): string[] {
+  const fields = freshness
+    ? ["level", "timeSensitivity", "rationale", "limitations"]
+    : ["level", "rationale", "limitations"];
+  if (!isRecord(value) || !hasOnlyFields(value, fields)) {
+    return [`${field} must contain a contextual assessment and its limitations.`];
+  }
+  const details: string[] = [];
+  if (!["unknown", "low", "medium", "high"].includes(String(value.level))) {
+    details.push(`${field}.level must be unknown, low, medium, or high.`);
+  }
+  details.push(
+    ...validateReasoningTextFields(
+      value,
+      field,
+      freshness ? ["timeSensitivity", "rationale"] : ["rationale"],
+    ),
+  );
+  if (!Array.isArray(value.limitations) || value.limitations.length === 0) {
+    details.push(`${field}.limitations must contain at least one explicit limitation.`);
+  } else {
+    for (const [index, limitation] of value.limitations.entries()) {
+      if (typeof limitation !== "string" || limitation.trim() === "") {
+        details.push(`${field}.limitations[${index}] must be a non-empty string.`);
+      }
+      details.push(
+        ...validatePersistableText(
+          limitation,
+          `${field}.limitations[${index}]`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+function validateSourceLineage(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "sourceIds",
+      "sharedOrigin",
+      "relationship",
+      "independence",
+    ]) ||
+    value.type !== "source-lineage"
+  ) {
+    return [`${field} must be a complete Source Lineage entry.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id", "sharedOrigin"]);
+  details.push(...validateEntryIdList(value.sourceIds, `${field}.sourceIds`, false));
+  if (Array.isArray(value.sourceIds) && value.sourceIds.length < 2) {
+    details.push(`${field}.sourceIds must identify at least two dependent Sources.`);
+  }
+  if (
+    ![
+      "shared-authorship",
+      "shared-dataset",
+      "syndication",
+      "republication",
+      "other",
+    ].includes(String(value.relationship))
+  ) {
+    details.push(`${field}.relationship must identify the shared-origin relationship.`);
+  }
+  if (value.independence !== "dependent") {
+    details.push(`${field}.independence must be dependent for Sources with a shared origin.`);
+  }
+  return details;
+}
+
+function validateSourceAssessment(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "sourceId",
+      "observationId",
+      "use",
+      "credibility",
+      "freshness",
+    ]) ||
+    value.type !== "source-assessment"
+  ) {
+    return [`${field} must be a complete contextual Source assessment.`];
+  }
+  return [
+    ...validateReasoningTextFields(value, field, [
+      "id",
+      "sourceId",
+      "observationId",
+      "use",
+    ]),
+    ...validateContextualAssessment(
+      value.credibility,
+      `${field}.credibility`,
+      false,
+    ),
+    ...validateContextualAssessment(
+      value.freshness,
+      `${field}.freshness`,
+      true,
+    ),
+  ];
+}
+
+function validateEvidenceGap(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "question",
+      "affectedDecisionIds",
+      "resolutionCriteria",
+      "resolutionMethod",
+      "status",
+      "resolution",
+    ]) ||
+    value.type !== "evidence-gap"
+  ) {
+    return [`${field} must be a complete Evidence Gap entry.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "question",
+    "resolutionCriteria",
+    "resolutionMethod",
+  ]);
+  details.push(
+    ...validateEntryIdList(
+      value.affectedDecisionIds,
+      `${field}.affectedDecisionIds`,
+      false,
+    ),
+  );
+  if (!(["open", "resolved"] as unknown[]).includes(value.status)) {
+    details.push(`${field}.status must be open or resolved.`);
+  }
+  if (value.status === "open" && value.resolution !== null) {
+    details.push(`${field}.resolution must be null while the Evidence Gap is open.`);
+  }
+  if (
+    value.status === "resolved" &&
+    (typeof value.resolution !== "string" || value.resolution.trim() === "")
+  ) {
+    details.push(`${field}.resolution must explain how the Evidence Gap was resolved.`);
+  }
+  details.push(...validatePersistableText(value.resolution, `${field}.resolution`));
+  return details;
+}
+
+function validateAssumption(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["type", "id", "text", "scope", "evidenceGapId"]) ||
+    value.type !== "assumption"
+  ) {
+    return [
+      `${field} must be an unsupported Assumption linked only to an Evidence Gap.`,
+    ];
+  }
+  return validateReasoningTextFields(value, field, [
+    "id",
+    "text",
+    "scope",
+    "evidenceGapId",
+  ]);
+}
+
+function validateInference(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "text",
+      "scope",
+      "reasoning",
+      "supportingEntryIds",
+      "challengingEntryIds",
+      "confidence",
+    ]) ||
+    value.type !== "inference"
+  ) {
+    return [`${field} must be a complete Inference entry.`];
+  }
+  const details: string[] = [];
+  for (const textField of ["id", "text", "scope", "reasoning"] as const) {
+    if (typeof value[textField] !== "string" || value[textField].trim() === "") {
+      details.push(`${field}.${textField} must be a non-empty string.`);
+    }
+    details.push(
+      ...validatePersistableText(value[textField], `${field}.${textField}`),
+    );
+  }
+  details.push(
+    ...validateEntryIdList(
+      value.supportingEntryIds,
+      `${field}.supportingEntryIds`,
+      false,
+    ),
+    ...validateEntryIdList(
+      value.challengingEntryIds,
+      `${field}.challengingEntryIds`,
+      true,
+    ),
+  );
+  if (
+    Array.isArray(value.supportingEntryIds) &&
+    Array.isArray(value.challengingEntryIds) &&
+    value.supportingEntryIds.some((identity) =>
+      (value.challengingEntryIds as unknown[]).includes(identity),
+    )
+  ) {
+    details.push(`${field} cannot use one entry as both support and challenge.`);
+  }
+  if (
+    !isRecord(value.confidence) ||
+    !hasOnlyFields(value.confidence, ["level", "limitingFactors"]) ||
+    !["unknown", "low", "medium", "high"].includes(
+      String(value.confidence.level),
+    ) ||
+    !Array.isArray(value.confidence.limitingFactors) ||
+    value.confidence.limitingFactors.length === 0
+  ) {
+    details.push(
+      `${field}.confidence must use unknown, low, medium, or high and include explicit limiting factors.`,
+    );
+  } else {
+    for (const [index, factor] of value.confidence.limitingFactors.entries()) {
+      if (typeof factor !== "string" || factor.trim() === "") {
+        details.push(
+          `${field}.confidence.limitingFactors[${index}] must be a non-empty string.`,
+        );
+      }
+      details.push(
+        ...validatePersistableText(
+          factor,
+          `${field}.confidence.limitingFactors[${index}]`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+function validateContradiction(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "entryIds",
+      "disputedProposition",
+      "disputedScope",
+      "attemptedReconciliation",
+      "resolutionStatus",
+      "resolution",
+    ]) ||
+    value.type !== "contradiction"
+  ) {
+    return [`${field} must be a complete Contradiction entry.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "disputedProposition",
+    "disputedScope",
+    "attemptedReconciliation",
+  ]);
+  details.push(...validateEntryIdList(value.entryIds, `${field}.entryIds`, false));
+  if (Array.isArray(value.entryIds) && value.entryIds.length < 2) {
+    details.push(`${field}.entryIds must preserve at least two incompatible entries.`);
+  }
+  if (
+    !["unresolved", "partially-resolved", "resolved"].includes(
+      String(value.resolutionStatus),
+    )
+  ) {
+    details.push(
+      `${field}.resolutionStatus must be unresolved, partially-resolved, or resolved.`,
+    );
+  }
+  if (value.resolutionStatus === "unresolved" && value.resolution !== null) {
+    details.push(`${field}.resolution must be null while the Contradiction is unresolved.`);
+  }
+  if (
+    value.resolutionStatus !== "unresolved" &&
+    (typeof value.resolution !== "string" || value.resolution.trim() === "")
+  ) {
+    details.push(`${field}.resolution must explain the current reconciliation.`);
+  }
+  details.push(...validatePersistableText(value.resolution, `${field}.resolution`));
+  return details;
+}
+
+function validateCorrection(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "targetEntryId",
+      "action",
+      "replacementEntryId",
+      "rationale",
+    ]) ||
+    value.type !== "correction"
+  ) {
+    return [`${field} must be a complete append-only Correction entry.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "targetEntryId",
+    "rationale",
+  ]);
+  if (!(["supersede", "retract"] as unknown[]).includes(value.action)) {
+    details.push(`${field}.action must be supersede or retract.`);
+  }
+  if (
+    value.action === "supersede" &&
+    (typeof value.replacementEntryId !== "string" ||
+      value.replacementEntryId.trim() === "" ||
+      value.replacementEntryId === value.targetEntryId)
+  ) {
+    details.push(
+      `${field}.replacementEntryId must identify a different replacement when superseding.`,
+    );
+  }
+  if (value.action === "retract" && value.replacementEntryId !== null) {
+    details.push(`${field}.replacementEntryId must be null when retracting.`);
+  }
+  details.push(
+    ...validatePersistableText(
+      value.replacementEntryId,
+      `${field}.replacementEntryId`,
+    ),
+  );
+  return details;
+}
+
+function validateReasoningEntry(value: unknown, field: string): string[] {
+  if (!isRecord(value)) {
+    return [`${field} must be an Evidence Ledger entry.`];
+  }
+  switch (value.type) {
+    case "source-lineage":
+      return validateSourceLineage(value, field);
+    case "source-assessment":
+      return validateSourceAssessment(value, field);
+    case "evidence-gap":
+      return validateEvidenceGap(value, field);
+    case "assumption":
+      return validateAssumption(value, field);
+    case "inference":
+      return validateInference(value, field);
+    case "contradiction":
+      return validateContradiction(value, field);
+    case "correction":
+      return validateCorrection(value, field);
+    default:
+      return [`${field}.type is not a supported Evidence Ledger reasoning type.`];
+  }
+}
+
+function validateRecordEvidenceReasoningFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "recordedAt",
+  );
+  if (!Array.isArray(command.payload.entries) || command.payload.entries.length === 0) {
+    details.push("payload.entries must contain at least one Evidence Ledger entry.");
+    return details;
+  }
+  const entryIds = new Set<string>();
+  for (const [index, entry] of command.payload.entries.entries()) {
+    const field = `payload.entries[${index}]`;
+    details.push(...validateReasoningEntry(entry, field));
+    if (isRecord(entry) && typeof entry.id === "string") {
+      if (entryIds.has(entry.id)) {
+        details.push("payload.entries must use unique stable identities.");
+      }
+      entryIds.add(entry.id);
+    }
+  }
+  return details;
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await lstat(targetPath);
@@ -1081,6 +1646,13 @@ type AuthoritativeHistoryRebuild = {
   settledReservationIds: Set<string>;
   sources: PublicSource[];
   observations: PublicObservation[];
+  sourceLineages: SourceLineage[];
+  sourceAssessments: SourceAssessment[];
+  evidenceGaps: EvidenceGap[];
+  assumptions: Assumption[];
+  inferences: Inference[];
+  contradictions: Contradiction[];
+  corrections: Correction[];
 };
 
 type AuthoritativeRecordPair = {
@@ -1204,6 +1776,158 @@ const authoritativeOperationDescriptors = {
       history.settledReservationIds.add(reservationId);
       history.sources.push(source as unknown as PublicSource);
       history.observations.push(observation as unknown as PublicObservation);
+    },
+  },
+  "record-evidence-reasoning": {
+    outcome: "evidence-reasoning-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        !Array.isArray(outcome.entries) ||
+        outcome.entries.length === 0 ||
+        !Array.isArray(intent.entryIds) ||
+        JSON.stringify(intent.entryIds) !==
+          JSON.stringify(
+            outcome.entries.map((entry) =>
+              isRecord(entry) ? entry.id : undefined,
+            ),
+          )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const availableEvidenceIds = new Set([
+        ...history.observations.map((observation) => observation.id),
+        ...history.inferences.map((inference) => inference.id),
+      ]);
+      const allEntryIds = new Set([
+        ...history.sources.map((source) => source.id),
+        ...history.observations.map((observation) => observation.id),
+        ...history.sourceLineages.map((lineage) => lineage.id),
+        ...history.sourceAssessments.map((assessment) => assessment.id),
+        ...history.evidenceGaps.map((gap) => gap.id),
+        ...history.assumptions.map((assumption) => assumption.id),
+        ...history.inferences.map((inference) => inference.id),
+        ...history.contradictions.map((contradiction) => contradiction.id),
+        ...history.corrections.map((correction) => correction.id),
+      ]);
+      const sourceIds = new Set(history.sources.map((source) => source.id));
+      const evidenceGapIds = new Set(history.evidenceGaps.map((gap) => gap.id));
+      const contradictableEntryIds = new Set([
+        ...history.observations.map((observation) => observation.id),
+        ...history.assumptions.map((assumption) => assumption.id),
+        ...history.inferences.map((inference) => inference.id),
+      ]);
+      const correctableEntryIds = new Set(
+        [...allEntryIds].filter(
+          (identity) =>
+            !history.corrections.some((correction) => correction.id === identity),
+        ),
+      );
+      const correctedEntryIds = new Set(
+        history.corrections.map((correction) => correction.targetEntryId),
+      );
+      for (const correctedEntryId of correctedEntryIds) {
+        availableEvidenceIds.delete(correctedEntryId);
+      }
+      for (const entry of outcome.entries) {
+        if (
+          validateReasoningEntry(entry, "entry").length > 0 ||
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          allEntryIds.has(entry.id)
+        ) {
+          invalidAuthoritativeRecord(outcomeSequence);
+        }
+        switch (entry.type) {
+          case "source-lineage": {
+            const lineage = entry as unknown as SourceLineage;
+            if (!lineage.sourceIds.every((identity) => sourceIds.has(identity))) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.sourceLineages.push(lineage);
+            break;
+          }
+          case "source-assessment": {
+            const assessment = entry as unknown as SourceAssessment;
+            const observation = history.observations.find(
+              (candidate) => candidate.id === assessment.observationId,
+            );
+            if (
+              !sourceIds.has(assessment.sourceId) ||
+              observation?.sourceId !== assessment.sourceId
+            ) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.sourceAssessments.push(assessment);
+            break;
+          }
+          case "evidence-gap": {
+            const gap = entry as unknown as EvidenceGap;
+            history.evidenceGaps.push(gap);
+            evidenceGapIds.add(gap.id);
+            break;
+          }
+          case "assumption": {
+            const assumption = entry as unknown as Assumption;
+            if (!evidenceGapIds.has(assumption.evidenceGapId)) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.assumptions.push(assumption);
+            contradictableEntryIds.add(assumption.id);
+            break;
+          }
+          case "inference": {
+            const inference = entry as unknown as Inference;
+            if (
+              ![
+                ...inference.supportingEntryIds,
+                ...inference.challengingEntryIds,
+              ].every((identity) => availableEvidenceIds.has(identity))
+            ) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.inferences.push(inference);
+            availableEvidenceIds.add(inference.id);
+            contradictableEntryIds.add(inference.id);
+            break;
+          }
+          case "contradiction": {
+            const contradiction = entry as unknown as Contradiction;
+            if (
+              !contradiction.entryIds.every((identity) =>
+                contradictableEntryIds.has(identity),
+              )
+            ) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.contradictions.push(contradiction);
+            break;
+          }
+          case "correction": {
+            const correction = entry as unknown as Correction;
+            if (
+              !correctableEntryIds.has(correction.targetEntryId) ||
+              correctedEntryIds.has(correction.targetEntryId) ||
+              (correction.action === "supersede" &&
+                !correctableEntryIds.has(correction.replacementEntryId!))
+            ) {
+              invalidAuthoritativeRecord(outcomeSequence);
+            }
+            history.corrections.push(correction);
+            correctedEntryIds.add(correction.targetEntryId);
+            availableEvidenceIds.delete(correction.targetEntryId);
+            break;
+          }
+          default:
+            invalidAuthoritativeRecord(outcomeSequence);
+        }
+        allEntryIds.add(entry.id);
+        if (entry.type !== "correction") {
+          correctableEntryIds.add(entry.id);
+        }
+      }
     },
   },
 } as const satisfies Record<
@@ -1356,6 +2080,25 @@ function publicResearchObservationRecords(
   });
 }
 
+function evidenceReasoningRecords(
+  campaignId: string,
+  command: RecordEvidenceReasoningCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-evidence-reasoning",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      entryIds: command.payload.entries.map((entry) => entry.id),
+    },
+    outcome: { entries: command.payload.entries },
+  });
+}
+
 async function readJson(targetPath: string): Promise<unknown> {
   return JSON.parse(await readFile(targetPath, "utf8"));
 }
@@ -1433,6 +2176,13 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     settledReservationIds: new Set(),
     sources: [],
     observations: [],
+    sourceLineages: [],
+    sourceAssessments: [],
+    evidenceGaps: [],
+    assumptions: [],
+    inferences: [],
+    contradictions: [],
+    corrections: [],
   };
   for (let index = 0; index < records.length; index += 2) {
     const sequence = index + 1;
@@ -1500,6 +2250,13 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     settledReservationIds,
     sources,
     observations,
+    sourceLineages,
+    sourceAssessments,
+    evidenceGaps,
+    assumptions,
+    inferences,
+    contradictions,
+    corrections,
   } = authoritativeHistory;
   const creationIntent = records[0];
   if (!isRecord(creationIntent) || manifest.createdAt !== creationIntent.recordedAt) {
@@ -1528,6 +2285,53 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.completedWork.push(
       `${observations.length} cited Public Research Observation${observations.length === 1 ? "" : "s"} recorded`,
     );
+    workView.nextPermittedActions = [
+      "reserve-public-research",
+      "record-evidence-reasoning",
+    ];
+  }
+  if (
+    sourceLineages.length > 0 ||
+    sourceAssessments.length > 0 ||
+    evidenceGaps.length > 0 ||
+    assumptions.length > 0 ||
+    inferences.length > 0 ||
+    contradictions.length > 0 ||
+    corrections.length > 0
+  ) {
+    const correctedEntryIds = new Set(
+      corrections.map((correction) => correction.targetEntryId),
+    );
+    const reasoningEntryCount =
+      sourceLineages.length +
+      sourceAssessments.length +
+      evidenceGaps.length +
+      assumptions.length +
+      inferences.length +
+      contradictions.length +
+      corrections.length;
+    workView.completedWork.push(
+      `${reasoningEntryCount} reasoning entr${reasoningEntryCount === 1 ? "y" : "ies"} recorded`,
+    );
+    workView.reasoning = {
+      evidenceLedgerPath: "evidence-ledger.json",
+      activeInferenceIds: inferences
+        .filter((inference) => !correctedEntryIds.has(inference.id))
+        .map((inference) => inference.id),
+      openEvidenceGapIds: evidenceGaps
+        .filter(
+          (gap) => gap.status === "open" && !correctedEntryIds.has(gap.id),
+        )
+        .map((gap) => gap.id),
+      unresolvedContradictionIds: contradictions
+        .filter(
+          (contradiction) =>
+            contradiction.resolutionStatus !== "resolved" &&
+            !correctedEntryIds.has(contradiction.id),
+        )
+        .map((contradiction) => contradiction.id),
+      correctionIds: corrections.map((correction) => correction.id),
+    };
   }
   if (
     [...reservations.keys()].some(
@@ -1564,6 +2368,13 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     campaignId: manifest.campaignId,
     sources,
     observations,
+    sourceLineages,
+    sourceAssessments,
+    evidenceGaps,
+    assumptions,
+    inferences,
+    contradictions,
+    corrections,
   };
   const researchBudget: ResearchBudgetView | undefined =
     intake === undefined
@@ -1861,7 +2672,8 @@ type CoordinatorCommand =
   | ResumeCampaignCommand
   | ConfirmCampaignIntakeCommand
   | ReservePublicResearchCommand
-  | RecordPublicResearchObservationCommand;
+  | RecordPublicResearchObservationCommand
+  | RecordEvidenceReasoningCommand;
 
 type CoordinatorOperationFailure = {
   code: string;
@@ -2504,6 +3316,231 @@ async function recordPublicResearchObservation(
   });
 }
 
+async function recordEvidenceReasoning(
+  command: RecordEvidenceReasoningCommand,
+  currentTime: string,
+) {
+  const buildReasoningResult = (
+    recorded: boolean,
+    campaign: LoadedCampaign,
+  ) => ({
+    recorded,
+    evidenceLedger: campaign.evidenceLedger,
+    workView: campaign.workView,
+  });
+
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record reasoning concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Evidence reasoning request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Evidence reasoning could not be recorded against valid Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Evidence Ledger before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["record-evidence-reasoning"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.entries) === JSON.stringify(command.payload.entries),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildReasoningResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      return before!.evidenceLedger === undefined
+        ? {
+            code: "SVS-EVIDENCE-NOT-AVAILABLE",
+            message:
+              "Evidence reasoning requires a confirmed Campaign Intake and an Evidence Ledger.",
+            action:
+              "Confirm Campaign Intake and record cited Observations before deriving reasoning.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Evidence reasoning requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before recording reasoning.",
+        };
+      },
+    },
+    validateAfterLease({ before }) {
+      const ledger = before!.evidenceLedger!;
+      const allEntryIds = new Set([
+        ...ledger.sources.map((source: PublicSource) => source.id),
+        ...ledger.observations.map(
+          (observation: PublicObservation) => observation.id,
+        ),
+        ...ledger.sourceLineages.map((lineage: SourceLineage) => lineage.id),
+        ...ledger.sourceAssessments.map(
+          (assessment: SourceAssessment) => assessment.id,
+        ),
+        ...ledger.evidenceGaps.map((gap: EvidenceGap) => gap.id),
+        ...ledger.assumptions.map((assumption: Assumption) => assumption.id),
+        ...ledger.inferences.map((inference: Inference) => inference.id),
+        ...ledger.contradictions.map(
+          (contradiction: Contradiction) => contradiction.id,
+        ),
+        ...ledger.corrections.map((correction: Correction) => correction.id),
+      ]);
+      const sourceIds = new Set(
+        ledger.sources.map((source: PublicSource) => source.id),
+      );
+      const observationsById = new Map(
+        ledger.observations.map((observation: PublicObservation) => [
+          observation.id,
+          observation,
+        ]),
+      );
+      const availableEvidenceIds = new Set([
+        ...ledger.observations.map(
+          (observation: PublicObservation) => observation.id,
+        ),
+        ...ledger.inferences.map((inference: Inference) => inference.id),
+      ]);
+      const evidenceGapIds = new Set(
+        ledger.evidenceGaps.map((gap: EvidenceGap) => gap.id),
+      );
+      const contradictableEntryIds = new Set([
+        ...ledger.observations.map(
+          (observation: PublicObservation) => observation.id,
+        ),
+        ...ledger.assumptions.map((assumption: Assumption) => assumption.id),
+        ...ledger.inferences.map((inference: Inference) => inference.id),
+      ]);
+      const correctableEntryIds = new Set(
+        [...allEntryIds].filter(
+          (identity) =>
+            !ledger.corrections.some(
+              (correction: Correction) => correction.id === identity,
+            ),
+        ),
+      );
+      const correctedEntryIds = new Set(
+        ledger.corrections.map(
+          (correction: Correction) => correction.targetEntryId,
+        ),
+      );
+      for (const correctedEntryId of correctedEntryIds) {
+        availableEvidenceIds.delete(correctedEntryId);
+      }
+      for (const entry of command.payload.entries) {
+        if (allEntryIds.has(entry.id)) {
+          return {
+            code: "SVS-EVIDENCE-IDENTITY-CONFLICT",
+            message:
+              "Evidence reasoning identity is already present in the Evidence Ledger.",
+            action:
+              "Use a stable unique entry identity or replay the original reasoning request.",
+          };
+        }
+        let invalidLink: string | undefined;
+        switch (entry.type) {
+          case "source-lineage":
+            invalidLink = entry.sourceIds.find(
+              (identity) => !sourceIds.has(identity),
+            );
+            break;
+          case "source-assessment":
+            if (
+              !sourceIds.has(entry.sourceId) ||
+              observationsById.get(entry.observationId)?.sourceId !== entry.sourceId
+            ) {
+              invalidLink = `${entry.sourceId}/${entry.observationId}`;
+            }
+            break;
+          case "evidence-gap":
+            evidenceGapIds.add(entry.id);
+            break;
+          case "assumption":
+            if (!evidenceGapIds.has(entry.evidenceGapId)) {
+              invalidLink = entry.evidenceGapId;
+            } else {
+              contradictableEntryIds.add(entry.id);
+            }
+            break;
+          case "inference":
+            invalidLink = [
+              ...entry.supportingEntryIds,
+              ...entry.challengingEntryIds,
+            ].find((identity) => !availableEvidenceIds.has(identity));
+            if (invalidLink === undefined) {
+              availableEvidenceIds.add(entry.id);
+              contradictableEntryIds.add(entry.id);
+            }
+            break;
+          case "contradiction":
+            invalidLink = entry.entryIds.find(
+              (identity) => !contradictableEntryIds.has(identity),
+            );
+            break;
+          case "correction":
+            if (
+              !correctableEntryIds.has(entry.targetEntryId) ||
+              correctedEntryIds.has(entry.targetEntryId)
+            ) {
+              invalidLink = entry.targetEntryId;
+            } else if (
+              entry.action === "supersede" &&
+              (entry.replacementEntryId === null ||
+                !correctableEntryIds.has(entry.replacementEntryId))
+            ) {
+              invalidLink = entry.replacementEntryId ?? "missing replacement";
+            } else {
+              correctedEntryIds.add(entry.targetEntryId);
+              availableEvidenceIds.delete(entry.targetEntryId);
+            }
+            break;
+        }
+        if (invalidLink !== undefined) {
+          return {
+            code: "SVS-EVIDENCE-LINK-INVALID",
+            message: `Evidence reasoning links unknown or incompatible entry ${invalidLink}.`,
+            action:
+              "Link each entry only to compatible Sources, Observations, prior Inferences, Assumptions, or Evidence Gaps already in the Campaign or earlier in this request.",
+          };
+        }
+        allEntryIds.add(entry.id);
+        if (entry.type !== "correction") {
+          correctableEntryIds.add(entry.id);
+        }
+      }
+      return undefined;
+    },
+    records({ before }) {
+      return evidenceReasoningRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildReasoningResult(true, after);
+    },
+  });
+}
+
 async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -2704,6 +3741,7 @@ export async function executeCommand(
       "confirmCampaignIntake",
       "reservePublicResearch",
       "recordPublicResearchObservation",
+      "recordEvidenceReasoning",
     ].includes(receivedCommand)
   ) {
     return {
@@ -2860,6 +3898,32 @@ export async function executeCommand(
     }
     return recordPublicResearchObservation(
       command as unknown as RecordPublicResearchObservationCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordEvidenceReasoning") {
+    const invalidFields = validateRecordEvidenceReasoningFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-EVIDENCE-REASONING-INVALID",
+          message: "Evidence reasoning entries are invalid.",
+          action:
+            "Separate evidence types, correct every reported link or assessment, and retry without mutating Campaign history.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordEvidenceReasoning(
+      command as unknown as RecordEvidenceReasoningCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

@@ -89,3 +89,35 @@ test("packaged Scout keeps Public Research retrieval outside the kernel and impo
   assert.match(reference, /"command": "recordPublicResearchObservation"/);
   assert.match(reference, /publisher.+originator.+publishedAt.+updatedAt.+accessedAt.+exactLocator/is);
 });
+
+test("packaged Scout derives auditable reasoning without blurring evidence types", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-reasoning-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(instructions, /Observation.+Inference.+Assumption.+Evidence Gap.+Contradiction/is);
+  assert.match(instructions, /supporting.+challenging.+scope.+reasoning/is);
+  assert.match(instructions, /Assumption.+no evidential credit.+Evidence Gap/is);
+  assert.match(instructions, /Source Lineage.+independent/is);
+  assert.match(instructions, /credibility.+freshness.+Observation.+use/is);
+  assert.match(instructions, /Evidence Confidence.+unknown.+low.+medium.+high/is);
+  assert.match(instructions, /never.+Observation.+confidence/is);
+  assert.match(instructions, /correction.+supersed.+retract.+never delet/is);
+  assert.match(instructions, /Work View.+stable.+pointer.+entire Evidence Ledger/is);
+  assert.match(reference, /"command": "recordEvidenceReasoning"/);
+  for (const entryType of [
+    "source-lineage",
+    "source-assessment",
+    "evidence-gap",
+    "assumption",
+    "inference",
+    "contradiction",
+    "correction",
+  ]) {
+    assert.match(reference, new RegExp(`"type": "${entryType}"`));
+  }
+});

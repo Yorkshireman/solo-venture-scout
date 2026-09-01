@@ -221,6 +221,116 @@ rebuilds private `research-budget.json` and `evidence-ledger.json` projections, 
 writes a checkpoint. Replaying the identical request is idempotent; a reservation,
 Source identity, or Observation identity cannot be settled or imported twice.
 
+## Record Evidence Ledger reasoning
+
+The coordinator makes semantic judgments outside the kernel, then submits typed,
+linked entries. Entries in one request are applied in order, so a later entry may link
+an earlier one from the same request.
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-reasoning-stable-request-id",
+  "command": "recordEvidenceReasoning",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T09:35:00.000Z",
+    "entries": [
+      {
+        "type": "source-lineage",
+        "id": "lineage-shared-dataset",
+        "sourceIds": ["stable-source-id", "second-source-id"],
+        "sharedOrigin": "Both publications analyse the same named survey dataset.",
+        "relationship": "shared-dataset",
+        "independence": "dependent"
+      },
+      {
+        "type": "source-assessment",
+        "id": "assessment-source-for-workaround-cost",
+        "sourceId": "stable-source-id",
+        "observationId": "stable-observation-id",
+        "use": "Assess whether the named workaround consumes material staff time.",
+        "credibility": {
+          "level": "medium",
+          "rationale": "The Source directly surveyed the affected operators.",
+          "limitations": ["The sampling method is incompletely described."]
+        },
+        "freshness": {
+          "level": "high",
+          "timeSensitivity": "Workflow adoption may change within a year.",
+          "rationale": "The survey was published three months before assessment.",
+          "limitations": ["No update date is available."]
+        }
+      },
+      {
+        "type": "evidence-gap",
+        "id": "gap-independent-cost-measure",
+        "question": "Does independent evidence quantify the workaround cost?",
+        "affectedDecisionIds": ["decision-form-opportunity"],
+        "resolutionCriteria": "An independent methodologically described Source quantifies time or expenditure.",
+        "resolutionMethod": "Examine an independent operational benchmark.",
+        "status": "open",
+        "resolution": null
+      },
+      {
+        "type": "assumption",
+        "id": "assumption-time-is-material",
+        "text": "The reported staff time has a material financial consequence.",
+        "scope": "Operators represented by the cited survey.",
+        "evidenceGapId": "gap-independent-cost-measure"
+      },
+      {
+        "type": "inference",
+        "id": "inference-narrowed-workaround-cost",
+        "text": "The workaround may create a Costly Problem for the represented operators.",
+        "scope": "Operators represented by the cited survey.",
+        "reasoning": "One Observation reports staff effort, while a second limits broader applicability.",
+        "supportingEntryIds": ["stable-observation-id"],
+        "challengingEntryIds": ["second-observation-id"],
+        "confidence": {
+          "level": "low",
+          "limitingFactors": ["The Sources share one underlying dataset."]
+        }
+      },
+      {
+        "type": "contradiction",
+        "id": "contradiction-workaround-time",
+        "entryIds": ["stable-observation-id", "second-observation-id"],
+        "disputedProposition": "The workaround consumes material staff time.",
+        "disputedScope": "Manual and automated workflows may differ.",
+        "attemptedReconciliation": "Narrow by workflow, but comparable subgroups are unavailable.",
+        "resolutionStatus": "unresolved",
+        "resolution": null
+      },
+      {
+        "type": "correction",
+        "id": "correction-narrow-prior-inference",
+        "targetEntryId": "prior-inference-id",
+        "action": "supersede",
+        "replacementEntryId": "inference-narrowed-workaround-cost",
+        "rationale": "The prior scope extended beyond the represented population."
+      }
+    ]
+  }
+}
+```
+
+An Inference must link at least one supporting Observation or prior Inference and must
+include the explicit (possibly empty) set of material challenges. Evidence Confidence
+uses only `unknown`, `low`, `medium`, or `high`, always with limiting factors, and is
+not accepted on an Observation or Assumption. An Assumption has no support or
+confidence fields and must link an existing or earlier Evidence Gap. Source
+assessments bind one Source to one of its Observations and state the intended use;
+shared-origin Source Lineage always records those Sources as dependent.
+
+Contradictions retain both or all incompatible entries even after reconciliation.
+Corrections append `supersede` with a different replacement identity or `retract` with
+`null`; the target remains in authoritative history. Success checkpoints the append,
+rebuilds `evidence-ledger.json`, and adds only current Inference, open Evidence Gap,
+unresolved Contradiction, and Correction identities plus the stable Ledger path to the
+Work View. Inspection therefore need not load the entire Evidence Ledger.
+
 ## Resume
 
 ```json

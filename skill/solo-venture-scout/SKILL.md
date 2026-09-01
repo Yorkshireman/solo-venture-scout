@@ -129,6 +129,41 @@ other External Validation Action.
    Research Budget returned by `inspectCampaign`. Continue only when the checkpoint,
    settled usage, Source, and Observation remain visible.
 
+## Derive auditable evidence reasoning
+
+Keep each Evidence Ledger type distinct. An Observation only reports what its Source
+says; an Inference is a derived conclusion; an Assumption is unsupported; an Evidence
+Gap is an unanswered material question; and a Contradiction preserves incompatible
+entries. Never rewrite one type as another to make a case appear stronger.
+
+Use `recordEvidenceReasoning` from
+[references/campaigns.md](references/campaigns.md) after recording the cited
+Observations needed by the reasoning:
+
+1. Give each Inference explicit supporting and challenging Observation or prior
+   Inference identities, followed by its scope and reasoning. Include every material
+   challenge instead of selecting only confirming evidence.
+2. Record every material Assumption with no evidential credit and link it to an
+   Evidence Gap that names affected decisions, resolution criteria, and a concrete
+   resolution method. An Assumption never supports an Inference.
+3. Record Source Lineage whenever Sources share authorship, a dataset, syndication,
+   republication, or another origin. Mark those Sources dependent and never count them
+   as independent evidence.
+4. Assess Source credibility and freshness for the particular Observation and use.
+   State rationale and limitations; never turn an assessment into a universal
+   publisher score.
+5. Attach Evidence Confidence only to an Inference or material Campaign Decision.
+   Use exactly `unknown`, `low`, `medium`, or `high` and state explicit limiting
+   factors. Never attach an Observation confidence rating.
+6. Preserve every Contradiction's incompatible entries, disputed proposition and
+   scope, attempted reconciliation, and current resolution status.
+7. Append a correction to supersede or retract an entry; never delete or rewrite the
+   historical entry or the basis on which an earlier decision was made.
+
+After a successful write, use the Work View's stable reasoning pointers for current
+work. Do not load the entire Evidence Ledger unless the named decision, gap,
+contradiction, correction, or audit requires it.
+
 ## Inspect a Scouting Campaign
 
 Inspection is read-only. Use `inspectCampaign` from
