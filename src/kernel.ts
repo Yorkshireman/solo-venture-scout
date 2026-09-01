@@ -242,13 +242,19 @@ type CoordinatorLease = {
   expiresAt: string;
 };
 
+type AuthoritativeOperation =
+  | "create-campaign"
+  | "resume-campaign"
+  | "confirm-campaign-intake"
+  | "reserve-public-research"
+  | "record-public-research-observation";
+
 type CampaignOperation = {
   campaignId: string;
   requestId: string;
   recordedAt: string;
   firstSequence: number;
   operation: "create-campaign" | "resume-campaign";
-  outcome: "campaign-created" | "campaign-resumed";
   coordinatorId: string;
   leaseExpiresAt: string;
 };
@@ -1067,6 +1073,158 @@ async function releaseCoordinatorOperationLock(
   await rm(lock.path, { force: true });
 }
 
+type AuthoritativeHistoryRebuild = {
+  campaignId: string;
+  intake?: ConfirmedCampaignIntake;
+  reservations: Map<string, PublicResearchReservation>;
+  reservationRecordedAt: Map<string, string>;
+  settledReservationIds: Set<string>;
+  sources: PublicSource[];
+  observations: PublicObservation[];
+};
+
+type AuthoritativeRecordPair = {
+  intent: Record<string, unknown>;
+  outcome: Record<string, unknown>;
+  outcomeSequence: number;
+  history: AuthoritativeHistoryRebuild;
+};
+
+type AuthoritativeOperationDescriptor = {
+  outcome: string;
+  position: "initial" | "subsequent";
+  establishesLease: boolean;
+  validateAndApply: (pair: AuthoritativeRecordPair) => void;
+};
+
+function invalidAuthoritativeRecord(sequence: number): never {
+  throw new Error(`authoritative record ${sequence} is invalid`);
+}
+
+const authoritativeOperationDescriptors = {
+  "create-campaign": {
+    outcome: "campaign-created",
+    position: "initial",
+    establishesLease: true,
+    validateAndApply() {},
+  },
+  "resume-campaign": {
+    outcome: "campaign-resumed",
+    position: "subsequent",
+    establishesLease: true,
+    validateAndApply() {},
+  },
+  "confirm-campaign-intake": {
+    outcome: "campaign-intake-confirmed",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ outcome, outcomeSequence, history }) {
+      if (
+        history.intake !== undefined ||
+        !isRecord(outcome.intake) ||
+        outcome.intake.campaignId !== history.campaignId ||
+        outcome.intake.confirmedAt !== outcome.recordedAt
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const { campaignId: _campaignId, confirmedAt: _confirmedAt, ...intakeValue } =
+        outcome.intake;
+      if (validateCampaignIntake(intakeValue, outcome.recordedAt).length > 0) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.intake = outcome.intake as unknown as ConfirmedCampaignIntake;
+    },
+  },
+  "reserve-public-research": {
+    outcome: "public-research-reserved",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        typeof outcome.recordedAt !== "string" ||
+        outcome.recordedAt < history.intake.confirmedAt ||
+        !isRecord(outcome.reservation) ||
+        validatePublicResearchReservation(outcome.reservation, "reservation").length > 0 ||
+        intent.reservationId !== outcome.reservation.id ||
+        history.reservations.has(String(outcome.reservation.id))
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const reservation = outcome.reservation as unknown as PublicResearchReservation;
+      const totalReserved =
+        [...history.reservations.values()].reduce(
+          (total, existing) => total + existing.sourceUnits,
+          0,
+        ) + reservation.sourceUnits;
+      const ordinarySourceCap =
+        history.intake.researchBudget.sourceCap -
+        history.intake.researchBudget.adversarialSourceReserve;
+      if (totalReserved > ordinarySourceCap) {
+        throw new Error(
+          `authoritative record ${outcomeSequence} exceeds the Research Budget`,
+        );
+      }
+      history.reservations.set(reservation.id, reservation);
+      history.reservationRecordedAt.set(
+        reservation.id,
+        outcome.recordedAt as string,
+      );
+    },
+  },
+  "record-public-research-observation": {
+    outcome: "public-research-observation-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const reservationId = String(outcome.reservationId);
+      if (!isRecord(outcome.source) || !isRecord(outcome.observation)) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const source = outcome.source;
+      const observation = outcome.observation;
+      if (
+        history.intake === undefined ||
+        intent.reservationId !== outcome.reservationId ||
+        !history.reservations.has(reservationId) ||
+        history.settledReservationIds.has(reservationId) ||
+        validatePublicSource(source, outcome.recordedAt).length > 0 ||
+        validatePublicObservation(observation, source).length > 0 ||
+        typeof source.accessedAt !== "string" ||
+        typeof outcome.recordedAt !== "string" ||
+        source.accessedAt < history.reservationRecordedAt.get(reservationId)! ||
+        outcome.recordedAt < history.reservationRecordedAt.get(reservationId)! ||
+        history.sources.some((existingSource) => existingSource.id === source.id) ||
+        history.observations.some(
+          (existingObservation) => existingObservation.id === observation.id,
+        )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.settledReservationIds.add(reservationId);
+      history.sources.push(source as unknown as PublicSource);
+      history.observations.push(observation as unknown as PublicObservation);
+    },
+  },
+} as const satisfies Record<
+  AuthoritativeOperation,
+  AuthoritativeOperationDescriptor
+>;
+
+function authoritativeOperationDescriptor(
+  operation: unknown,
+): AuthoritativeOperationDescriptor | undefined {
+  if (
+    typeof operation !== "string" ||
+    !Object.hasOwn(authoritativeOperationDescriptors, operation)
+  ) {
+    return undefined;
+  }
+  return authoritativeOperationDescriptors[
+    operation as AuthoritativeOperation
+  ];
+}
+
 function initialWorkView(campaignId: string): WorkView {
   return {
     campaignId,
@@ -1079,30 +1237,57 @@ function initialWorkView(campaignId: string): WorkView {
   };
 }
 
-function campaignOperationRecords(operation: CampaignOperation) {
+function campaignRecordPair({
+  campaignId,
+  requestId,
+  recordedAt,
+  firstSequence,
+  operation,
+  intent,
+  outcome,
+}: {
+  campaignId: string;
+  requestId: string;
+  recordedAt: string;
+  firstSequence: number;
+  operation: AuthoritativeOperation;
+  intent: Record<string, unknown>;
+  outcome: Record<string, unknown>;
+}) {
   const recordBase = {
     recordVersion: contracts.records,
-    campaignId: operation.campaignId,
-    requestId: operation.requestId,
-    recordedAt: operation.recordedAt,
+    campaignId,
+    requestId,
+    recordedAt,
   };
   return [
     {
       ...recordBase,
-      recordId: `${operation.campaignId}:record:${String(operation.firstSequence).padStart(12, "0")}`,
-      sequence: operation.firstSequence,
+      recordId: `${campaignId}:record:${String(firstSequence).padStart(12, "0")}`,
+      sequence: firstSequence,
       type: "operation-intent",
-      operation: operation.operation,
-      coordinatorId: operation.coordinatorId,
-      leaseExpiresAt: operation.leaseExpiresAt,
+      operation,
+      ...intent,
     },
     {
       ...recordBase,
-      recordId: `${operation.campaignId}:record:${String(operation.firstSequence + 1).padStart(12, "0")}`,
-      sequence: operation.firstSequence + 1,
-      type: operation.outcome,
+      recordId: `${campaignId}:record:${String(firstSequence + 1).padStart(12, "0")}`,
+      sequence: firstSequence + 1,
+      type: authoritativeOperationDescriptors[operation].outcome,
+      ...outcome,
     },
   ];
+}
+
+function campaignOperationRecords(operation: CampaignOperation) {
+  return campaignRecordPair({
+    ...operation,
+    intent: {
+      coordinatorId: operation.coordinatorId,
+      leaseExpiresAt: operation.leaseExpiresAt,
+    },
+    outcome: {},
+  });
 }
 
 function campaignIntakeRecords(
@@ -1110,35 +1295,23 @@ function campaignIntakeRecords(
   command: ConfirmCampaignIntakeCommand,
   firstSequence: number,
 ) {
-  const recordBase = {
-    recordVersion: contracts.records,
-    campaignId,
-    requestId: command.requestId,
-    recordedAt: command.payload.confirmedAt,
-  };
   const intake: ConfirmedCampaignIntake = {
     campaignId,
     confirmedAt: command.payload.confirmedAt,
     ...command.payload.intake,
   };
-  return [
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence).padStart(12, "0")}`,
-      sequence: firstSequence,
-      type: "operation-intent",
-      operation: "confirm-campaign-intake",
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.confirmedAt,
+    firstSequence,
+    operation: "confirm-campaign-intake",
+    intent: {
       coordinatorId: command.payload.coordinatorId,
       intakeVersion: command.payload.intake.version,
     },
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence + 1).padStart(12, "0")}`,
-      sequence: firstSequence + 1,
-      type: "campaign-intake-confirmed",
-      intake,
-    },
-  ];
+    outcome: { intake },
+  });
 }
 
 function publicResearchReservationRecords(
@@ -1146,30 +1319,18 @@ function publicResearchReservationRecords(
   command: ReservePublicResearchCommand,
   firstSequence: number,
 ) {
-  const recordBase = {
-    recordVersion: contracts.records,
+  return campaignRecordPair({
     campaignId,
     requestId: command.requestId,
     recordedAt: command.payload.reservedAt,
-  };
-  return [
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence).padStart(12, "0")}`,
-      sequence: firstSequence,
-      type: "operation-intent",
-      operation: "reserve-public-research",
+    firstSequence,
+    operation: "reserve-public-research",
+    intent: {
       coordinatorId: command.payload.coordinatorId,
       reservationId: command.payload.reservation.id,
     },
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence + 1).padStart(12, "0")}`,
-      sequence: firstSequence + 1,
-      type: "public-research-reserved",
-      reservation: command.payload.reservation,
-    },
-  ];
+    outcome: { reservation: command.payload.reservation },
+  });
 }
 
 function publicResearchObservationRecords(
@@ -1177,32 +1338,22 @@ function publicResearchObservationRecords(
   command: RecordPublicResearchObservationCommand,
   firstSequence: number,
 ) {
-  const recordBase = {
-    recordVersion: contracts.records,
+  return campaignRecordPair({
     campaignId,
     requestId: command.requestId,
     recordedAt: command.payload.recordedAt,
-  };
-  return [
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence).padStart(12, "0")}`,
-      sequence: firstSequence,
-      type: "operation-intent",
-      operation: "record-public-research-observation",
+    firstSequence,
+    operation: "record-public-research-observation",
+    intent: {
       coordinatorId: command.payload.coordinatorId,
       reservationId: command.payload.reservationId,
     },
-    {
-      ...recordBase,
-      recordId: `${campaignId}:record:${String(firstSequence + 1).padStart(12, "0")}`,
-      sequence: firstSequence + 1,
-      type: "public-research-observation-recorded",
+    outcome: {
       reservationId: command.payload.reservationId,
       source: command.payload.source,
       observation: command.payload.observation,
     },
-  ];
+  });
 }
 
 async function readJson(targetPath: string): Promise<unknown> {
@@ -1275,12 +1426,14 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     throw new Error("authoritative history is incomplete");
   }
   const operationRequests = new Set<string>();
-  let intake: ConfirmedCampaignIntake | undefined;
-  const reservations = new Map<string, PublicResearchReservation>();
-  const reservationRecordedAt = new Map<string, string>();
-  const settledReservationIds = new Set<string>();
-  const sources: PublicSource[] = [];
-  const observations: PublicObservation[] = [];
+  const authoritativeHistory: AuthoritativeHistoryRebuild = {
+    campaignId: manifest.campaignId,
+    reservations: new Map(),
+    reservationRecordedAt: new Map(),
+    settledReservationIds: new Set(),
+    sources: [],
+    observations: [],
+  };
   for (let index = 0; index < records.length; index += 2) {
     const sequence = index + 1;
     const record = records[index];
@@ -1297,18 +1450,13 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     ) {
       throw new Error(`authoritative record ${sequence} is invalid`);
     }
-    const allowedOperations =
-      sequence === 1
-        ? ["create-campaign"]
-        : [
-            "resume-campaign",
-            "confirm-campaign-intake",
-            "reserve-public-research",
-            "record-public-research-observation",
-          ];
+    const operationDescriptor = isRecord(record)
+      ? authoritativeOperationDescriptor(record.operation)
+      : undefined;
     if (
       record.type !== "operation-intent" ||
-      !allowedOperations.includes(String(record.operation)) ||
+      operationDescriptor === undefined ||
+      operationDescriptor.position !== (sequence === 1 ? "initial" : "subsequent") ||
       typeof record.coordinatorId !== "string" ||
       record.coordinatorId.trim() === "" ||
       operationRequests.has(record.requestId)
@@ -1317,8 +1465,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     }
     operationRequests.add(record.requestId);
     if (
-      (record.operation === "create-campaign" ||
-        record.operation === "resume-campaign") &&
+      operationDescriptor.establishesLease &&
       (!isIsoInstant(record.leaseExpiresAt) ||
         record.leaseExpiresAt <= record.recordedAt)
     ) {
@@ -1328,15 +1475,6 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     const outcomeSequence = sequence + 1;
     const outcome = records[index + 1];
     const expectedOutcomeId = `${manifest.campaignId}:record:${String(outcomeSequence).padStart(12, "0")}`;
-    const expectedTypes: Record<string, string> = {
-      "create-campaign": "campaign-created",
-      "resume-campaign": "campaign-resumed",
-      "confirm-campaign-intake": "campaign-intake-confirmed",
-      "reserve-public-research": "public-research-reserved",
-      "record-public-research-observation":
-        "public-research-observation-recorded",
-    };
-    const expectedType = expectedTypes[String(record.operation)];
     if (
       !isRecord(outcome) ||
       outcome.sequence !== outcomeSequence ||
@@ -1345,79 +1483,24 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       outcome.recordId !== expectedOutcomeId ||
       outcome.requestId !== record.requestId ||
       outcome.recordedAt !== record.recordedAt ||
-      outcome.type !== expectedType
+      outcome.type !== operationDescriptor.outcome
     ) {
       throw new Error(`authoritative record ${outcomeSequence} is invalid`);
     }
-    if (record.operation === "confirm-campaign-intake") {
-      if (
-        intake !== undefined ||
-        !isRecord(outcome.intake) ||
-        outcome.intake.campaignId !== manifest.campaignId ||
-        outcome.intake.confirmedAt !== outcome.recordedAt
-      ) {
-        throw new Error(`authoritative record ${outcomeSequence} is invalid`);
-      }
-      const { campaignId: _campaignId, confirmedAt: _confirmedAt, ...intakeValue } =
-        outcome.intake;
-      if (validateCampaignIntake(intakeValue, outcome.recordedAt).length > 0) {
-        throw new Error(`authoritative record ${outcomeSequence} is invalid`);
-      }
-      intake = outcome.intake as unknown as ConfirmedCampaignIntake;
-    } else if (record.operation === "reserve-public-research") {
-      if (
-        intake === undefined ||
-        outcome.recordedAt < intake.confirmedAt ||
-        !isRecord(outcome.reservation) ||
-        validatePublicResearchReservation(outcome.reservation, "reservation").length > 0 ||
-        record.reservationId !== outcome.reservation.id ||
-        reservations.has(String(outcome.reservation.id))
-      ) {
-        throw new Error(`authoritative record ${outcomeSequence} is invalid`);
-      }
-      const reservation = outcome.reservation as unknown as PublicResearchReservation;
-      const totalReserved =
-        [...reservations.values()].reduce(
-          (total, existing) => total + existing.sourceUnits,
-          0,
-        ) + reservation.sourceUnits;
-      const ordinarySourceCap =
-        intake.researchBudget.sourceCap -
-        intake.researchBudget.adversarialSourceReserve;
-      if (totalReserved > ordinarySourceCap) {
-        throw new Error(`authoritative record ${outcomeSequence} exceeds the Research Budget`);
-      }
-      reservations.set(reservation.id, reservation);
-      reservationRecordedAt.set(reservation.id, outcome.recordedAt as string);
-    } else if (record.operation === "record-public-research-observation") {
-      const reservationId = String(outcome.reservationId);
-      if (!isRecord(outcome.source) || !isRecord(outcome.observation)) {
-        throw new Error(`authoritative record ${outcomeSequence} is invalid`);
-      }
-      const source = outcome.source;
-      const observation = outcome.observation;
-      if (
-        intake === undefined ||
-        record.reservationId !== outcome.reservationId ||
-        !reservations.has(reservationId) ||
-        settledReservationIds.has(reservationId) ||
-        validatePublicSource(source, outcome.recordedAt).length > 0 ||
-        validatePublicObservation(observation, source).length > 0 ||
-        typeof source.accessedAt !== "string" ||
-        source.accessedAt < reservationRecordedAt.get(reservationId)! ||
-        outcome.recordedAt < reservationRecordedAt.get(reservationId)! ||
-        sources.some((existingSource) => existingSource.id === source.id) ||
-        observations.some(
-          (existingObservation) => existingObservation.id === observation.id,
-        )
-      ) {
-        throw new Error(`authoritative record ${outcomeSequence} is invalid`);
-      }
-      settledReservationIds.add(reservationId);
-      sources.push(source as unknown as PublicSource);
-      observations.push(observation as unknown as PublicObservation);
-    }
+    operationDescriptor.validateAndApply({
+      intent: record,
+      outcome,
+      outcomeSequence,
+      history: authoritativeHistory,
+    });
   }
+  const {
+    intake,
+    reservations,
+    settledReservationIds,
+    sources,
+    observations,
+  } = authoritativeHistory;
   const creationIntent = records[0];
   if (!isRecord(creationIntent) || manifest.createdAt !== creationIntent.recordedAt) {
     throw new Error("manifest creation time does not match authoritative history");
@@ -1457,8 +1540,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     (record) =>
       isRecord(record) &&
       record.type === "operation-intent" &&
-      (record.operation === "create-campaign" ||
-        record.operation === "resume-campaign"),
+      authoritativeOperationDescriptor(record.operation)?.establishesLease === true,
   );
   if (
     !isRecord(latestIntent) ||
@@ -1775,10 +1857,105 @@ async function inspectCampaign(command: InspectCampaignCommand) {
   }
 }
 
-async function resumeCampaign(command: ResumeCampaignCommand, currentTime: string) {
+type CoordinatorCommand =
+  | ResumeCampaignCommand
+  | ConfirmCampaignIntakeCommand
+  | ReservePublicResearchCommand
+  | RecordPublicResearchObservationCommand;
+
+type CoordinatorOperationFailure = {
+  code: string;
+  message: string;
+  action: string;
+  details?: string[];
+};
+
+type RebuiltCampaign = Awaited<ReturnType<typeof rebuildCampaignFromAuthority>>;
+type LoadedCampaign = Awaited<ReturnType<typeof loadCampaign>>;
+
+type CoordinatorOperationContext<Command extends CoordinatorCommand> = {
+  command: Command;
+  currentTime: string;
+  campaignPath: string;
+  rebuiltCampaign: RebuiltCampaign;
+  before?: LoadedCampaign;
+};
+
+type CoordinatorOperationDescriptor<
+  Command extends CoordinatorCommand,
+  Result extends Record<string, unknown>,
+> = {
+  locateCampaign: (command: Command) => Promise<string>;
+  lockedAction: string;
+  requestConflict: CoordinatorOperationFailure;
+  invalidCampaign: Omit<CoordinatorOperationFailure, "details">;
+  requireCampaignManifest?: boolean;
+  loadBeforeRequestConflict?: boolean;
+  loadBeforeValidation?: boolean;
+  isReplay: (context: CoordinatorOperationContext<Command>) => boolean;
+  replayResult: (command: Command, replayed: LoadedCampaign) => Result;
+  validateBeforeLease?: (
+    context: CoordinatorOperationContext<Command>,
+  ) => CoordinatorOperationFailure | undefined;
+  lease: {
+    mode: "active" | "reclaim";
+    failure: (
+      context: CoordinatorOperationContext<Command>,
+      lease: CoordinatorLease,
+    ) => CoordinatorOperationFailure;
+  };
+  validateAfterLease?: (
+    context: CoordinatorOperationContext<Command>,
+  ) => CoordinatorOperationFailure | undefined;
+  records: (
+    context: CoordinatorOperationContext<Command>,
+  ) => Record<string, unknown>[];
+  successResult: (command: Command, after: LoadedCampaign) => Result;
+};
+
+function coordinatorOperationSuccess<
+  Command extends CoordinatorCommand,
+  Result extends Record<string, unknown>,
+>(command: Command, result: Result) {
+  return {
+    envelopeVersion: contracts.commandEnvelope,
+    requestId: command.requestId,
+    command: command.command,
+    ok: true as const,
+    result,
+  };
+}
+
+function coordinatorOperationFailure(
+  command: CoordinatorCommand,
+  error: CoordinatorOperationFailure,
+) {
+  return {
+    envelopeVersion: contracts.commandEnvelope,
+    requestId: command.requestId,
+    command: command.command,
+    ok: false as const,
+    error,
+  };
+}
+
+async function runCoordinatorOperation<
+  Command extends CoordinatorCommand,
+  Result extends Record<string, unknown>,
+>(
+  command: Command,
+  currentTime: string,
+  descriptor: CoordinatorOperationDescriptor<Command, Result>,
+) {
   let coordinatorLock: CoordinatorOperationLock | undefined;
   try {
-    const { campaignPath } = await locateCampaign(command.payload);
+    const campaignPath = await descriptor.locateCampaign(command);
+    if (
+      descriptor.requireCampaignManifest !== false &&
+      !(await hasCampaignManifest(campaignPath))
+    ) {
+      throw new Error("Campaign manifest is missing or invalid");
+    }
     coordinatorLock = await acquireCoordinatorOperationLock(
       campaignPath,
       command.requestId,
@@ -1786,141 +1963,78 @@ async function resumeCampaign(command: ResumeCampaignCommand, currentTime: strin
       currentTime,
     );
     if (coordinatorLock === undefined) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LOCKED",
-          message: "Scouting Campaign is being changed by another coordinator.",
-          action: "Do not resume concurrently; retry after the active operation finishes.",
-        },
-      };
+      return coordinatorOperationFailure(command, {
+        code: "SVS-CAMPAIGN-LOCKED",
+        message: "Scouting Campaign is being changed by another coordinator.",
+        action: descriptor.lockedAction,
+      });
     }
+
     const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
-    const existingRecords = rebuiltCampaign.records;
-    const matchingIntent = existingRecords.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "operation-intent" &&
-        record.operation === "resume-campaign" &&
-        record.requestId === command.requestId &&
-        record.recordedAt === command.payload.resumedAt &&
-        record.coordinatorId === command.payload.coordinatorId &&
-        record.leaseExpiresAt === command.payload.leaseExpiresAt,
-    );
-    const matchingOutcome = existingRecords.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "campaign-resumed" &&
-        record.requestId === command.requestId,
-    );
-    if (matchingIntent && matchingOutcome) {
+    let context: CoordinatorOperationContext<Command> = {
+      command,
+      currentTime,
+      campaignPath,
+      rebuiltCampaign,
+    };
+    if (descriptor.isReplay(context)) {
       await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
       const replayed = await loadCampaign(campaignPath);
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: true as const,
-        result: {
-          resumed: false,
-          campaign: replayed.campaign,
-          summary: {
-            completedWork: replayed.workView.completedWork,
-            currentPhase: replayed.workView.phase,
-            currentPause: replayed.workView.pause,
-            nextPermittedActions: replayed.workView.nextPermittedActions,
-          },
-          workView: replayed.workView,
-          lease: replayed.lease,
-          validation: replayed.validation,
-        },
-      };
+      return coordinatorOperationSuccess(
+        command,
+        descriptor.replayResult(command, replayed),
+      );
     }
-    const before = await loadCampaign(campaignPath);
+
+    if (descriptor.loadBeforeRequestConflict) {
+      context = { ...context, before: await loadCampaign(campaignPath) };
+    }
     if (
-      existingRecords.some(
+      rebuiltCampaign.records.some(
         (record) => isRecord(record) && record.requestId === command.requestId,
       )
     ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
-          message: "Resume request identity was already used with different input.",
-          action:
-            "Reuse the original request payload or provide a new stable request identity.",
-        },
-      };
+      return coordinatorOperationFailure(command, descriptor.requestConflict);
     }
-    if (
-      before.lease.coordinatorId !== command.payload.coordinatorId &&
-      before.lease.expiresAt > currentTime
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LEASE-HELD",
-          message: `Scouting Campaign has an active lease held by ${before.lease.coordinatorId}.`,
-          action:
-            "Do not resume concurrently; use the active coordinator or wait until the recorded lease expires.",
-        },
-      };
+    if (descriptor.loadBeforeValidation && context.before === undefined) {
+      context = { ...context, before: await loadCampaign(campaignPath) };
     }
 
-    const firstSequence = before.validation.recordCount + 1;
-    const records = campaignOperationRecords({
-      campaignId: before.campaign.id,
-      requestId: command.requestId,
-      recordedAt: command.payload.resumedAt,
-      firstSequence,
-      operation: "resume-campaign",
-      outcome: "campaign-resumed",
-      coordinatorId: command.payload.coordinatorId,
-      leaseExpiresAt: command.payload.leaseExpiresAt,
-    });
+    const beforeLeaseFailure = descriptor.validateBeforeLease?.(context);
+    if (beforeLeaseFailure !== undefined) {
+      return coordinatorOperationFailure(command, beforeLeaseFailure);
+    }
+
+    const lease = context.before?.lease ?? rebuiltCampaign.lease;
+    const leaseUnavailable =
+      descriptor.lease.mode === "active"
+        ? lease.coordinatorId !== command.payload.coordinatorId ||
+          lease.expiresAt <= currentTime
+        : lease.coordinatorId !== command.payload.coordinatorId &&
+          lease.expiresAt > currentTime;
+    if (leaseUnavailable) {
+      return coordinatorOperationFailure(
+        command,
+        descriptor.lease.failure(context, lease),
+      );
+    }
+
+    const afterLeaseFailure = descriptor.validateAfterLease?.(context);
+    if (afterLeaseFailure !== undefined) {
+      return coordinatorOperationFailure(command, afterLeaseFailure);
+    }
+
+    const records = descriptor.records(context);
     const after = await appendCampaignRecordsAndPersist(campaignPath, records);
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: true as const,
-      result: {
-        resumed: true,
-        campaign: after.campaign,
-        summary: {
-          completedWork: after.workView.completedWork,
-          currentPhase: after.workView.phase,
-          currentPause: after.workView.pause,
-          nextPermittedActions: after.workView.nextPermittedActions,
-        },
-        workView: after.workView,
-        lease: after.lease,
-        validation: after.validation,
-      },
-    };
+    return coordinatorOperationSuccess(
+      command,
+      descriptor.successResult(command, after),
+    );
   } catch (error) {
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: false as const,
-      error: {
-        code: "SVS-CAMPAIGN-INVALID",
-        message: "Scouting Campaign could not be located and validated for resume.",
-        action:
-          "Preserve the Campaign contents for recovery and do not continue until validation succeeds.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
-    };
+    return coordinatorOperationFailure(command, {
+      ...descriptor.invalidCampaign,
+      details: [error instanceof Error ? error.message : "unknown validation error"],
+    });
   } finally {
     if (coordinatorLock !== undefined) {
       await releaseCoordinatorOperationLock(coordinatorLock);
@@ -1928,481 +2042,413 @@ async function resumeCampaign(command: ResumeCampaignCommand, currentTime: strin
   }
 }
 
+async function resumeCampaign(command: ResumeCampaignCommand, currentTime: string) {
+  const buildResumeResult = (resumed: boolean, campaign: LoadedCampaign) => ({
+    resumed,
+    campaign: campaign.campaign,
+    summary: {
+      completedWork: campaign.workView.completedWork,
+      currentPhase: campaign.workView.phase,
+      currentPause: campaign.workView.pause,
+      nextPermittedActions: campaign.workView.nextPermittedActions,
+    },
+    workView: campaign.workView,
+    lease: campaign.lease,
+    validation: campaign.validation,
+  });
+
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return (await locateCampaign(command.payload)).campaignPath;
+    },
+    lockedAction: "Do not resume concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Resume request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Scouting Campaign could not be located and validated for resume.",
+      action:
+        "Preserve the Campaign contents for recovery and do not continue until validation succeeds.",
+    },
+    requireCampaignManifest: false,
+    loadBeforeRequestConflict: true,
+    isReplay({ rebuiltCampaign }) {
+      const matchingIntent = rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type === "operation-intent" &&
+          record.operation === "resume-campaign" &&
+          record.requestId === command.requestId &&
+          record.recordedAt === command.payload.resumedAt &&
+          record.coordinatorId === command.payload.coordinatorId &&
+          record.leaseExpiresAt === command.payload.leaseExpiresAt,
+      );
+      const matchingOutcome = rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["resume-campaign"].outcome &&
+          record.requestId === command.requestId,
+      );
+      return matchingIntent && matchingOutcome;
+    },
+    replayResult(_command, replayed) {
+      return buildResumeResult(false, replayed);
+    },
+    lease: {
+      mode: "reclaim",
+      failure(_context, lease) {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-HELD",
+          message: `Scouting Campaign has an active lease held by ${lease.coordinatorId}.`,
+          action:
+            "Do not resume concurrently; use the active coordinator or wait until the recorded lease expires.",
+        };
+      },
+    },
+    records({ before }) {
+      const campaign = before!;
+      return campaignOperationRecords({
+        campaignId: campaign.campaign.id,
+        requestId: command.requestId,
+        recordedAt: command.payload.resumedAt,
+        firstSequence: campaign.validation.recordCount + 1,
+        operation: "resume-campaign",
+        coordinatorId: command.payload.coordinatorId,
+        leaseExpiresAt: command.payload.leaseExpiresAt,
+      });
+    },
+    successResult(_command, after) {
+      return buildResumeResult(true, after);
+    },
+  });
+}
 async function confirmCampaignIntake(
   command: ConfirmCampaignIntakeCommand,
   currentTime: string,
 ) {
-  let coordinatorLock: CoordinatorOperationLock | undefined;
-  try {
-    const campaignPath = path.resolve(command.payload.campaignPath);
-    if (!(await hasCampaignManifest(campaignPath))) {
-      throw new Error("Campaign manifest is missing or invalid");
-    }
-    coordinatorLock = await acquireCoordinatorOperationLock(
-      campaignPath,
-      command.requestId,
-      command.payload.coordinatorId,
-      currentTime,
-    );
-    if (coordinatorLock === undefined) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LOCKED",
-          message: "Scouting Campaign is being changed by another coordinator.",
-          action:
-            "Do not confirm Campaign Intake concurrently; retry after the active operation finishes.",
-        },
-      };
-    }
+  const buildIntakeConfirmationResult = (
+    confirmed: boolean,
+    campaign: LoadedCampaign,
+  ) => ({
+    confirmed,
+    campaign: campaign.campaign,
+    intake: campaign.intake,
+    workView: campaign.workView,
+    lease: campaign.lease,
+  });
 
-    const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
-    const expectedIntake: ConfirmedCampaignIntake = {
-      campaignId: rebuiltCampaign.campaign.id,
-      confirmedAt: command.payload.confirmedAt,
-      ...command.payload.intake,
-    };
-    const matchingOutcome = rebuiltCampaign.records.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "campaign-intake-confirmed" &&
-        record.requestId === command.requestId &&
-        JSON.stringify(record.intake) === JSON.stringify(expectedIntake),
-    );
-    if (matchingOutcome) {
-      await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
-      const replayed = await loadCampaign(campaignPath);
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: true as const,
-        result: {
-          confirmed: false,
-          campaign: replayed.campaign,
-          intake: replayed.intake,
-          workView: replayed.workView,
-          lease: replayed.lease,
-        },
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not confirm Campaign Intake concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Campaign Intake request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Campaign Intake could not be confirmed against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents, resolve the reported validation problem, and keep Public Research paused.",
+    },
+    isReplay({ rebuiltCampaign }) {
+      const expectedIntake: ConfirmedCampaignIntake = {
+        campaignId: rebuiltCampaign.campaign.id,
+        confirmedAt: command.payload.confirmedAt,
+        ...command.payload.intake,
       };
-    }
-    if (
-      rebuiltCampaign.records.some(
-        (record) => isRecord(record) && record.requestId === command.requestId,
-      )
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
-          message: "Campaign Intake request identity was already used with different input.",
-          action:
-            "Reuse the original request payload or provide a new stable request identity.",
-        },
-      };
-    }
-    if (rebuiltCampaign.intake !== undefined) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-INTAKE-ALREADY-CONFIRMED",
-          message: "The first Campaign Intake version is already confirmed.",
-          action:
-            "Inspect the confirmed Campaign Intake; do not overwrite authoritative history.",
-        },
-      };
-    }
-    if (
-      rebuiltCampaign.lease.coordinatorId !== command.payload.coordinatorId ||
-      rebuiltCampaign.lease.expiresAt <= currentTime
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["confirm-campaign-intake"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.intake) === JSON.stringify(expectedIntake),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildIntakeConfirmationResult(false, replayed);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.intake === undefined
+        ? undefined
+        : {
+            code: "SVS-CAMPAIGN-INTAKE-ALREADY-CONFIRMED",
+            message: "The first Campaign Intake version is already confirmed.",
+            action:
+              "Inspect the confirmed Campaign Intake; do not overwrite authoritative history.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
           code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
-          message: "Campaign Intake confirmation requires the active coordinator lease.",
+          message:
+            "Campaign Intake confirmation requires the active coordinator lease.",
           action:
             "Resume the Scouting Campaign with this coordinator before confirming Campaign Intake.",
-        },
-      };
-    }
-
-    const records = campaignIntakeRecords(
-      rebuiltCampaign.campaign.id,
-      command,
-      rebuiltCampaign.records.length + 1,
-    );
-    const after = await appendCampaignRecordsAndPersist(campaignPath, records);
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: true as const,
-      result: {
-        confirmed: true,
-        campaign: after.campaign,
-        intake: after.intake,
-        workView: after.workView,
-        lease: after.lease,
+        };
       },
-    };
-  } catch (error) {
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: false as const,
-      error: {
-        code: "SVS-CAMPAIGN-INVALID",
-        message:
-          "Campaign Intake could not be confirmed against valid authoritative Campaign history.",
-        action:
-          "Preserve the Campaign contents, resolve the reported validation problem, and keep Public Research paused.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
-    };
-  } finally {
-    if (coordinatorLock !== undefined) {
-      await releaseCoordinatorOperationLock(coordinatorLock);
-    }
-  }
+    },
+    records({ rebuiltCampaign }) {
+      return campaignIntakeRecords(
+        rebuiltCampaign.campaign.id,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildIntakeConfirmationResult(true, after);
+    },
+  });
 }
-
 async function reservePublicResearch(
   command: ReservePublicResearchCommand,
   currentTime: string,
 ) {
-  let coordinatorLock: CoordinatorOperationLock | undefined;
-  try {
-    const campaignPath = path.resolve(command.payload.campaignPath);
-    if (!(await hasCampaignManifest(campaignPath))) {
-      throw new Error("Campaign manifest is missing or invalid");
-    }
-    coordinatorLock = await acquireCoordinatorOperationLock(
-      campaignPath,
-      command.requestId,
-      command.payload.coordinatorId,
-      currentTime,
-    );
-    if (coordinatorLock === undefined) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LOCKED",
-          message: "Scouting Campaign is being changed by another coordinator.",
-          action: "Do not reserve research concurrently; retry after the active operation finishes.",
-        },
-      };
-    }
+  const buildReservationResult = (
+    reserved: boolean,
+    campaign: LoadedCampaign,
+  ) => ({
+    reserved,
+    reservation: command.payload.reservation,
+    researchBudget: campaign.researchBudget,
+    workView: campaign.workView,
+  });
 
-    const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
-    const matchingOutcome = rebuiltCampaign.records.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "public-research-reserved" &&
-        record.requestId === command.requestId &&
-        JSON.stringify(record.reservation) ===
-          JSON.stringify(command.payload.reservation),
-    );
-    if (matchingOutcome) {
-      await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
-      const replayed = await loadCampaign(campaignPath);
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: true as const,
-        result: {
-          reserved: false,
-          reservation: command.payload.reservation,
-          researchBudget: replayed.researchBudget,
-          workView: replayed.workView,
-        },
-      };
-    }
-    if (
-      rebuiltCampaign.records.some(
-        (record) => isRecord(record) && record.requestId === command.requestId,
-      )
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
-          message: "Public Research reservation request identity was already used with different input.",
-          action: "Reuse the original request payload or provide a new stable request identity.",
-        },
-      };
-    }
-    const before = await loadCampaign(campaignPath);
-    if (
-      before.intake === undefined ||
-      before.researchBudget === undefined ||
-      before.evidenceLedger === undefined
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
-          message: "Public Research requires a valid explicitly confirmed Campaign Intake.",
-          action: "Complete and explicitly confirm Campaign Intake before reserving Public Research capacity.",
-        },
-      };
-    }
-    if (command.payload.reservedAt < before.intake.confirmedAt) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-RESEARCH-RESERVATION-INVALID",
-          message: "Public Research reservation cannot predate Campaign Intake confirmation.",
-          action: "Reserve capacity only after the confirmed Campaign Intake makes Public Research available.",
-        },
-      };
-    }
-    if (
-      before.lease.coordinatorId !== command.payload.coordinatorId ||
-      before.lease.expiresAt <= currentTime
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
-          message: "Public Research reservation requires the active coordinator lease.",
-          action: "Resume the Scouting Campaign with this coordinator before reserving research.",
-        },
-      };
-    }
-    if (
-      rebuiltCampaign.records.some(
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not reserve research concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Public Research reservation request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Public Research capacity could not be reserved against valid Campaign history.",
+      action:
+        "Preserve the Campaign contents and keep Public Research paused until validation succeeds.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
         (record) =>
           isRecord(record) &&
-          record.type === "public-research-reserved" &&
-          isRecord(record.reservation) &&
-          record.reservation.id === command.payload.reservation.id,
-      )
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+          record.type ===
+            authoritativeOperationDescriptors["reserve-public-research"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.reservation) ===
+            JSON.stringify(command.payload.reservation),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildReservationResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const campaign = before!;
+      if (
+        campaign.intake === undefined ||
+        campaign.researchBudget === undefined ||
+        campaign.evidenceLedger === undefined
+      ) {
+        return {
+          code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
+          message:
+            "Public Research requires a valid explicitly confirmed Campaign Intake.",
+          action:
+            "Complete and explicitly confirm Campaign Intake before reserving Public Research capacity.",
+        };
+      }
+      if (command.payload.reservedAt < campaign.intake.confirmedAt) {
+        return {
+          code: "SVS-RESEARCH-RESERVATION-INVALID",
+          message:
+            "Public Research reservation cannot predate Campaign Intake confirmation.",
+          action:
+            "Reserve capacity only after the confirmed Campaign Intake makes Public Research available.",
+        };
+      }
+      return undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Public Research reservation requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before reserving research.",
+        };
+      },
+    },
+    validateAfterLease({ before, rebuiltCampaign }) {
+      const campaign = before!;
+      if (
+        rebuiltCampaign.records.some(
+          (record) =>
+            isRecord(record) &&
+            record.type ===
+              authoritativeOperationDescriptors["reserve-public-research"].outcome &&
+            isRecord(record.reservation) &&
+            record.reservation.id === command.payload.reservation.id,
+        )
+      ) {
+        return {
           code: "SVS-RESEARCH-RESERVATION-CONFLICT",
-          message: "Research reservation identity is already present in this Campaign.",
-          action: "Reuse the original reservation request or create a new stable reservation identity.",
-        },
-      };
-    }
-    if (
-      before.researchBudget.remainingOrdinarySourceUnits <
-      command.payload.reservation.sourceUnits
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+          message:
+            "Research reservation identity is already present in this Campaign.",
+          action:
+            "Reuse the original reservation request or create a new stable reservation identity.",
+        };
+      }
+      if (
+        campaign.researchBudget!.remainingOrdinarySourceUnits <
+        command.payload.reservation.sourceUnits
+      ) {
+        return {
           code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
-          message: "The ordinary Public Research Source cap has no unreserved capacity.",
-          action: "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
-        },
-      };
-    }
-
-    const records = publicResearchReservationRecords(
-      before.campaign.id,
-      command,
-      before.validation.recordCount + 1,
-    );
-    const after = await appendCampaignRecordsAndPersist(campaignPath, records);
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: true as const,
-      result: {
-        reserved: true,
-        reservation: command.payload.reservation,
-        researchBudget: after.researchBudget,
-        workView: after.workView,
-      },
-    };
-  } catch (error) {
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: false as const,
-      error: {
-        code: "SVS-CAMPAIGN-INVALID",
-        message: "Public Research capacity could not be reserved against valid Campaign history.",
-        action: "Preserve the Campaign contents and keep Public Research paused until validation succeeds.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
-    };
-  } finally {
-    if (coordinatorLock !== undefined) {
-      await releaseCoordinatorOperationLock(coordinatorLock);
-    }
-  }
+          message:
+            "The ordinary Public Research Source cap has no unreserved capacity.",
+          action:
+            "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
+        };
+      }
+      return undefined;
+    },
+    records({ before }) {
+      const campaign = before!;
+      return publicResearchReservationRecords(
+        campaign.campaign.id,
+        command,
+        campaign.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildReservationResult(true, after);
+    },
+  });
 }
-
 async function recordPublicResearchObservation(
   command: RecordPublicResearchObservationCommand,
   currentTime: string,
 ) {
-  let coordinatorLock: CoordinatorOperationLock | undefined;
-  try {
-    const campaignPath = path.resolve(command.payload.campaignPath);
-    if (!(await hasCampaignManifest(campaignPath))) {
-      throw new Error("Campaign manifest is missing or invalid");
-    }
-    coordinatorLock = await acquireCoordinatorOperationLock(
-      campaignPath,
-      command.requestId,
-      command.payload.coordinatorId,
-      currentTime,
-    );
-    if (coordinatorLock === undefined) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-LOCKED",
-          message: "Scouting Campaign is being changed by another coordinator.",
-          action: "Do not import research concurrently; retry after the active operation finishes.",
-        },
-      };
-    }
+  const buildObservationImportResult = (
+    recorded: boolean,
+    campaign: LoadedCampaign,
+  ) => ({
+    recorded,
+    researchBudget: campaign.researchBudget,
+    evidenceLedger: campaign.evidenceLedger,
+    workView: campaign.workView,
+  });
 
-    const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
-    const matchingOutcome = rebuiltCampaign.records.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "public-research-observation-recorded" &&
-        record.requestId === command.requestId &&
-        record.reservationId === command.payload.reservationId &&
-        JSON.stringify(record.source) === JSON.stringify(command.payload.source) &&
-        JSON.stringify(record.observation) ===
-          JSON.stringify(command.payload.observation),
-    );
-    if (matchingOutcome) {
-      await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
-      const replayed = await loadCampaign(campaignPath);
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: true as const,
-        result: {
-          recorded: false,
-          researchBudget: replayed.researchBudget,
-          evidenceLedger: replayed.evidenceLedger,
-          workView: replayed.workView,
-        },
-      };
-    }
-    if (
-      rebuiltCampaign.records.some(
-        (record) => isRecord(record) && record.requestId === command.requestId,
-      )
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
-          message: "Public Research import request identity was already used with different input.",
-          action: "Reuse the original request payload or provide a new stable request identity.",
-        },
-      };
-    }
-    const before = await loadCampaign(campaignPath);
-    if (
-      before.intake === undefined ||
-      before.researchBudget === undefined ||
-      before.evidenceLedger === undefined
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
-          code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
-          message: "Public Research requires a valid explicitly confirmed Campaign Intake.",
-          action: "Complete and explicitly confirm Campaign Intake before importing research.",
-        },
-      };
-    }
-    if (
-      before.lease.coordinatorId !== command.payload.coordinatorId ||
-      before.lease.expiresAt <= currentTime
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not import research concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Public Research import request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Public Research Observation could not be imported against valid Campaign history.",
+      action:
+        "Preserve the Campaign contents and reservation; do not repeat retrieval until validation succeeds.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors[
+              "record-public-research-observation"
+            ].outcome &&
+          record.requestId === command.requestId &&
+          record.reservationId === command.payload.reservationId &&
+          JSON.stringify(record.source) ===
+            JSON.stringify(command.payload.source) &&
+          JSON.stringify(record.observation) ===
+            JSON.stringify(command.payload.observation),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildObservationImportResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const campaign = before!;
+      return campaign.intake !== undefined &&
+        campaign.researchBudget !== undefined &&
+        campaign.evidenceLedger !== undefined
+        ? undefined
+        : {
+            code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
+            message:
+              "Public Research requires a valid explicitly confirmed Campaign Intake.",
+            action:
+              "Complete and explicitly confirm Campaign Intake before importing research.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
           code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
-          message: "Public Research import requires the active coordinator lease.",
-          action: "Resume the Scouting Campaign with this coordinator before importing research.",
-        },
-      };
-    }
-    const reservationOutcome = rebuiltCampaign.records.find(
-      (record) =>
-        isRecord(record) &&
-        record.type === "public-research-reserved" &&
-        isRecord(record.reservation) &&
-        record.reservation.id === command.payload.reservationId,
-    );
-    const alreadySettled = rebuiltCampaign.records.some(
-      (record) =>
-        isRecord(record) &&
-        record.type === "public-research-observation-recorded" &&
-        record.reservationId === command.payload.reservationId,
-    );
-    if (!isRecord(reservationOutcome) || alreadySettled) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+          message:
+            "Public Research import requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before importing research.",
+        };
+      },
+    },
+    validateAfterLease({ before, rebuiltCampaign }) {
+      const campaign = before!;
+      const reservationOutcome = rebuiltCampaign.records.find(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["reserve-public-research"].outcome &&
+          isRecord(record.reservation) &&
+          record.reservation.id === command.payload.reservationId,
+      );
+      const alreadySettled = rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors[
+              "record-public-research-observation"
+            ].outcome &&
+          record.reservationId === command.payload.reservationId,
+      );
+      if (!isRecord(reservationOutcome) || alreadySettled) {
+        return {
           code: "SVS-RESEARCH-RESERVATION-INVALID",
           message: !isRecord(reservationOutcome)
             ? "Public Research import has no matching capacity reservation."
@@ -2410,84 +2456,52 @@ async function recordPublicResearchObservation(
           action: !isRecord(reservationOutcome)
             ? "Reserve capacity before retrieving and importing a Source."
             : "Inspect the existing Observation; do not charge or import the reservation twice.",
-        },
-      };
-    }
-    if (
-      !isIsoInstant(reservationOutcome.recordedAt) ||
-      command.payload.source.accessedAt < reservationOutcome.recordedAt ||
-      command.payload.recordedAt < reservationOutcome.recordedAt
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+        };
+      }
+      if (
+        !isIsoInstant(reservationOutcome.recordedAt) ||
+        command.payload.source.accessedAt < reservationOutcome.recordedAt ||
+        command.payload.recordedAt < reservationOutcome.recordedAt
+      ) {
+        return {
           code: "SVS-RESEARCH-RESERVATION-INVALID",
-          message: "Source access and import must occur after Research Budget capacity was reserved.",
-          action: "Do not import or charge work performed before its reservation; leave the reservation unsettled.",
-        },
-      };
-    }
-    if (
-      before.evidenceLedger.sources.some(
-        (source: PublicSource) => source.id === command.payload.source.id,
-      ) ||
-      before.evidenceLedger.observations.some(
-        (observation: PublicObservation) =>
-          observation.id === command.payload.observation.id,
-      )
-    ) {
-      return {
-        envelopeVersion: contracts.commandEnvelope,
-        requestId: command.requestId,
-        command: command.command,
-        ok: false as const,
-        error: {
+          message:
+            "Source access and import must occur after Research Budget capacity was reserved.",
+          action:
+            "Do not import or charge work performed before its reservation; leave the reservation unsettled.",
+        };
+      }
+      if (
+        campaign.evidenceLedger!.sources.some(
+          (source: PublicSource) => source.id === command.payload.source.id,
+        ) ||
+        campaign.evidenceLedger!.observations.some(
+          (observation: PublicObservation) =>
+            observation.id === command.payload.observation.id,
+        )
+      ) {
+        return {
           code: "SVS-EVIDENCE-IDENTITY-CONFLICT",
-          message: "Source or Observation identity is already present in the Evidence Ledger.",
-          action: "Use stable unique evidence identities or replay the original import request.",
-        },
-      };
-    }
-
-    const records = publicResearchObservationRecords(
-      before.campaign.id,
-      command,
-      before.validation.recordCount + 1,
-    );
-    const after = await appendCampaignRecordsAndPersist(campaignPath, records);
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: true as const,
-      result: {
-        recorded: true,
-        researchBudget: after.researchBudget,
-        evidenceLedger: after.evidenceLedger,
-        workView: after.workView,
-      },
-    };
-  } catch (error) {
-    return {
-      envelopeVersion: contracts.commandEnvelope,
-      requestId: command.requestId,
-      command: command.command,
-      ok: false as const,
-      error: {
-        code: "SVS-CAMPAIGN-INVALID",
-        message: "Public Research Observation could not be imported against valid Campaign history.",
-        action: "Preserve the Campaign contents and reservation; do not repeat retrieval until validation succeeds.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
-    };
-  } finally {
-    if (coordinatorLock !== undefined) {
-      await releaseCoordinatorOperationLock(coordinatorLock);
-    }
-  }
+          message:
+            "Source or Observation identity is already present in the Evidence Ledger.",
+          action:
+            "Use stable unique evidence identities or replay the original import request.",
+        };
+      }
+      return undefined;
+    },
+    records({ before }) {
+      const campaign = before!;
+      return publicResearchObservationRecords(
+        campaign.campaign.id,
+        command,
+        campaign.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildObservationImportResult(true, after);
+    },
+  });
 }
 
 async function createCampaign(command: CreateCampaignCommand) {
@@ -2548,7 +2562,6 @@ async function createCampaign(command: CreateCampaignCommand) {
       recordedAt: command.payload.createdAt,
       firstSequence: 1,
       operation: "create-campaign",
-      outcome: "campaign-created",
       coordinatorId: command.payload.coordinatorId,
       leaseExpiresAt: command.payload.leaseExpiresAt,
     });

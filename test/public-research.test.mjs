@@ -3,6 +3,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { publicResearchReservationCommand } from "./support/campaign-commands.mjs";
 import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
 
 /**
@@ -104,22 +105,19 @@ test("a cited Public Research Observation survives a fresh-session resume", asyn
   const campaignPath = path.join(storagePath, "public-research");
   await createConfirmedCampaign(kernelPath, campaignPath);
 
-  const reserved = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-public-source-1",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T09:12:00.000Z",
-      reservation: {
-        id: "research-reservation-1",
-        sourceUnits: 1,
-        purpose: "Measure the reported cost of late payments for small businesses",
-        retrievalRoute: "public-web-search",
+  const reserved = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-public-source-1",
+      payload: {
+        reservation: {
+          id: "research-reservation-1",
+          purpose:
+            "Measure the reported cost of late payments for small businesses",
+        },
       },
-    },
-  });
+    }),
+  );
 
   assert.equal(reserved.code, 0, reserved.stderr);
   assert.deepEqual(reserved.response.result.researchBudget, {
@@ -240,22 +238,19 @@ test("Public Research cannot reserve capacity before explicit Campaign Intake co
   assert.equal(created.code, 0, created.stderr);
   const recordsBefore = await readFile(path.join(campaignPath, "records.jsonl"));
 
-  const result = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-before-intake-1",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T09:05:00.000Z",
-      reservation: {
-        id: "reservation-before-intake",
-        sourceUnits: 1,
-        purpose: "This retrieval must not start",
-        retrievalRoute: "public-web-search",
+  const result = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-before-intake-1",
+      payload: {
+        reservedAt: "2026-09-01T09:05:00.000Z",
+        reservation: {
+          id: "reservation-before-intake",
+          purpose: "This retrieval must not start",
+        },
       },
-    },
-  });
+    }),
+  );
 
   assert.equal(result.code, 3);
   assert.equal(result.response.error.code, "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE");
@@ -268,22 +263,19 @@ test("Public Research reservation time cannot predate Campaign Intake confirmati
   const campaignPath = path.join(storagePath, "backdated-reservation");
   await createConfirmedCampaign(kernelPath, campaignPath);
 
-  const result = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-backdated-source-1",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T09:09:59.000Z",
-      reservation: {
-        id: "backdated-source-reservation-1",
-        sourceUnits: 1,
-        purpose: "This reservation must not appear before confirmation",
-        retrievalRoute: "public-web-search",
+  const result = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-backdated-source-1",
+      payload: {
+        reservedAt: "2026-09-01T09:09:59.000Z",
+        reservation: {
+          id: "backdated-source-reservation-1",
+          purpose: "This reservation must not appear before confirmation",
+        },
       },
-    },
-  });
+    }),
+  );
 
   assert.equal(result.code, 3);
   assert.equal(result.response.error.code, "SVS-RESEARCH-RESERVATION-INVALID");
@@ -304,41 +296,35 @@ test("ordinary Public Research reservations preserve the adversarial Source rese
   await createConfirmedCampaign(kernelPath, campaignPath);
 
   for (let index = 1; index <= 24; index += 1) {
-    const result = await runKernel(kernelPath, {
-      envelopeVersion: "0.1.0",
-      requestId: `reserve-ordinary-source-${index}`,
-      command: "reservePublicResearch",
-      payload: {
-        campaignPath,
-        coordinatorId: "coordinator-primary",
-        reservedAt: `2026-09-01T09:${String(10 + index).padStart(2, "0")}:00.000Z`,
-        reservation: {
-          id: `ordinary-source-reservation-${index}`,
-          sourceUnits: 1,
-          purpose: `Examine ordinary public Source ${index}`,
-          retrievalRoute: "public-web-search",
+    const result = await runKernel(
+      kernelPath,
+      publicResearchReservationCommand(campaignPath, {
+        requestId: `reserve-ordinary-source-${index}`,
+        payload: {
+          reservedAt: `2026-09-01T09:${String(10 + index).padStart(2, "0")}:00.000Z`,
+          reservation: {
+            id: `ordinary-source-reservation-${index}`,
+            purpose: `Examine ordinary public Source ${index}`,
+          },
         },
-      },
-    });
+      }),
+    );
     assert.equal(result.code, 0, `reservation ${index}: ${result.stderr}`);
   }
 
-  const exceeded = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-ordinary-source-25",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T10:00:00.000Z",
-      reservation: {
-        id: "ordinary-source-reservation-25",
-        sourceUnits: 1,
-        purpose: "Attempt to consume the adversarial reserve",
-        retrievalRoute: "public-web-search",
+  const exceeded = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-ordinary-source-25",
+      payload: {
+        reservedAt: "2026-09-01T10:00:00.000Z",
+        reservation: {
+          id: "ordinary-source-reservation-25",
+          purpose: "Attempt to consume the adversarial reserve",
+        },
       },
-    },
-  });
+    }),
+  );
 
   assert.equal(exceeded.code, 3);
   assert.equal(exceeded.response.error.code, "SVS-RESEARCH-BUDGET-EXHAUSTED");
@@ -357,22 +343,18 @@ test("Public Research import rejects raw content and credential-bearing Source U
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "private-fields");
   await createConfirmedCampaign(kernelPath, campaignPath);
-  const reserved = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-private-fields-source-1",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T09:12:00.000Z",
-      reservation: {
-        id: "private-fields-reservation-1",
-        sourceUnits: 1,
-        purpose: "Examine a public Source without retaining its raw content",
-        retrievalRoute: "public-web-search",
+  const reserved = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-private-fields-source-1",
+      payload: {
+        reservation: {
+          id: "private-fields-reservation-1",
+          purpose: "Examine a public Source without retaining its raw content",
+        },
       },
-    },
-  });
+    }),
+  );
   assert.equal(reserved.code, 0, reserved.stderr);
   const recordsBefore = await readFile(path.join(campaignPath, "records.jsonl"));
 
@@ -491,22 +473,19 @@ test("a Source examination cannot predate its Research Budget reservation", asyn
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "reservation-order");
   await createConfirmedCampaign(kernelPath, campaignPath);
-  const reserved = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "reserve-ordered-source-1",
-    command: "reservePublicResearch",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      reservedAt: "2026-09-01T09:20:00.000Z",
-      reservation: {
-        id: "ordered-source-reservation-1",
-        sourceUnits: 1,
-        purpose: "Verify that reservation precedes Source examination",
-        retrievalRoute: "public-web-search",
+  const reserved = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-ordered-source-1",
+      payload: {
+        reservedAt: "2026-09-01T09:20:00.000Z",
+        reservation: {
+          id: "ordered-source-reservation-1",
+          purpose: "Verify that reservation precedes Source examination",
+        },
       },
-    },
-  });
+    }),
+  );
   assert.equal(reserved.code, 0, reserved.stderr);
 
   const result = await runKernel(kernelPath, {
