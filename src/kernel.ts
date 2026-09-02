@@ -167,6 +167,7 @@ type PublicResearchReservation = {
   sourceUnits: 1;
   purpose: string;
   retrievalRoute: string;
+  researchClass?: "deepening" | "open-world-discovery";
 };
 
 type ReservePublicResearchCommand = {
@@ -823,6 +824,8 @@ type WorkView = {
         deepeningShare: 0.8;
         openWorldDiscoveryShare: 0.2;
         adversarialSourceUnitsReserved: number;
+        deepeningSourceUnits?: number;
+        openWorldDiscoverySourceUnits?: number;
       };
   breadthGate?: {
     id: string;
@@ -1399,7 +1402,18 @@ function validatePublicResearchReservation(
 ): string[] {
   if (
     !isRecord(value) ||
-    !hasOnlyFields(value, ["id", "sourceUnits", "purpose", "retrievalRoute"])
+    !hasOnlyFields(
+      value,
+      value.researchClass === undefined
+        ? ["id", "sourceUnits", "purpose", "retrievalRoute"]
+        : [
+            "id",
+            "sourceUnits",
+            "purpose",
+            "retrievalRoute",
+            "researchClass",
+          ],
+    )
   ) {
     return [`${field} must contain id, sourceUnits, purpose, and retrievalRoute.`];
   }
@@ -1414,6 +1428,16 @@ function validatePublicResearchReservation(
   }
   if (value.sourceUnits !== 1) {
     details.push(`${field}.sourceUnits must be exactly 1 for one substantive Source examination.`);
+  }
+  if (
+    value.researchClass !== undefined &&
+    !["deepening", "open-world-discovery"].includes(
+      String(value.researchClass),
+    )
+  ) {
+    details.push(
+      `${field}.researchClass must be deepening or open-world-discovery when present.`,
+    );
   }
   return details;
 }
@@ -1658,6 +1682,30 @@ function validateAssessmentLimitations(
   return details;
 }
 
+function validateEvidenceConfidence(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["level", "limitingFactors"]) ||
+    !["unknown", "low", "medium", "high"].includes(String(value.level)) ||
+    !Array.isArray(value.limitingFactors) ||
+    value.limitingFactors.length === 0
+  ) {
+    return [
+      `${field} must use unknown, low, medium, or high and include explicit limiting factors.`,
+    ];
+  }
+  const details: string[] = [];
+  for (const [index, factor] of value.limitingFactors.entries()) {
+    if (typeof factor !== "string" || factor.trim() === "") {
+      details.push(`${field}.limitingFactors[${index}] must be a non-empty string.`);
+    }
+    details.push(
+      ...validatePersistableText(factor, `${field}.limitingFactors[${index}]`),
+    );
+  }
+  return details;
+}
+
 function validateSourceLineage(value: unknown, field: string): string[] {
   if (
     !isRecord(value) ||
@@ -1870,33 +1918,9 @@ function validateInference(value: unknown, field: string): string[] {
   ) {
     details.push(`${field} cannot use one entry as both support and challenge.`);
   }
-  if (
-    !isRecord(value.confidence) ||
-    !hasOnlyFields(value.confidence, ["level", "limitingFactors"]) ||
-    !["unknown", "low", "medium", "high"].includes(
-      String(value.confidence.level),
-    ) ||
-    !Array.isArray(value.confidence.limitingFactors) ||
-    value.confidence.limitingFactors.length === 0
-  ) {
-    details.push(
-      `${field}.confidence must use unknown, low, medium, or high and include explicit limiting factors.`,
-    );
-  } else {
-    for (const [index, factor] of value.confidence.limitingFactors.entries()) {
-      if (typeof factor !== "string" || factor.trim() === "") {
-        details.push(
-          `${field}.confidence.limitingFactors[${index}] must be a non-empty string.`,
-        );
-      }
-      details.push(
-        ...validatePersistableText(
-          factor,
-          `${field}.confidence.limitingFactors[${index}]`,
-        ),
-      );
-    }
-  }
+  details.push(
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+  );
   return details;
 }
 
@@ -2483,10 +2507,14 @@ function validateCampaignDecision(
     "applicableRule",
     "rationale",
   ]);
-  if (!['opportunity-formation', 'breadth-gate'].includes(String(value.kind))) {
+  if (!["opportunity-formation", "breadth-gate"].includes(String(value.kind))) {
     details.push(`${field}.kind must be opportunity-formation or breadth-gate.`);
   }
-  if (!['formed', 'insufficient-evidence', 'passed'].includes(String(value.outcome))) {
+  if (
+    !["formed", "insufficient-evidence", "passed"].includes(
+      String(value.outcome),
+    )
+  ) {
     details.push(`${field}.outcome is not supported.`);
   }
   if (!Number.isSafeInteger(value.intakeVersion) || Number(value.intakeVersion) <= 0) {
@@ -2502,22 +2530,9 @@ function validateCampaignDecision(
   if (!isIsoInstant(value.decidedAt) || value.decidedAt !== recordedAt) {
     details.push(`${field}.decidedAt must equal the operation's recordedAt instant.`);
   }
-  if (
-    !isRecord(value.confidence) ||
-    !hasOnlyFields(value.confidence, ["level", "limitingFactors"]) ||
-    !["unknown", "low", "medium", "high"].includes(String(value.confidence.level)) ||
-    !Array.isArray(value.confidence.limitingFactors) ||
-    value.confidence.limitingFactors.length === 0
-  ) {
-    details.push(`${field}.confidence must include an ordinal level and limiting factors.`);
-  } else {
-    for (const [index, factor] of value.confidence.limitingFactors.entries()) {
-      if (typeof factor !== "string" || factor.trim() === "") {
-        details.push(`${field}.confidence.limitingFactors[${index}] must be non-empty.`);
-      }
-      details.push(...validatePersistableText(factor, `${field}.confidence.limitingFactors[${index}]`));
-    }
-  }
+  details.push(
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+  );
   details.push(...validateAssessmentLimitations(value.limitations, field));
   return details;
 }
@@ -3267,6 +3282,41 @@ function activeResearchApprovalDecision(
         (response) => response.decisionId === decision.id,
       ),
   );
+}
+
+type PublicResearchAllocationViolation =
+  | "required"
+  | "not-available"
+  | "imbalanced";
+
+function publicResearchAllocationViolation(
+  history: AuthoritativeHistoryRebuild,
+  reservation: PublicResearchReservation,
+): PublicResearchAllocationViolation | undefined {
+  const breadthGatePassed = history.breadthGates.length > 0;
+  if (breadthGatePassed && reservation.researchClass === undefined) {
+    return "required";
+  }
+  if (!breadthGatePassed && reservation.researchClass !== undefined) {
+    return "not-available";
+  }
+  if (!breadthGatePassed) {
+    return undefined;
+  }
+  const postGateReservations = [...history.reservations.values()].filter(
+    (existing) => existing.researchClass !== undefined,
+  );
+  const totalPostGateSourceUnits = postGateReservations.length + 1;
+  const selectedClass = reservation.researchClass!;
+  const selectedClassSourceUnits =
+    postGateReservations.filter(
+      (existing) => existing.researchClass === selectedClass,
+    ).length + 1;
+  const maximumShare = selectedClass === "deepening" ? 0.8 : 0.2;
+  return selectedClassSourceUnits >
+    Math.ceil(totalPostGateSourceUnits * maximumShare)
+    ? "imbalanced"
+    : undefined;
 }
 
 type ResearchExpenditurePolicyViolation =
@@ -4055,6 +4105,9 @@ const authoritativeOperationDescriptors = {
         throw new Error(
           `authoritative record ${outcomeSequence} exceeds the Research Budget`,
         );
+      }
+      if (publicResearchAllocationViolation(history, reservation) !== undefined) {
+        invalidAuthoritativeRecord(outcomeSequence);
       }
       history.reservations.set(reservation.id, reservation);
       history.reservationRecordedAt.set(
@@ -5134,6 +5187,19 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       deepeningShare: 0.8,
       openWorldDiscoveryShare: 0.2,
       adversarialSourceUnitsReserved: intake!.researchBudget.adversarialSourceReserve,
+      ...([...reservations.values()].some(
+        (reservation) => reservation.researchClass !== undefined,
+      )
+        ? {
+            deepeningSourceUnits: [...reservations.values()].filter(
+              (reservation) => reservation.researchClass === "deepening",
+            ).length,
+            openWorldDiscoverySourceUnits: [...reservations.values()].filter(
+              (reservation) =>
+                reservation.researchClass === "open-world-discovery",
+            ).length,
+          }
+        : {}),
     };
     workView.breadthGate = {
       id: gate.id,
@@ -6128,6 +6194,39 @@ async function reservePublicResearch(
             "The ordinary Public Research Source cap has no unreserved capacity.",
           action:
             "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
+        };
+      }
+      const allocationViolation = publicResearchAllocationViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.reservation,
+      );
+      if (allocationViolation === "required") {
+        return {
+          code: "SVS-RESEARCH-ALLOCATION-REQUIRED",
+          message:
+            "Post-Breadth-Gate ordinary research must identify its deepening or open-world discovery allocation.",
+          action:
+            "Classify the reservation against the post-gate eighty/twenty allocation and retry.",
+        };
+      }
+      if (allocationViolation === "not-available") {
+        return {
+          code: "SVS-RESEARCH-ALLOCATION-NOT-AVAILABLE",
+          message:
+            "Post-Breadth-Gate research allocation cannot be used before the Breadth Gate passes.",
+          action:
+            "Continue pre-gate discovery and shallow problem mining without a post-gate research class.",
+        };
+      }
+      if (allocationViolation === "imbalanced") {
+        return {
+          code: "SVS-RESEARCH-ALLOCATION-IMBALANCED",
+          message:
+            "The reservation would exceed the post-Breadth-Gate eighty/twenty allocation.",
+          action:
+            command.payload.reservation.researchClass === "deepening"
+              ? "Use the next ordinary Source unit for open-world discovery."
+              : "Use the next ordinary Source unit for Opportunity deepening.",
         };
       }
       return undefined;

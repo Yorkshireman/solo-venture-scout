@@ -224,7 +224,9 @@ comparison. Interestingness or evidence volume alone is not Decision Value.
 After the Breadth Gate, allocate eighty percent of ordinary research effort to
 Opportunity deepening and keep twenty percent for open-world discovery. Preserve the
 final adversarial allowance for the later challenge of an apparent leader; never spend
-it on ordinary discovery, shallow mining, or deepening.
+it on ordinary discovery, shallow mining, or deepening. Give every later ordinary
+Source reservation a `researchClass` of `deepening` or `open-world-discovery`; the
+kernel enforces the cumulative eighty/twenty allocation.
 
 ## Pause for Approved Research
 

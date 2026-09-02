@@ -21,8 +21,14 @@ async function runKernel(kernelPath, command) {
  * @param {string} kernelPath
  * @param {string} campaignPath
  * @param {Array<Record<string, unknown>>} [statements]
+ * @param {boolean} [includeFormationEvidence]
  */
-async function createDiscoveryCampaign(kernelPath, campaignPath, statements = []) {
+async function createDiscoveryCampaign(
+  kernelPath,
+  campaignPath,
+  statements = [],
+  includeFormationEvidence = false,
+) {
   const commands = [
     {
       envelopeVersion: "0.1.0",
@@ -156,7 +162,7 @@ async function createDiscoveryCampaign(kernelPath, campaignPath, statements = []
       locator: "Process sample, item 7",
       text: "The sampled process described recurring document checks before submission.",
     },
-  ];
+  ].slice(0, includeFormationEvidence ? undefined : 2);
 
   for (const [index, observation] of observations.entries()) {
     const reservedAt = `2026-09-01T09:${String(10 + index * 3).padStart(2, "0")}:00.000Z`;
@@ -176,7 +182,11 @@ async function createDiscoveryCampaign(kernelPath, campaignPath, statements = []
         },
       }),
     );
-    assert.equal(reserved.code, 0, reserved.stderr);
+    assert.equal(
+      reserved.code,
+      0,
+      `${reserved.stderr}\n${JSON.stringify(reserved.response)}`,
+    );
 
     const recorded = await runKernel(kernelPath, {
       envelopeVersion: "0.1.0",
@@ -997,7 +1007,7 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-opportunities-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "opportunity-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath);
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
 
   for (const command of [
     discoveryTrancheCommand(campaignPath),
@@ -1102,13 +1112,93 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
     replayed.response.result.evidenceLedger.campaignDecisions.length,
     11,
   );
+
+  const unclassified = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-unclassified-post-gate-source",
+      payload: {
+        reservedAt: "2026-09-01T10:00:00.000Z",
+        reservation: {
+          id: "reservation-unclassified-post-gate",
+          purpose: "Attempt post-gate research without an allocation",
+        },
+      },
+    }),
+  );
+  assert.equal(unclassified.code, 3);
+  assert.equal(
+    unclassified.response.error.code,
+    "SVS-RESEARCH-ALLOCATION-REQUIRED",
+  );
+
+  for (let index = 0; index < 4; index += 1) {
+    const deepening = await runKernel(
+      kernelPath,
+      publicResearchReservationCommand(campaignPath, {
+        requestId: `reserve-deepening-source-${index + 1}`,
+        payload: {
+          reservedAt: `2026-09-01T10:0${index + 1}:00.000Z`,
+          reservation: {
+            id: `reservation-deepening-${index + 1}`,
+            purpose: "Deepen a comparison Opportunity",
+            researchClass: "deepening",
+          },
+        },
+      }),
+    );
+    assert.equal(deepening.code, 0, deepening.stderr);
+  }
+  const excessDeepening = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-fifth-deepening-source",
+      payload: {
+        reservedAt: "2026-09-01T10:05:00.000Z",
+        reservation: {
+          id: "reservation-deepening-5",
+          purpose: "Attempt to consume the open-world discovery share",
+          researchClass: "deepening",
+        },
+      },
+    }),
+  );
+  assert.equal(excessDeepening.code, 3);
+  assert.equal(
+    excessDeepening.response.error.code,
+    "SVS-RESEARCH-ALLOCATION-IMBALANCED",
+  );
+  const openWorld = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-open-world-source-1",
+      payload: {
+        reservedAt: "2026-09-01T10:06:00.000Z",
+        reservation: {
+          id: "reservation-open-world-1",
+          purpose: "Continue bounded open-world discovery",
+          researchClass: "open-world-discovery",
+        },
+      },
+    }),
+  );
+  assert.equal(openWorld.code, 0, openWorld.stderr);
+  assert.equal(
+    openWorld.response.result.workView.researchAllocation.deepeningSourceUnits,
+    4,
+  );
+  assert.equal(
+    openWorld.response.result.workView.researchAllocation
+      .openWorldDiscoverySourceUnits,
+    1,
+  );
 });
 
 test("dependent Sources cannot satisfy the two-lineage Opportunity formation rule", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-lineage-guard-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "dependent-lineage-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath);
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
   for (const command of [
     discoveryTrancheCommand(campaignPath),
     secondDiscoveryTrancheCommand(campaignPath),
@@ -1154,7 +1244,7 @@ test("Opportunity formation preserves unsupported threads and the equal pre-gate
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-formation-guards-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "formation-guard-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath);
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
   for (const command of [
     discoveryTrancheCommand(campaignPath),
     secondDiscoveryTrancheCommand(campaignPath),
@@ -1254,7 +1344,7 @@ test("the Breadth Gate fails closed until every narrowing condition is satisfied
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-breadth-guards-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "breadth-guard-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath);
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
   for (const command of [
     discoveryTrancheCommand(campaignPath),
     secondDiscoveryTrancheCommand(campaignPath),
@@ -1309,7 +1399,7 @@ test("the Breadth Gate fails closed until every narrowing condition is satisfied
 
   await t.test("requires enough ordinary budget to deepen and challenge the comparison set", async () => {
     const budgetCampaignPath = path.join(storagePath, "breadth-budget-campaign");
-    await createDiscoveryCampaign(kernelPath, budgetCampaignPath);
+    await createDiscoveryCampaign(kernelPath, budgetCampaignPath, [], true);
     for (const discoveryCommand of [
       discoveryTrancheCommand(budgetCampaignPath),
       secondDiscoveryTrancheCommand(budgetCampaignPath),
@@ -1399,7 +1489,7 @@ test("the Breadth Gate requires the Campaign Intake Source Family coverage", asy
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-breadth-diversity-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "breadth-diversity-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath);
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
   const second = secondDiscoveryTrancheCommand(campaignPath);
   second.payload.tranche.sweeps[0].sourceFamily = structuredClone(
     discoveryTrancheCommand(campaignPath).payload.tranche.sweeps[0].sourceFamily,
@@ -1697,7 +1787,7 @@ test("Discovery Tranches are sequential, idempotent, and bounded by the sweep ca
   const replay = await runKernel(kernelPath, second);
   assert.equal(replay.code, 0, replay.stderr);
   assert.equal(replay.response.result.recorded, false);
-  assert.equal(replay.response.result.workView.recordSequence, 40);
+  assert.equal(replay.response.result.workView.recordSequence, 16);
 
   const overCap = structuredClone(second);
   overCap.requestId = "record-discovery-tranche-3-over-cap";

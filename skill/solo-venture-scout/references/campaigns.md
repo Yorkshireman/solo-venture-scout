@@ -168,6 +168,14 @@ settled reservations both consume that hard capacity. Success appends reservatio
 intent and outcome records, updates `research-budget.json`, and writes a checkpoint
 before external retrieval begins.
 
+Before the Breadth Gate, omit `researchClass`; the later Opportunity formation record
+classifies completed reservations into the equal discovery and shallow problem-mining
+allocation. After the gate, every ordinary reservation must add exactly one of
+`"researchClass": "deepening"` or
+`"researchClass": "open-world-discovery"`. The kernel keeps each cumulative group of
+five ordinary Source units within the four-to-one allocation and rejects unclassified
+or imbalanced reservations. Neither class can consume the separate adversarial reserve.
+
 ## Record a Public Research Observation
 
 After read-only retrieval outside the kernel, import inert provenance and one neutral

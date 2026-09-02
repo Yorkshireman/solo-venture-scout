@@ -12,6 +12,7 @@
  *       sourceUnits: number;
  *       purpose: string;
  *       retrievalRoute: string;
+ *       researchClass?: "deepening" | "open-world-discovery";
  *     };
  *   };
  * }} PublicResearchReservationCommand
