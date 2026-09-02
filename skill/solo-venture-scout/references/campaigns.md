@@ -373,14 +373,14 @@ Before restricted or paid research, checkpoint the complete proposed scope:
     "request": {
       "id": "stable-pending-decision-id",
       "access": "restricted-and-paid",
-      "action": "Read one named report through the developer-controlled portal",
+      "action": "read-source",
       "purpose": "Resolve one named Evidence Gap",
       "source": {
         "id": "stable-proposed-source-id",
         "description": "Named analyst report",
         "url": "https://research.example.com/report"
       },
-      "accessMethod": "Use the developer's existing signed-in browser session read-only",
+      "accessMethod": "developer-controlled-authenticated-and-paid-read-only",
       "data": {
         "accessed": ["Report text and publication metadata"],
         "retained": ["Citation metadata and neutral atomic paraphrases"]
@@ -403,7 +403,14 @@ Before restricted or paid research, checkpoint the complete proposed scope:
 The request must fit the confirmed paid-spend cap and currency. `restricted` requires
 a zero maximum; `paid` and `restricted-and-paid` require a positive maximum. The URL
 may identify a restricted Source but must not contain credentials or sensitive query
-parameters. Success appends the request, writes its checkpoint, and only then returns
+parameters. `action` is the closed `read-source` capability. `accessMethod` must be
+`developer-controlled-authenticated-read-only` for `restricted`,
+`developer-approved-paid-read-only` for `paid`, or
+`developer-controlled-authenticated-and-paid-read-only` for `restricted-and-paid`.
+`externalEffects` must be empty. These structural constraints prevent Research
+Approval from authorising outreach, publishing, collecting personal data, accepting
+money, or another External Validation Action; free text cannot add capabilities.
+Success appends the request, writes its checkpoint, and only then returns
 the Pending Decision in the Work View. A second request cannot replace an active one.
 
 An informational exchange may be retained without answering the decision:
@@ -451,14 +458,14 @@ Approval copies the entire request as the exact scope the developer saw:
         "scope": {
           "id": "stable-pending-decision-id",
           "access": "restricted-and-paid",
-          "action": "Read one named report through the developer-controlled portal",
+          "action": "read-source",
           "purpose": "Resolve one named Evidence Gap",
           "source": {
             "id": "stable-proposed-source-id",
             "description": "Named analyst report",
             "url": "https://research.example.com/report"
           },
-          "accessMethod": "Use the developer's existing signed-in browser session read-only",
+          "accessMethod": "developer-controlled-authenticated-and-paid-read-only",
           "data": {
             "accessed": ["Report text and publication metadata"],
             "retained": ["Citation metadata and neutral atomic paraphrases"]
@@ -546,8 +553,9 @@ purpose, and currency. Cumulative spend cannot exceed either the approval maximu
 Campaign paid-spend cap. Success records the approval decision provenance and returns
 recorded and remaining spend. The strict command has no credential, authenticated
 session, account, card, bank, or other payment-detail field. On an ambiguous purchase
-or write outcome, preserve the checkpoint and request a precise human decision; never
-retry payment or restricted access automatically.
+or write outcome, preserve the checkpoint and request a precise human decision.
+Descriptive fields containing credential or payment-detail markers, including card
+numbers, are rejected; never retry payment or restricted access automatically.
 
 ## Resume
 

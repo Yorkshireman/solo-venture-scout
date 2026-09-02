@@ -337,14 +337,17 @@ type RecordEvidenceReasoningCommand = {
 type ResearchApprovalRequest = {
   id: string;
   access: "restricted" | "paid" | "restricted-and-paid";
-  action: string;
+  action: "read-source";
   purpose: string;
   source: {
     id: string;
     description: string;
     url: string;
   };
-  accessMethod: string;
+  accessMethod:
+    | "developer-controlled-authenticated-read-only"
+    | "developer-approved-paid-read-only"
+    | "developer-controlled-authenticated-and-paid-read-only";
   data: {
     accessed: string[];
     retained: string[];
@@ -1144,29 +1147,10 @@ function containsProhibitedPersistedContent(value: string): boolean {
     /\bcard\s+(?:ending|number|details?)\b/i,
     /\b(?:cvv|cvc|iban|bank account|routing number|sort code|payment details?)\b/i,
     /\b(?:last four|last 4|ending in)\s*\d{4}\b/i,
+    /\b(?:\d[ -]?){12,18}\d\b/,
     /<\/?[A-Z][^>]*>|```/i,
     /^\s*(?:ignore|disregard|override)\b.{0,80}\b(?:instructions?|workflow|system prompt)\b/i,
   ].some((pattern) => pattern.test(value));
-}
-
-function describesProhibitedResearchAction(
-  request: Record<string, unknown>,
-): boolean {
-  const proposedActivity = [
-    request.action,
-    request.accessMethod,
-    ...(Array.isArray(request.externalEffects) ? request.externalEffects : []),
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .join(" ");
-  return [
-    /\b(?:contact|message|email|call|interview|survey|solicit|outreach)\b.{0,80}\b(?:prospects?|customers?|buyers?|users?|market participants?)\b/i,
-    /\b(?:publish|post|advertise|launch)\b/i,
-    /\b(?:submit|complete|send)\b.{0,40}\bform\b/i,
-    /\b(?:accept|collect|receive|charge)\b.{0,40}\b(?:money|payments?|card details?)\b/i,
-    /\b(?:bypass|circumvent|evade)\b.{0,80}\b(?:access controls?|authentication|paywalls?|law|terms|robots)\b/i,
-    /\b(?:illegal|unlawful|stolen credentials?)\b/i,
-  ].some((pattern) => pattern.test(proposedActivity));
 }
 
 function validatePersistableText(value: unknown, field: string): string[] {
@@ -1813,7 +1797,7 @@ function validateResearchApprovalRequest(
     return [`${field} must contain the complete scoped Research Approval request.`];
   }
   const details: string[] = [];
-  for (const textField of ["id", "action", "purpose", "accessMethod"] as const) {
+  for (const textField of ["id", "purpose"] as const) {
     if (typeof value[textField] !== "string" || value[textField].trim() === "") {
       details.push(`${field}.${textField} must be a non-empty string.`);
     }
@@ -1823,6 +1807,26 @@ function validateResearchApprovalRequest(
   }
   if (!( ["restricted", "paid", "restricted-and-paid"] as unknown[]).includes(value.access)) {
     details.push(`${field}.access must be restricted, paid, or restricted-and-paid.`);
+  }
+  if (value.action !== "read-source") {
+    details.push(
+      `${field}.action must be read-source; Research Approval cannot authorize an External Validation Action.`,
+    );
+  }
+  const accessMethods = {
+    restricted: "developer-controlled-authenticated-read-only",
+    paid: "developer-approved-paid-read-only",
+    "restricted-and-paid":
+      "developer-controlled-authenticated-and-paid-read-only",
+  } as const;
+  if (
+    typeof value.access !== "string" ||
+    !(value.access in accessMethods) ||
+    value.accessMethod !== accessMethods[value.access as keyof typeof accessMethods]
+  ) {
+    details.push(
+      `${field}.accessMethod must be the read-only method matching its access type.`,
+    );
   }
   if (
     !isRecord(value.source) ||
@@ -1893,6 +1897,11 @@ function validateResearchApprovalRequest(
       false,
     ),
   );
+  if (Array.isArray(value.externalEffects) && value.externalEffects.length !== 0) {
+    details.push(
+      `${field}.externalEffects must be empty; Research Approval is read-only and cannot authorize market interaction.`,
+    );
+  }
   if (
     !isRecord(value.maximumCost) ||
     !hasOnlyFields(value.maximumCost, ["amount", "currency"]) ||
@@ -1927,9 +1936,6 @@ function validateResearchApprovalRequest(
   }
   if (value.externalValidationAction !== false) {
     details.push(`${field}.externalValidationAction must be false; Research Approval cannot authorize an External Validation Action.`);
-  }
-  if (describesProhibitedResearchAction(value)) {
-    details.push(`${field} describes an unlawful or External Validation Action and cannot be approved.`);
   }
   return details;
 }

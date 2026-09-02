@@ -173,9 +173,11 @@ research, use `requestResearchApproval` from
 Pending Decision. Show its complete scope in this order: action, purpose, Source,
 access method, data accessed and retained, external effects, maximum cost and
 currency, risks, duration, and alternatives. State explicitly that Research Approval
-cannot authorise unlawful activity or an External Validation Action. Reject the
-request when its described action, access method, or external effects conflict with
-that boundary, regardless of its boolean safety declarations.
+cannot authorise unlawful activity or an External Validation Action. The kernel
+enforces that boundary structurally: the action must be exactly `read-source`, the
+access method must be the read-only method matching the access type, and external
+effects must be empty. Do not encode another activity in descriptive fields or treat
+the boolean safety declarations as authority to broaden that vocabulary.
 
 Leave the dependent research untouched until the developer responds. Silence remains
 a safe resumable pause. Informational questions, inspection, requests for an
@@ -198,7 +200,8 @@ provenance, not permission; obtain renewed approval instead of performing the ac
 For paid research, use `recordResearchExpenditure` only after the approved action is
 actually charged. A Research Expenditure records its Research Approval provenance,
 Source, purpose, amount, currency, and Research Budget effect, but never credentials
-or payment details. If
+or payment details. Omit account identifiers and card numbers from every descriptive
+field as well as from the command shape. If
 restricted access, a purchase, or its result is ambiguous, preserve the checkpoint
 and never retry automatically; report the ambiguity and require a precise developer
 decision.

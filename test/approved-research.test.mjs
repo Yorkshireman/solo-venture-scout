@@ -113,14 +113,14 @@ function researchApprovalRequest() {
   return {
     id: "decision-analyst-report-access",
     access: "restricted-and-paid",
-    action: "Read one analyst report in the developer-controlled portal",
+    action: "read-source",
     purpose: "Resolve the market-size Evidence Gap for one Opportunity",
     source: {
       id: "source-analyst-report",
       description: "Named analyst report",
       url: "https://research.example.com/reports/market-size",
     },
-    accessMethod: "Use the developer's existing signed-in browser session read-only",
+    accessMethod: "developer-controlled-authenticated-and-paid-read-only",
     data: {
       accessed: ["Report text and publication metadata"],
       retained: ["Citation metadata and neutral atomic paraphrases"],
@@ -163,7 +163,7 @@ test("a complete Research Approval request becomes one durable checkpointed Pend
     reason: "pending-decision",
     pendingDecisionId: "decision-analyst-report-access",
     decisionType: "research-approval",
-    requestedAction: "Read one analyst report in the developer-controlled portal",
+    requestedAction: "read-source",
     resumable: true,
   });
   assert.deepEqual(
@@ -241,7 +241,7 @@ test("informational actions preserve the active Pending Decision and it cannot b
 
   const replacement = researchApprovalRequest();
   replacement.id = "decision-replacement";
-  replacement.action = "Read a changed report scope";
+  replacement.purpose = "Resolve a different Evidence Gap";
   replacement.duration.startsAt = approvalFollowUpAt;
   const replaced = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
@@ -531,6 +531,17 @@ test("Research Expenditure records approval provenance and budget effects withou
     embeddedRejected.response.error.code,
     "SVS-RESEARCH-EXPENDITURE-INVALID",
   );
+
+  const embeddedCardNumber = structuredClone(command);
+  embeddedCardNumber.requestId = "record-embedded-card-number-1";
+  embeddedCardNumber.payload.expenditure.purpose =
+    "Report paid with Visa 4111111111111111";
+  const cardNumberRejected = await runKernel(kernelPath, embeddedCardNumber);
+  assert.equal(cardNumberRejected.code, 3);
+  assert.equal(
+    cardNumberRejected.response.error.code,
+    "SVS-RESEARCH-EXPENDITURE-INVALID",
+  );
 });
 
 test("Research Approval cannot authorize unlawful, external-validation, or over-budget work", async () => {
@@ -561,7 +572,7 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
     [
       "request-mislabeled-customer-outreach-1",
       (request) => {
-        request.action = "Contact prospective customers and interview them";
+        request.action = "collect-personal-data-from-prospective-customers";
       },
       "SVS-RESEARCH-APPROVAL-INVALID",
     ],
@@ -569,6 +580,13 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
       "request-mislabeled-unlawful-access-1",
       (request) => {
         request.accessMethod = "Bypass the Source paywall and access controls";
+      },
+      "SVS-RESEARCH-APPROVAL-INVALID",
+    ],
+    [
+      "request-mislabeled-external-effects-1",
+      (request) => {
+        Reflect.set(request, "externalEffects", ["Publish the findings"]);
       },
       "SVS-RESEARCH-APPROVAL-INVALID",
     ],
@@ -594,6 +612,24 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
       recordsBefore,
     );
   }
+
+  const legitimateSurveyReading = researchApprovalRequest();
+  legitimateSurveyReading.id = "decision-read-customer-survey";
+  legitimateSurveyReading.source.description = "Published survey of customers";
+  legitimateSurveyReading.purpose = "Read aggregate survey findings about customers";
+  const accepted = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "request-legitimate-survey-reading-1",
+    command: "requestResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      requestedAt: approvalRequestedAt,
+      request: legitimateSurveyReading,
+    },
+  });
+  assert.equal(accepted.code, 0, accepted.stderr);
+  assert.equal(accepted.response.result.requested, true);
 });
 
 test("an expired Pending Decision cannot be consumed by a backdated approval", async () => {

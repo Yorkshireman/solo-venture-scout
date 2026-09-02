@@ -147,6 +147,12 @@ test("packaged Scout pauses safely at restricted and paid research boundaries", 
   assert.match(instructions, /never.+credentials.+payment details/is);
   assert.match(instructions, /ambiguous.+never.+retr/is);
   assert.match(instructions, /unlawful.+External Validation Action/is);
+  assert.match(reference, /"action": "read-source"/);
+  assert.match(
+    reference,
+    /"accessMethod": "developer-controlled-authenticated-and-paid-read-only"/,
+  );
+  assert.match(reference, /externalEffects.+must be empty/is);
   for (const command of [
     "requestResearchApproval",
     "recordResearchApprovalInformation",
