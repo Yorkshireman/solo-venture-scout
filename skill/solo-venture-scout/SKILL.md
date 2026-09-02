@@ -197,6 +197,35 @@ Source Families, allowances, familiar-domain count and exception, and retained o
 dropped Exploration Threads. Do not hide overlaps or silently reallocate the Novelty
 Probe reserve.
 
+## Form Opportunities and pass the Breadth Gate
+
+Before the Breadth Gate, split research effort evenly between Discovery Sweeps and
+shallow problem mining. Classify every settled ordinary Source reservation in the
+formation record so the kernel can verify the split; the final adversarial allowance
+remains reserved and ordinary research cannot consume it.
+
+Form an Opportunity only for a specific customer in a specific situation with a
+specific Costly Problem. Require at least two independent Source Lineages plus a
+behavioral Problem Signal traced to their Observations. Cluster evidence by the
+materially shared customer, workflow, and costly consequence, not by a proposed
+solution. Run `recordOpportunityFormation` from
+[references/campaigns.md](references/campaigns.md). When the formation evidence is
+insufficient, keep the item as an Exploration Thread and append explicit Evidence Gaps;
+never promote it speculatively.
+
+Keep discovery broad until `passBreadthGate` succeeds. The Breadth Gate requires the
+Campaign Intake's Source Family minimum, its minimum comparison set of formed
+Opportunities, two diminishing-return tranches, compliance with the
+familiar-domain rule, and sufficient remaining ordinary budget to deepen and challenge
+the comparison set. Choose each next research priority by qualitative Decision Value:
+it must be capable of changing Opportunity formation, a gate, a Contradiction, or the
+comparison. Interestingness or evidence volume alone is not Decision Value.
+
+After the Breadth Gate, allocate eighty percent of ordinary research effort to
+Opportunity deepening and keep twenty percent for open-world discovery. Preserve the
+final adversarial allowance for the later challenge of an apparent leader; never spend
+it on ordinary discovery, shallow mining, or deepening.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

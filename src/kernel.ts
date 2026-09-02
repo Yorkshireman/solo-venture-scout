@@ -354,15 +354,17 @@ type DiscoverySweep = {
   sampling: DiscoverySampling;
 };
 
+type MaterialConsequenceKind =
+  | "lost-money"
+  | "wasted-skilled-time"
+  | "blocked-revenue"
+  | "operational-risk"
+  | "compliance-exposure"
+  | "workaround-expenditure";
+
 type ProblemSignal = {
   materialConsequence: {
-    kind:
-      | "lost-money"
-      | "wasted-skilled-time"
-      | "blocked-revenue"
-      | "operational-risk"
-      | "compliance-exposure"
-      | "workaround-expenditure";
+    kind: MaterialConsequenceKind;
     description: string;
     observationIds: string[];
   };
@@ -443,6 +445,103 @@ type RecordDiscoveryTrancheCommand = {
     coordinatorId: string;
     recordedAt: string;
     tranche: DiscoveryTranche;
+  };
+};
+
+type CampaignDecision = {
+  type: "campaign-decision";
+  id: string;
+  kind: "opportunity-formation" | "breadth-gate";
+  outcome: "formed" | "insufficient-evidence" | "passed";
+  intakeVersion: number;
+  applicableRule: string;
+  evidenceEntryIds: string[];
+  rationale: string;
+  confidence: EvidenceConfidence;
+  limitations: string[];
+  decidedAt: string;
+};
+
+type OpportunityFormationAssessment = {
+  id: string;
+  explorationThreadIds: string[];
+  customer: string;
+  situation: string;
+  costlyProblem: {
+    description: string;
+    materialConsequence: MaterialConsequenceKind;
+    observationIds: string[];
+  };
+  clusterBasis: {
+    sharedCustomer: string;
+    sharedWorkflow: string;
+    sharedCostlyConsequence: string;
+  };
+  supportingObservationIds: string[];
+  behavioralProblemSignalObservationIds: string[];
+  independentSourceLineages: Array<{
+    id: string;
+    sourceIds: string[];
+    rationale: string;
+  }>;
+  result:
+    | { kind: "opportunity"; opportunityId: string }
+    | { kind: "exploration-thread"; evidenceGaps: EvidenceGap[] };
+  decision: CampaignDecision;
+};
+
+type OpportunityFormation = {
+  allocation: {
+    discoveryReservationIds: string[];
+    shallowProblemMiningReservationIds: string[];
+  };
+  assessments: OpportunityFormationAssessment[];
+};
+
+type RecordOpportunityFormationCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordOpportunityFormation";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    allocation: OpportunityFormation["allocation"];
+    assessments: OpportunityFormationAssessment[];
+  };
+};
+
+type DecisionValuePriority = {
+  id: string;
+  researchQuestion: string;
+  target: {
+    kind: "formation" | "gate" | "contradiction" | "comparison";
+    id: string;
+  };
+  rationale: string;
+};
+
+type BreadthGate = {
+  id: string;
+  comparisonOpportunityIds: string[];
+  diminishingReturns: Array<{
+    trancheId: string;
+    newOpportunityIds: string[];
+    rationale: string;
+  }>;
+  decisionValuePriorities: DecisionValuePriority[];
+  decision: CampaignDecision;
+};
+
+type PassBreadthGateCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "passBreadthGate";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    gate: BreadthGate;
   };
 };
 
@@ -615,6 +714,7 @@ type EvidenceLedger = {
   inferences: Inference[];
   contradictions: Contradiction[];
   corrections: Correction[];
+  campaignDecisions: CampaignDecision[];
 };
 
 type CampaignLocator = {
@@ -629,7 +729,9 @@ type WorkView = {
     | "campaign-created"
     | "campaign-intake-confirmed"
     | "public-research-active"
-    | "discovery-active";
+    | "discovery-active"
+    | "opportunity-formation"
+    | "opportunity-deepening";
   pause:
     | null
     | {
@@ -654,6 +756,7 @@ type WorkView = {
     openEvidenceGapIds: string[];
     unresolvedContradictionIds: string[];
     correctionIds: string[];
+    campaignDecisionIds?: string[];
   };
   discovery?: {
     coverage: {
@@ -684,6 +787,7 @@ type WorkView = {
       shallowResearchSourceUnits: number;
       evidenceCredit: "source-led" | "none";
       comparisonBonus: "none";
+      evidenceGapIds?: string[];
     }>;
     droppedThreads: Array<{
       id: string;
@@ -694,6 +798,42 @@ type WorkView = {
       familiarDomain: boolean;
       rationale: string;
     }>;
+  };
+  opportunities?: Array<{
+    id: string;
+    assessmentId: string;
+    explorationThreadIds: string[];
+    customer: string;
+    situation: string;
+    costlyProblem: OpportunityFormationAssessment["costlyProblem"];
+    supportingObservationIds: string[];
+    behavioralProblemSignalObservationIds: string[];
+    independentSourceLineages: string[][];
+    decisionId: string;
+  }>;
+  researchAllocation?:
+    | {
+        phase: "pre-breadth-gate";
+        discoveryShare: 0.5;
+        shallowProblemMiningShare: 0.5;
+        adversarialSourceUnitsReserved: number;
+      }
+    | {
+        phase: "post-breadth-gate";
+        deepeningShare: 0.8;
+        openWorldDiscoveryShare: 0.2;
+        adversarialSourceUnitsReserved: number;
+      };
+  breadthGate?: {
+    id: string;
+    status: "passed";
+    sourceFamilyCount: number;
+    sourceFamilyMinimum: number;
+    comparisonOpportunityIds: string[];
+    diminishingReturnTrancheIds: string[];
+    remainingOrdinarySourceUnits: number;
+    decisionValuePriorities: DecisionValuePriority[];
+    decisionId: string;
   };
 };
 
@@ -711,6 +851,8 @@ type AuthoritativeOperation =
   | "record-public-research-observation"
   | "record-evidence-reasoning"
   | "record-discovery-tranche"
+  | "record-opportunity-formation"
+  | "pass-breadth-gate"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"
@@ -2312,6 +2454,275 @@ function validateRecordDiscoveryTrancheFields(
   ];
 }
 
+function validateCampaignDecision(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "kind",
+      "outcome",
+      "intakeVersion",
+      "applicableRule",
+      "evidenceEntryIds",
+      "rationale",
+      "confidence",
+      "limitations",
+      "decidedAt",
+    ]) ||
+    value.type !== "campaign-decision"
+  ) {
+    return [`${field} must be a complete Campaign Decision.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "applicableRule",
+    "rationale",
+  ]);
+  if (!['opportunity-formation', 'breadth-gate'].includes(String(value.kind))) {
+    details.push(`${field}.kind must be opportunity-formation or breadth-gate.`);
+  }
+  if (!['formed', 'insufficient-evidence', 'passed'].includes(String(value.outcome))) {
+    details.push(`${field}.outcome is not supported.`);
+  }
+  if (!Number.isSafeInteger(value.intakeVersion) || Number(value.intakeVersion) <= 0) {
+    details.push(`${field}.intakeVersion must be a positive safe integer.`);
+  }
+  details.push(
+    ...validateEntryIdList(
+      value.evidenceEntryIds,
+      `${field}.evidenceEntryIds`,
+      value.outcome === "insufficient-evidence",
+    ),
+  );
+  if (!isIsoInstant(value.decidedAt) || value.decidedAt !== recordedAt) {
+    details.push(`${field}.decidedAt must equal the operation's recordedAt instant.`);
+  }
+  if (
+    !isRecord(value.confidence) ||
+    !hasOnlyFields(value.confidence, ["level", "limitingFactors"]) ||
+    !["unknown", "low", "medium", "high"].includes(String(value.confidence.level)) ||
+    !Array.isArray(value.confidence.limitingFactors) ||
+    value.confidence.limitingFactors.length === 0
+  ) {
+    details.push(`${field}.confidence must include an ordinal level and limiting factors.`);
+  } else {
+    for (const [index, factor] of value.confidence.limitingFactors.entries()) {
+      if (typeof factor !== "string" || factor.trim() === "") {
+        details.push(`${field}.confidence.limitingFactors[${index}] must be non-empty.`);
+      }
+      details.push(...validatePersistableText(factor, `${field}.confidence.limitingFactors[${index}]`));
+    }
+  }
+  details.push(...validateAssessmentLimitations(value.limitations, field));
+  return details;
+}
+
+function validateOpportunityFormationAssessment(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "id",
+      "explorationThreadIds",
+      "customer",
+      "situation",
+      "costlyProblem",
+      "clusterBasis",
+      "supportingObservationIds",
+      "behavioralProblemSignalObservationIds",
+      "independentSourceLineages",
+      "result",
+      "decision",
+    ])
+  ) {
+    return [`${field} must be a complete solution-neutral Opportunity formation assessment.`];
+  }
+  const keepsExplorationThread =
+    isRecord(value.result) && value.result.kind === "exploration-thread";
+  const details = validateReasoningTextFields(value, field, ["id", "customer", "situation"]);
+  details.push(
+    ...validateEntryIdList(value.explorationThreadIds, `${field}.explorationThreadIds`, false),
+    ...validateEntryIdList(
+      value.supportingObservationIds,
+      `${field}.supportingObservationIds`,
+      keepsExplorationThread,
+    ),
+    ...validateEntryIdList(
+      value.behavioralProblemSignalObservationIds,
+      `${field}.behavioralProblemSignalObservationIds`,
+      keepsExplorationThread,
+    ),
+  );
+  if (
+    !Array.isArray(value.independentSourceLineages) ||
+    (!keepsExplorationThread && value.independentSourceLineages.length === 0)
+  ) {
+    details.push(`${field}.independentSourceLineages must identify at least one assessed Source Lineage.`);
+  } else {
+    for (const [index, lineage] of value.independentSourceLineages.entries()) {
+      const lineageField = `${field}.independentSourceLineages[${index}]`;
+      if (!isRecord(lineage) || !hasOnlyFields(lineage, ["id", "sourceIds", "rationale"])) {
+        details.push(`${lineageField} must identify one reasoned Source Lineage.`);
+      } else {
+        details.push(...validateReasoningTextFields(lineage, lineageField, ["id", "rationale"]));
+        details.push(...validateEntryIdList(lineage.sourceIds, `${lineageField}.sourceIds`, false));
+      }
+    }
+  }
+  if (
+    !isRecord(value.costlyProblem) ||
+    !hasOnlyFields(value.costlyProblem, ["description", "materialConsequence", "observationIds"])
+  ) {
+    details.push(`${field}.costlyProblem must be specific and evidence-linked.`);
+  } else {
+    details.push(...validateReasoningTextFields(value.costlyProblem, `${field}.costlyProblem`, ["description"]));
+    if (![
+      "lost-money",
+      "wasted-skilled-time",
+      "blocked-revenue",
+      "operational-risk",
+      "compliance-exposure",
+      "workaround-expenditure",
+    ].includes(String(value.costlyProblem.materialConsequence))) {
+      details.push(`${field}.costlyProblem.materialConsequence must identify a material consequence.`);
+    }
+    details.push(
+      ...validateEntryIdList(
+        value.costlyProblem.observationIds,
+        `${field}.costlyProblem.observationIds`,
+        keepsExplorationThread,
+      ),
+    );
+  }
+  if (
+    !isRecord(value.clusterBasis) ||
+    !hasOnlyFields(value.clusterBasis, ["sharedCustomer", "sharedWorkflow", "sharedCostlyConsequence"])
+  ) {
+    details.push(`${field}.clusterBasis must explain the shared customer, workflow, and costly consequence.`);
+  } else {
+    details.push(...validateReasoningTextFields(value.clusterBasis, `${field}.clusterBasis`, [
+      "sharedCustomer",
+      "sharedWorkflow",
+      "sharedCostlyConsequence",
+    ]));
+  }
+  if (!isRecord(value.result) || !isRecord(value.decision)) {
+    details.push(`${field}.result and decision must be complete.`);
+  } else if (value.result.kind === "opportunity") {
+    if (!hasOnlyFields(value.result, ["kind", "opportunityId"]) || typeof value.result.opportunityId !== "string" || value.result.opportunityId.trim() === "") {
+      details.push(`${field}.result must identify the formed Opportunity.`);
+    }
+    if (value.decision.kind !== "opportunity-formation" || value.decision.outcome !== "formed") {
+      details.push(`${field}.decision must record the matching formed outcome.`);
+    }
+  } else if (value.result.kind === "exploration-thread") {
+    if (!hasOnlyFields(value.result, ["kind", "evidenceGaps"]) || !Array.isArray(value.result.evidenceGaps) || value.result.evidenceGaps.length === 0) {
+      details.push(`${field}.result must retain explicit Evidence Gaps.`);
+    } else {
+      for (const [index, gap] of value.result.evidenceGaps.entries()) {
+        details.push(...validateEvidenceGap(gap, `${field}.result.evidenceGaps[${index}]`));
+      }
+    }
+    if (value.decision.kind !== "opportunity-formation" || value.decision.outcome !== "insufficient-evidence") {
+      details.push(`${field}.decision must record the matching insufficient-evidence outcome.`);
+    }
+  } else {
+    details.push(`${field}.result.kind must be opportunity or exploration-thread.`);
+  }
+  details.push(...validateCampaignDecision(value.decision, recordedAt, `${field}.decision`));
+  return details;
+}
+
+function validateRecordOpportunityFormationFields(command: Record<string, unknown>): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "recordedAt");
+  const allocation = command.payload.allocation;
+  if (!isRecord(allocation) || !hasOnlyFields(allocation, ["discoveryReservationIds", "shallowProblemMiningReservationIds"])) {
+    details.push("payload.allocation must classify discovery and shallow problem-mining reservations.");
+  } else {
+    details.push(
+      ...validateEntryIdList(allocation.discoveryReservationIds, "payload.allocation.discoveryReservationIds", false),
+      ...validateEntryIdList(allocation.shallowProblemMiningReservationIds, "payload.allocation.shallowProblemMiningReservationIds", false),
+    );
+  }
+  if (!Array.isArray(command.payload.assessments) || command.payload.assessments.length === 0) {
+    details.push("payload.assessments must contain at least one formation assessment.");
+  } else {
+    for (const [index, assessment] of command.payload.assessments.entries()) {
+      details.push(...validateOpportunityFormationAssessment(assessment, command.payload.recordedAt, `payload.assessments[${index}]`));
+    }
+  }
+  return details;
+}
+
+function validateBreadthGate(value: unknown, recordedAt: unknown, field = "payload.gate"): string[] {
+  if (!isRecord(value) || !hasOnlyFields(value, [
+    "id",
+    "comparisonOpportunityIds",
+    "diminishingReturns",
+    "decisionValuePriorities",
+    "decision",
+  ])) {
+    return [`${field} must contain the complete Breadth Gate evidence.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id"]);
+  details.push(...validateEntryIdList(value.comparisonOpportunityIds, `${field}.comparisonOpportunityIds`, false));
+  if (!Array.isArray(value.diminishingReturns) || value.diminishingReturns.length !== 2) {
+    details.push(`${field}.diminishingReturns must contain exactly two tranches.`);
+  } else {
+    for (const [index, tranche] of value.diminishingReturns.entries()) {
+      if (!isRecord(tranche) || !hasOnlyFields(tranche, ["trancheId", "newOpportunityIds", "rationale"])) {
+        details.push(`${field}.diminishingReturns[${index}] must be complete.`);
+      } else {
+        details.push(...validateReasoningTextFields(tranche, `${field}.diminishingReturns[${index}]`, ["trancheId", "rationale"]));
+        details.push(...validateEntryIdList(tranche.newOpportunityIds, `${field}.diminishingReturns[${index}].newOpportunityIds`, true));
+      }
+    }
+  }
+  if (!Array.isArray(value.decisionValuePriorities) || value.decisionValuePriorities.length === 0) {
+    details.push(`${field}.decisionValuePriorities must contain qualitative decision-changing research.`);
+  } else {
+    for (const [index, priority] of value.decisionValuePriorities.entries()) {
+      const priorityField = `${field}.decisionValuePriorities[${index}]`;
+      if (!isRecord(priority) || !hasOnlyFields(priority, ["id", "researchQuestion", "target", "rationale"])) {
+        details.push(`${priorityField} must be a complete qualitative Decision Value priority.`);
+        continue;
+      }
+      details.push(...validateReasoningTextFields(priority, priorityField, ["id", "researchQuestion", "rationale"]));
+      if (!isRecord(priority.target) || !hasOnlyFields(priority.target, ["kind", "id"]) || !["formation", "gate", "contradiction", "comparison"].includes(String(priority.target.kind))) {
+        details.push(`${priorityField}.target must name a formation, gate, Contradiction, or comparison.`);
+      } else {
+        details.push(...validateReasoningTextFields(priority.target, `${priorityField}.target`, ["id"]));
+      }
+    }
+  }
+  if (isRecord(value.decision) && (value.decision.kind !== "breadth-gate" || value.decision.outcome !== "passed")) {
+    details.push(`${field}.decision must record the passed Breadth Gate.`);
+  }
+  details.push(...validateCampaignDecision(value.decision, recordedAt, `${field}.decision`));
+  return details;
+}
+
+function validatePassBreadthGateFields(command: Record<string, unknown>): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  return [
+    ...validatePublicResearchCommandBase(command.payload, "recordedAt"),
+    ...validateBreadthGate(command.payload.gate, command.payload.recordedAt),
+  ];
+}
+
 function validateResearchApprovalTextList(
   value: unknown,
   field: string,
@@ -2820,6 +3231,9 @@ type AuthoritativeHistoryRebuild = {
   contradictions: Contradiction[];
   corrections: Correction[];
   discoveryTranches: DiscoveryTranche[];
+  opportunityFormations: OpportunityFormation[];
+  breadthGates: BreadthGate[];
+  campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
   researchApprovalResponses: RecordedResearchApprovalResponse[];
@@ -2908,7 +3322,7 @@ function invalidAuthoritativeRecord(sequence: number): never {
   throw new Error(`authoritative record ${sequence} is invalid`);
 }
 
-type ReasoningState = Omit<EvidenceLedger, "campaignId">;
+type ReasoningState = Omit<EvidenceLedger, "campaignId" | "campaignDecisions">;
 
 function invalidatedEvidenceIds(state: ReasoningState): Set<string> {
   const invalidatedIds = new Set(
@@ -3256,6 +3670,328 @@ function applyDiscoveryTranche(
   return undefined;
 }
 
+function opportunityFormationViolation(
+  history: AuthoritativeHistoryRebuild,
+  formation: OpportunityFormation,
+): string | undefined {
+  if (history.intake === undefined || history.discoveryTranches.length === 0) {
+    return "Opportunity formation requires confirmed intake and recorded discovery";
+  }
+  if (history.opportunityFormations.length > 0) {
+    return "Opportunity formation has already been recorded";
+  }
+  const discoveryReservationIds = formation.allocation.discoveryReservationIds;
+  const shallowReservationIds = formation.allocation.shallowProblemMiningReservationIds;
+  if (discoveryReservationIds.length !== shallowReservationIds.length) {
+    return "pre-Breadth-Gate research must split Source units evenly between discovery and shallow problem mining";
+  }
+  const allocatedIds = [...discoveryReservationIds, ...shallowReservationIds];
+  if (new Set(allocatedIds).size !== allocatedIds.length) {
+    return "each research reservation must have exactly one pre-gate allocation";
+  }
+  const settledIds = [...history.settledReservationIds];
+  if (
+    allocatedIds.length !== settledIds.length ||
+    allocatedIds.some((reservationId) => !history.settledReservationIds.has(reservationId))
+  ) {
+    return "every settled ordinary research reservation must be classified exactly once";
+  }
+  const retainedThreads = history.discoveryTranches
+    .flatMap((tranche) => tranche.threads)
+    .filter((thread) => thread.disposition.status === "retained");
+  const retainedThreadsById = new Map(retainedThreads.map((thread) => [thread.id, thread]));
+  const observationsById = new Map(history.observations.map((observation) => [observation.id, observation]));
+  const invalidatedIds = invalidatedEvidenceIds(history);
+  const assessmentIds = new Set<string>();
+  const assessedThreadIds = new Set<string>();
+  const opportunityIds = new Set<string>();
+  const decisionIds = new Set(history.campaignDecisions.map((decision) => decision.id));
+  const reasoningState: ReasoningState = {
+    sources: history.sources,
+    observations: history.observations,
+    sourceLineages: history.sourceLineages,
+    sourceCredibilities: history.sourceCredibilities,
+    sourceFreshnesses: history.sourceFreshnesses,
+    evidenceGaps: [...history.evidenceGaps],
+    assumptions: history.assumptions,
+    inferences: history.inferences,
+    contradictions: history.contradictions,
+    corrections: history.corrections,
+  };
+  for (const assessment of formation.assessments) {
+    if (assessmentIds.has(assessment.id)) {
+      return `Opportunity formation assessment identity ${assessment.id} is duplicated`;
+    }
+    assessmentIds.add(assessment.id);
+    if (decisionIds.has(assessment.decision.id)) {
+      return `Campaign Decision identity ${assessment.decision.id} is already present`;
+    }
+    decisionIds.add(assessment.decision.id);
+    if (assessment.decision.intakeVersion !== history.intake.version) {
+      return `Campaign Decision ${assessment.decision.id} does not use the current Campaign Intake version`;
+    }
+    const unavailableDecisionEvidenceId = assessment.decision.evidenceEntryIds.find(
+      (entryId) => !observationsById.has(entryId) && !history.inferences.some((inference) => inference.id === entryId),
+    );
+    if (unavailableDecisionEvidenceId !== undefined) {
+      return `Campaign Decision ${assessment.decision.id} links unavailable evidence ${unavailableDecisionEvidenceId}`;
+    }
+    for (const threadId of assessment.explorationThreadIds) {
+      if (!retainedThreadsById.has(threadId) || assessedThreadIds.has(threadId)) {
+        return `Opportunity formation links unavailable or already assessed Exploration Thread ${threadId}`;
+      }
+      assessedThreadIds.add(threadId);
+    }
+    const evidenceObservationIds = [
+      ...assessment.supportingObservationIds,
+      ...assessment.behavioralProblemSignalObservationIds,
+      ...assessment.costlyProblem.observationIds,
+    ];
+    const unavailableObservationId = evidenceObservationIds.find(
+      (observationId) => !observationsById.has(observationId) || invalidatedIds.has(observationId),
+    );
+    if (unavailableObservationId !== undefined) {
+      return `Opportunity formation links unavailable Observation ${unavailableObservationId}`;
+    }
+    if (
+      assessment.behavioralProblemSignalObservationIds.some(
+        (observationId) => !assessment.supportingObservationIds.includes(observationId),
+      ) ||
+      assessment.costlyProblem.observationIds.some(
+        (observationId) => !assessment.supportingObservationIds.includes(observationId),
+      )
+    ) {
+      return `Opportunity formation assessment ${assessment.id} must include behavioral and Costly Problem Observations in its supporting evidence`;
+    }
+    const supportingSourceIds = [
+      ...new Set(
+        assessment.supportingObservationIds.map(
+          (observationId) => observationsById.get(observationId)!.sourceId,
+        ),
+      ),
+    ];
+    const assessedLineageIds = assessment.independentSourceLineages.map(
+      (lineage) => lineage.id,
+    );
+    const assessedLineageSourceIds = assessment.independentSourceLineages.flatMap(
+      (lineage) => lineage.sourceIds,
+    );
+    if (
+      new Set(assessedLineageIds).size !== assessedLineageIds.length ||
+      new Set(assessedLineageSourceIds).size !== assessedLineageSourceIds.length ||
+      assessedLineageSourceIds.length !== supportingSourceIds.length ||
+      assessedLineageSourceIds.some((sourceId) => !supportingSourceIds.includes(sourceId))
+    ) {
+      return `Opportunity formation assessment ${assessment.id} must classify every supporting Source into exactly one reasoned Source Lineage`;
+    }
+    const assessedLineageBySourceId = new Map(
+      assessment.independentSourceLineages.flatMap((lineage) =>
+        lineage.sourceIds.map((sourceId) => [sourceId, lineage.id] as const),
+      ),
+    );
+    const correctedEntryIds = new Set(
+      history.corrections.map((correction) => correction.targetEntryId),
+    );
+    const contradictedLineage = history.sourceLineages.find((lineage) => {
+      if (correctedEntryIds.has(lineage.id)) {
+        return false;
+      }
+      const assessedLineageIdsForDependency = new Set(
+        lineage.sourceIds
+          .map((sourceId) => assessedLineageBySourceId.get(sourceId))
+          .filter((lineageId): lineageId is string => lineageId !== undefined),
+      );
+      return assessedLineageIdsForDependency.size > 1;
+    });
+    if (contradictedLineage !== undefined) {
+      return `Opportunity formation assessment ${assessment.id} cannot establish two independent Source Lineages because ${contradictedLineage.id} links supporting Sources as dependent`;
+    }
+    const lineageCount = assessment.independentSourceLineages.length;
+    const hasCompleteEvidence =
+      lineageCount >= 2 && assessment.behavioralProblemSignalObservationIds.length > 0;
+    if (assessment.result.kind === "opportunity") {
+      if (!hasCompleteEvidence) {
+        return `Opportunity ${assessment.result.opportunityId} lacks two independent Source Lineages and a behavioral Problem Signal`;
+      }
+      if (opportunityIds.has(assessment.result.opportunityId)) {
+        return `Opportunity identity ${assessment.result.opportunityId} is duplicated`;
+      }
+      opportunityIds.add(assessment.result.opportunityId);
+    } else {
+      if (hasCompleteEvidence) {
+        return `Assessment ${assessment.id} must form an Opportunity when the complete formation evidence is present`;
+      }
+      for (const gap of assessment.result.evidenceGaps) {
+        if (!gap.affectedDecisionIds.includes(assessment.decision.id)) {
+          return `Evidence Gap ${gap.id} must link its Opportunity formation decision`;
+        }
+      }
+      const invalidGapId = applyReasoningEntries(reasoningState, assessment.result.evidenceGaps);
+      if (invalidGapId !== undefined) {
+        return `Opportunity formation links invalid Evidence Gap ${invalidGapId}`;
+      }
+    }
+  }
+  if (assessedThreadIds.size !== retainedThreads.length) {
+    const unassessedThreadId = retainedThreads.find(
+      (thread) => !assessedThreadIds.has(thread.id),
+    )!.id;
+    return `retained Exploration Thread ${unassessedThreadId} requires an Opportunity formation assessment and explicit Evidence Gaps when unsupported`;
+  }
+  return undefined;
+}
+
+function applyOpportunityFormation(
+  history: AuthoritativeHistoryRebuild,
+  formation: OpportunityFormation,
+): string | undefined {
+  const violation = opportunityFormationViolation(history, formation);
+  if (violation !== undefined) {
+    return violation;
+  }
+  for (const assessment of formation.assessments) {
+    if (assessment.result.kind === "exploration-thread") {
+      history.evidenceGaps.push(...assessment.result.evidenceGaps);
+    }
+    history.campaignDecisions.push(assessment.decision);
+  }
+  history.opportunityFormations.push(formation);
+  return undefined;
+}
+
+function formedOpportunities(history: AuthoritativeHistoryRebuild) {
+  return history.opportunityFormations.flatMap((formation) =>
+    formation.assessments.flatMap((assessment) => {
+      if (assessment.result.kind !== "opportunity") {
+        return [];
+      }
+      return [{
+        id: assessment.result.opportunityId,
+        assessmentId: assessment.id,
+        explorationThreadIds: assessment.explorationThreadIds,
+        customer: assessment.customer,
+        situation: assessment.situation,
+        costlyProblem: assessment.costlyProblem,
+        supportingObservationIds: assessment.supportingObservationIds,
+        behavioralProblemSignalObservationIds: assessment.behavioralProblemSignalObservationIds,
+        independentSourceLineages: assessment.independentSourceLineages.map(
+          (lineage) => lineage.sourceIds,
+        ),
+        decisionId: assessment.decision.id,
+      }];
+    }),
+  );
+}
+
+function breadthGateViolation(
+  history: AuthoritativeHistoryRebuild,
+  gate: BreadthGate,
+): string | undefined {
+  if (history.intake === undefined || history.opportunityFormations.length === 0) {
+    return "Breadth Gate requires recorded Opportunity formation";
+  }
+  if (history.breadthGates.length > 0) {
+    return "Breadth Gate has already passed";
+  }
+  if (history.reservations.size !== history.settledReservationIds.size) {
+    return "Breadth Gate requires every reserved pre-gate Source examination to be settled";
+  }
+  if (gate.decision.intakeVersion !== history.intake.version) {
+    return "Breadth Gate decision does not use the current Campaign Intake version";
+  }
+  const decisionIds = new Set(history.campaignDecisions.map((decision) => decision.id));
+  if (decisionIds.has(gate.decision.id)) {
+    return `Campaign Decision identity ${gate.decision.id} is already present`;
+  }
+  const unavailableDecisionEvidence = gate.decision.evidenceEntryIds.find(
+    (entryId) => !decisionIds.has(entryId) && !history.observations.some((observation) => observation.id === entryId) && !history.inferences.some((inference) => inference.id === entryId),
+  );
+  if (unavailableDecisionEvidence !== undefined) {
+    return `Breadth Gate decision links unavailable evidence ${unavailableDecisionEvidence}`;
+  }
+  const sweeps = history.discoveryTranches.flatMap((tranche) => tranche.sweeps);
+  if (new Set(sweeps.map((sweep) => sweep.sourceFamily.id)).size < history.intake.researchBudget.sourceFamilyMinimum) {
+    return "Breadth Gate lacks the required Source Family diversity";
+  }
+  const opportunities = formedOpportunities(history);
+  const opportunitiesById = new Map(opportunities.map((opportunity) => [opportunity.id, opportunity]));
+  if (gate.comparisonOpportunityIds.length < history.intake.researchBudget.minimumComparisonSet) {
+    return "Breadth Gate lacks the minimum comparison set";
+  }
+  const unavailableOpportunityId = gate.comparisonOpportunityIds.find(
+    (opportunityId) => !opportunitiesById.has(opportunityId),
+  );
+  if (unavailableOpportunityId !== undefined) {
+    return `Breadth Gate links unavailable Opportunity ${unavailableOpportunityId}`;
+  }
+  const latestAllocation = history.opportunityFormations.at(-1)!.allocation;
+  const classifiedReservationIds = [
+    ...latestAllocation.discoveryReservationIds,
+    ...latestAllocation.shallowProblemMiningReservationIds,
+  ];
+  if (
+    classifiedReservationIds.length !== history.settledReservationIds.size ||
+    [...history.settledReservationIds].some(
+      (reservationId) => !classifiedReservationIds.includes(reservationId),
+    )
+  ) {
+    return "Breadth Gate requires every completed pre-gate Source examination to remain in the equal allocation";
+  }
+  const finalTranches = history.discoveryTranches.slice(-2);
+  if (
+    finalTranches.length !== 2 ||
+    gate.diminishingReturns.some(
+      (entry, index) => entry.trancheId !== finalTranches[index]!.id,
+    )
+  ) {
+    return "Breadth Gate must assess the final two consecutive Discovery Tranches";
+  }
+  if (gate.diminishingReturns[1]!.newOpportunityIds.length >= gate.diminishingReturns[0]!.newOpportunityIds.length) {
+    return "the final two Discovery Tranches do not demonstrate diminishing returns";
+  }
+  const reportedOpportunityIds = gate.diminishingReturns.flatMap((entry) => entry.newOpportunityIds);
+  if (
+    new Set(reportedOpportunityIds).size !== reportedOpportunityIds.length ||
+    reportedOpportunityIds.length !== opportunities.length ||
+    reportedOpportunityIds.some((opportunityId) => !opportunitiesById.has(opportunityId))
+  ) {
+    return "diminishing-return evidence must account for every formed Opportunity exactly once";
+  }
+  for (const [index, entry] of gate.diminishingReturns.entries()) {
+    const trancheThreadIds = new Set(finalTranches[index]!.threads.map((thread) => thread.id));
+    const misattributedOpportunityId = entry.newOpportunityIds.find((opportunityId) =>
+      !opportunitiesById.get(opportunityId)!.explorationThreadIds.some((threadId) => trancheThreadIds.has(threadId)),
+    );
+    if (misattributedOpportunityId !== undefined) {
+      return `Opportunity ${misattributedOpportunityId} is attributed to the wrong Discovery Tranche`;
+    }
+  }
+  const threads = history.discoveryTranches.flatMap((tranche) => tranche.threads);
+  const hasException = history.discoveryTranches.some((tranche) => tranche.familiarDomainException !== null);
+  if (!hasException && threads.filter((thread) => thread.familiarDomain).length > Math.floor(threads.length / 3)) {
+    return "Breadth Gate does not comply with the familiar-domain limit";
+  }
+  const ordinaryCap = history.intake.researchBudget.sourceCap - history.intake.researchBudget.adversarialSourceReserve;
+  const usedSourceUnits = [...history.reservations.values()].reduce((total, reservation) => total + reservation.sourceUnits, 0);
+  if (ordinaryCap - usedSourceUnits < gate.comparisonOpportunityIds.length * 2) {
+    return "Breadth Gate lacks sufficient remaining ordinary budget for meaningful deepening and challenge";
+  }
+  return undefined;
+}
+
+function applyBreadthGate(
+  history: AuthoritativeHistoryRebuild,
+  gate: BreadthGate,
+): string | undefined {
+  const violation = breadthGateViolation(history, gate);
+  if (violation !== undefined) {
+    return violation;
+  }
+  history.campaignDecisions.push(gate.decision);
+  history.breadthGates.push(gate);
+  return undefined;
+}
+
 const authoritativeOperationDescriptors = {
   "create-campaign": {
     outcome: "campaign-created",
@@ -3404,6 +4140,52 @@ const authoritativeOperationDescriptors = {
           history,
           outcome.tranche as unknown as DiscoveryTranche,
         ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "record-opportunity-formation": {
+    outcome: "opportunity-formation-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const formation = {
+        allocation: outcome.allocation,
+        assessments: outcome.assessments,
+      };
+      if (
+        history.intake === undefined ||
+        intent.formationId !== (Array.isArray(outcome.assessments) && isRecord(outcome.assessments[0]) ? outcome.assessments[0].id : undefined) ||
+        !isRecord(outcome.allocation) ||
+        !Array.isArray(outcome.assessments) ||
+        outcome.assessments.length === 0 ||
+        validateRecordOpportunityFormationFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            recordedAt: outcome.recordedAt,
+            allocation: outcome.allocation,
+            assessments: outcome.assessments,
+          },
+        }).length > 0 ||
+        applyOpportunityFormation(history, formation as OpportunityFormation) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "pass-breadth-gate": {
+    outcome: "breadth-gate-passed",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        !isRecord(outcome.gate) ||
+        intent.gateId !== outcome.gate.id ||
+        validateBreadthGate(outcome.gate, outcome.recordedAt, "gate").length > 0 ||
+        applyBreadthGate(history, outcome.gate as unknown as BreadthGate) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
       }
@@ -3791,6 +4573,47 @@ function discoveryTrancheRecords(
   });
 }
 
+function opportunityFormationRecords(
+  campaignId: string,
+  command: RecordOpportunityFormationCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-opportunity-formation",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      formationId: command.payload.assessments[0]!.id,
+    },
+    outcome: {
+      allocation: command.payload.allocation,
+      assessments: command.payload.assessments,
+    },
+  });
+}
+
+function breadthGateRecords(
+  campaignId: string,
+  command: PassBreadthGateCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "pass-breadth-gate",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      gateId: command.payload.gate.id,
+    },
+    outcome: { gate: command.payload.gate },
+  });
+}
+
 function researchApprovalRequestRecords(
   campaignId: string,
   command: RequestResearchApprovalCommand,
@@ -3972,6 +4795,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     contradictions: [],
     corrections: [],
     discoveryTranches: [],
+    opportunityFormations: [],
+    breadthGates: [],
+    campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
     researchApprovalResponses: [],
@@ -4053,6 +4879,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     contradictions,
     corrections,
     discoveryTranches,
+    opportunityFormations,
+    breadthGates,
+    campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
     researchApprovalResponses,
@@ -4100,7 +4929,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     assumptions.length > 0 ||
     inferences.length > 0 ||
     contradictions.length > 0 ||
-    corrections.length > 0
+    corrections.length > 0 ||
+    campaignDecisions.length > 0
   ) {
     const correctedEntryIds = new Set(
       corrections.map((correction) => correction.targetEntryId),
@@ -4125,7 +4955,8 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       assumptions.length +
       inferences.length +
       contradictions.length +
-      corrections.length;
+      corrections.length +
+      campaignDecisions.length;
     workView.completedWork.push(
       `${reasoningEntryCount} reasoning entr${reasoningEntryCount === 1 ? "y" : "ies"} recorded`,
     );
@@ -4167,6 +4998,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         )
         .map((contradiction) => contradiction.id),
       correctionIds: corrections.map((correction) => correction.id),
+      ...(campaignDecisions.length > 0
+        ? { campaignDecisionIds: campaignDecisions.map((decision) => decision.id) }
+        : {}),
     };
   }
   if (discoveryTranches.length > 0) {
@@ -4189,6 +5023,19 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       (total, tranche) => total + tranche.noveltyProbeSlots,
       0,
     );
+    const formationGapIdsByThread = new Map<string, string[]>();
+    for (const formation of opportunityFormations) {
+      for (const assessment of formation.assessments) {
+        if (assessment.result.kind === "exploration-thread") {
+          for (const threadId of assessment.explorationThreadIds) {
+            formationGapIdsByThread.set(
+              threadId,
+              assessment.result.evidenceGaps.map((gap) => gap.id),
+            );
+          }
+        }
+      }
+    }
     workView.phase = "discovery-active";
     workView.completedWork.push(
       `${discoveryTranches.length} Discovery Tranche${discoveryTranches.length === 1 ? "" : "s"} recorded`,
@@ -4233,6 +5080,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         evidenceCredit:
           thread.origin.kind === "source-led" ? "source-led" : "none",
         comparisonBonus: "none",
+        ...(formationGapIdsByThread.has(thread.id)
+          ? { evidenceGapIds: formationGapIdsByThread.get(thread.id)! }
+          : {}),
       })),
       droppedThreads: droppedThreads.map((thread) => ({
         id: thread.id,
@@ -4243,6 +5093,64 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         familiarDomain: thread.familiarDomain,
         rationale: thread.disposition.rationale,
       })),
+    };
+  }
+  if (opportunityFormations.length > 0) {
+    workView.phase = "opportunity-formation";
+    workView.completedWork.push(
+      `${opportunityFormations.flatMap((formation) => formation.assessments).length} Opportunity formation assessments recorded`,
+    );
+    workView.nextPermittedActions = [
+      "reserve-public-research",
+      "record-evidence-reasoning",
+      "record-discovery-tranche",
+      "pass-breadth-gate",
+    ];
+    workView.opportunities = formedOpportunities(authoritativeHistory);
+    workView.researchAllocation = {
+      phase: "pre-breadth-gate",
+      discoveryShare: 0.5,
+      shallowProblemMiningShare: 0.5,
+      adversarialSourceUnitsReserved: intake!.researchBudget.adversarialSourceReserve,
+    };
+  }
+  if (breadthGates.length > 0) {
+    const gate = breadthGates.at(-1)!;
+    const ordinarySourceCap =
+      intake!.researchBudget.sourceCap - intake!.researchBudget.adversarialSourceReserve;
+    const usedSourceUnits = [...reservations.values()].reduce(
+      (total, reservation) => total + reservation.sourceUnits,
+      0,
+    );
+    workView.phase = "opportunity-deepening";
+    workView.completedWork.push(`Breadth Gate ${gate.id} passed`);
+    workView.nextPermittedActions = [
+      "reserve-public-research",
+      "record-evidence-reasoning",
+      "evaluate-opportunity-gates",
+    ];
+    workView.researchAllocation = {
+      phase: "post-breadth-gate",
+      deepeningShare: 0.8,
+      openWorldDiscoveryShare: 0.2,
+      adversarialSourceUnitsReserved: intake!.researchBudget.adversarialSourceReserve,
+    };
+    workView.breadthGate = {
+      id: gate.id,
+      status: "passed",
+      sourceFamilyCount: new Set(
+        discoveryTranches.flatMap((tranche) =>
+          tranche.sweeps.map((sweep) => sweep.sourceFamily.id),
+        ),
+      ).size,
+      sourceFamilyMinimum: intake!.researchBudget.sourceFamilyMinimum,
+      comparisonOpportunityIds: gate.comparisonOpportunityIds,
+      diminishingReturnTrancheIds: gate.diminishingReturns.map(
+        (entry) => entry.trancheId,
+      ),
+      remainingOrdinarySourceUnits: ordinarySourceCap - usedSourceUnits,
+      decisionValuePriorities: gate.decisionValuePriorities,
+      decisionId: gate.decision.id,
     };
   }
   const pendingDecision = activeResearchApprovalDecision({
@@ -4336,6 +5244,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     inferences,
     contradictions,
     corrections,
+    campaignDecisions,
   };
   const researchBudget: ResearchBudgetView | undefined =
     intake === undefined
@@ -4687,6 +5596,7 @@ function evidenceEntriesById(evidenceLedger: EvidenceLedger) {
       ...evidenceLedger.inferences,
       ...evidenceLedger.contradictions,
       ...evidenceLedger.corrections,
+      ...evidenceLedger.campaignDecisions,
     ].map((entry) => [entry.id, entry] as const),
   ]);
 }
@@ -4740,6 +5650,8 @@ type CoordinatorCommand =
   | RecordPublicResearchObservationCommand
   | RecordEvidenceReasoningCommand
   | RecordDiscoveryTrancheCommand
+  | RecordOpportunityFormationCommand
+  | PassBreadthGateCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -6089,6 +7001,176 @@ async function recordDiscoveryTranche(
   });
 }
 
+async function recordOpportunityFormation(
+  command: RecordOpportunityFormationCommand,
+  currentTime: string,
+) {
+  const result = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    assessments: command.payload.assessments,
+    workView: campaign.workView,
+    evidenceLedger: campaign.evidenceLedger,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction: "Do not record Opportunity formation concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Opportunity formation request identity was already used with different input.",
+      action: "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Opportunity formation could not be recorded against valid authoritative Campaign history.",
+      action: "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type === authoritativeOperationDescriptors["record-opportunity-formation"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.assessments) === JSON.stringify(command.payload.assessments),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.authoritativeHistory.discoveryTranches.length === 0
+        ? {
+            code: "SVS-OPPORTUNITY-FORMATION-NOT-AVAILABLE",
+            message: "Opportunity formation requires recorded discovery and cited evidence.",
+            action: "Record bounded Discovery Tranches and shallow problem-mining Sources first.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Opportunity formation requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before recording formation.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const formation = {
+        allocation: command.payload.allocation,
+        assessments: command.payload.assessments,
+      };
+      const violation = opportunityFormationViolation(
+        rebuiltCampaign.authoritativeHistory,
+        formation,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-OPPORTUNITY-FORMATION-INVARIANT-VIOLATION",
+            message: `Opportunity formation violates a campaign invariant: ${violation}.`,
+            action: "Preserve Exploration Threads unless the complete independent behavioral evidence rule is satisfied, and correct the pre-gate allocation or evidence links before retrying.",
+          };
+    },
+    records({ before }) {
+      return opportunityFormationRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
+async function passBreadthGate(
+  command: PassBreadthGateCommand,
+  currentTime: string,
+) {
+  const result = (passed: boolean, campaign: LoadedCampaign) => ({
+    passed,
+    gate: command.payload.gate,
+    workView: campaign.workView,
+    evidenceLedger: campaign.evidenceLedger,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction: "Do not pass the Breadth Gate concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Breadth Gate request identity was already used with different input.",
+      action: "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Breadth Gate could not be evaluated against valid authoritative Campaign history.",
+      action: "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type === authoritativeOperationDescriptors["pass-breadth-gate"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.gate) === JSON.stringify(command.payload.gate),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.authoritativeHistory.opportunityFormations.length === 0
+        ? {
+            code: "SVS-BREADTH-GATE-NOT-AVAILABLE",
+            message: "Breadth Gate requires recorded Opportunity formation.",
+            action: "Assess the retained Exploration Threads before attempting to narrow research.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Breadth Gate requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before passing the gate.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const violation = breadthGateViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.gate,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-BREADTH-GATE-INVARIANT-VIOLATION",
+            message: `Breadth Gate violates a campaign invariant: ${violation}.`,
+            action: "Continue broad discovery or shallow mining until every diversity, comparison, diminishing-return, familiarity, and remaining-budget condition is satisfied.",
+          };
+    },
+    records({ before }) {
+      return breadthGateRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
 async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -6292,6 +7374,8 @@ export async function executeCommand(
       "recordPublicResearchObservation",
       "recordEvidenceReasoning",
       "recordDiscoveryTranche",
+      "recordOpportunityFormation",
+      "passBreadthGate",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -6527,6 +7611,56 @@ export async function executeCommand(
     }
     return recordDiscoveryTranche(
       command as unknown as RecordDiscoveryTrancheCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordOpportunityFormation") {
+    const invalidFields = validateRecordOpportunityFormationFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-OPPORTUNITY-FORMATION-INVALID",
+          message: "Opportunity formation is invalid.",
+          action: "Correct the solution-neutral clusters, evidence links, explicit gaps, Campaign Decisions, or equal pre-gate allocation before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordOpportunityFormation(
+      command as unknown as RecordOpportunityFormationCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "passBreadthGate") {
+    const invalidFields = validatePassBreadthGateFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-BREADTH-GATE-INVALID",
+          message: "Breadth Gate evidence is invalid.",
+          action: "Correct the comparison set, diminishing-return evidence, Decision Value priorities, or Campaign Decision before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return passBreadthGate(
+      command as unknown as PassBreadthGateCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

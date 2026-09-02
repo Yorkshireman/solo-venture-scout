@@ -147,6 +147,28 @@ test("packaged Scout runs bounded source-led discovery without familiar-domain b
   assert.match(reference, /"kind": "novelty-probe"/);
 });
 
+test("packaged Scout forms evidence-backed Opportunities and narrows only through the Breadth Gate", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-opportunity-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(instructions, /specific customer.+specific situation.+Costly Problem/is);
+  assert.match(instructions, /two independent Source Lineages.+behavioral Problem Signal/is);
+  assert.match(instructions, /customer.+workflow.+costly consequence.+not.+solution/is);
+  assert.match(instructions, /Exploration Thread.+explicit Evidence Gaps/is);
+  assert.match(instructions, /before.+Breadth Gate.+evenly.+Discovery Sweeps.+shallow problem mining/is);
+  assert.match(instructions, /Breadth Gate.+Source Famil.+minimum comparison set.+two diminishing-return tranches.+familiar/is);
+  assert.match(instructions, /after.+Breadth Gate.+eighty percent.+deepening.+twenty percent.+open-world discovery/is);
+  assert.match(instructions, /Decision Value.+formation.+gate.+Contradiction.+comparison/is);
+  assert.match(instructions, /final adversarial.+reserved.+ordinary research/is);
+  assert.match(reference, /"command": "recordOpportunityFormation"/);
+  assert.match(reference, /"command": "passBreadthGate"/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

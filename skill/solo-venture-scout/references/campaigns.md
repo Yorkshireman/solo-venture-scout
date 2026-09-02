@@ -681,6 +681,125 @@ statement and include a rationale; free-form familiarity claims are insufficient
 Work View reports cumulative coverage, Source Families, reserved allowances, the bias
 count and exception, and separate retained and dropped thread lists.
 
+## Record Opportunity Formation
+
+After equal pre-gate discovery and shallow problem mining, assess evidence clusters in
+one append-only operation:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-opportunity-formation-stable-request-id",
+  "command": "recordOpportunityFormation",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T10:30:00.000Z",
+    "allocation": {
+      "discoveryReservationIds": ["stable-discovery-reservation-1"],
+      "shallowProblemMiningReservationIds": ["stable-shallow-reservation-1"]
+    },
+    "assessments": [{
+      "id": "stable-formation-assessment-id",
+      "explorationThreadIds": ["stable-source-led-thread-id"],
+      "customer": "Independent dispatch coordinators",
+      "situation": "Assigning urgent field work across changing schedules",
+      "costlyProblem": {
+        "description": "Repeated reconciliation diverts skilled time from paid work.",
+        "materialConsequence": "wasted-skilled-time",
+        "observationIds": ["stable-workaround-observation-id"]
+      },
+      "clusterBasis": {
+        "sharedCustomer": "The evidence concerns independent dispatch coordinators.",
+        "sharedWorkflow": "The evidence concerns urgent work assignment.",
+        "sharedCostlyConsequence": "The evidence concerns recurring skilled-time loss."
+      },
+      "supportingObservationIds": ["stable-workaround-observation-id", "stable-independent-observation-id"],
+      "behavioralProblemSignalObservationIds": ["stable-workaround-observation-id"],
+      "independentSourceLineages": [
+        { "id": "stable-lineage-1", "sourceIds": ["stable-workflow-source-id"], "rationale": "The workflow publisher originated this evidence." },
+        { "id": "stable-lineage-2", "sourceIds": ["stable-study-source-id"], "rationale": "The separate research group originated this study." }
+      ],
+      "result": { "kind": "opportunity", "opportunityId": "stable-opportunity-id" },
+      "decision": {
+        "type": "campaign-decision",
+        "id": "stable-formation-decision-id",
+        "kind": "opportunity-formation",
+        "outcome": "formed",
+        "intakeVersion": 1,
+        "applicableRule": "Require a specific customer, situation, Costly Problem, behavioral Problem Signal, and two independent Source Lineages.",
+        "evidenceEntryIds": ["stable-workaround-observation-id", "stable-independent-observation-id"],
+        "rationale": "The complete formation rule is supported.",
+        "confidence": { "level": "medium", "limitingFactors": ["Public research does not validate demand."] },
+        "limitations": ["Buyer economics remain untested."],
+        "decidedAt": "2026-08-31T10:30:00.000Z"
+      }
+    }]
+  }
+}
+```
+
+Assess each supporting Source into an explicit, reasoned lineage. The kernel rejects
+lineage groups contradicted by dependency relationships in the Evidence Ledger;
+Sources connected by a recorded dependency count as one lineage. Every settled
+ordinary reservation appears exactly once in `allocation`, and the lists contain equal
+Source units. An insufficient assessment uses result kind `exploration-thread`,
+decision outcome `insufficient-evidence`, and one or more complete open Evidence Gaps
+instead of an `opportunityId`. The batch must assess every retained Exploration Thread,
+so no unsupported thread can lose its explicit Evidence Gaps during narrowing.
+
+## Pass the Breadth Gate
+
+After forming the minimum comparison set, record the evidence for narrowing:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "pass-breadth-gate-stable-request-id",
+  "command": "passBreadthGate",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T10:35:00.000Z",
+    "gate": {
+      "id": "stable-breadth-gate-id",
+      "comparisonOpportunityIds": ["stable-opportunity-1", "stable-opportunity-2"],
+      "diminishingReturns": [
+        { "trancheId": "stable-tranche-1", "newOpportunityIds": ["stable-opportunity-1", "stable-opportunity-2"], "rationale": "The tranche formed two Opportunities." },
+        { "trancheId": "stable-tranche-2", "newOpportunityIds": [], "rationale": "The later tranche formed no additional Opportunity." }
+      ],
+      "decisionValuePriorities": [{
+        "id": "stable-priority-id",
+        "researchQuestion": "Can buyer economics change the next qualification gate?",
+        "target": { "kind": "gate", "id": "buyer-economics" },
+        "rationale": "The answer can change eligibility."
+      }],
+      "decision": {
+        "type": "campaign-decision",
+        "id": "stable-breadth-gate-decision-id",
+        "kind": "breadth-gate",
+        "outcome": "passed",
+        "intakeVersion": 1,
+        "applicableRule": "Require diversity, comparison, diminishing returns, familiarity compliance, and remaining budget.",
+        "evidenceEntryIds": ["stable-formation-decision-id"],
+        "rationale": "The complete Breadth Gate is satisfied.",
+        "confidence": { "level": "medium", "limitingFactors": ["Open-world discovery remains incomplete."] },
+        "limitations": ["Passing does not imply market exhaustion."],
+        "decidedAt": "2026-08-31T10:35:00.000Z"
+      }
+    }
+  }
+}
+```
+
+The tranche entries are consecutive and the later tranche must form fewer new
+Opportunities. The kernel derives diversity, familiarity, and remaining budget from
+authoritative history. Remaining ordinary capacity must include at least two Source
+units for every Opportunity in the comparison set, while the separate adversarial
+reserve remains untouched. Passing changes the Work View allocation from equal discovery
+and shallow problem mining to eighty percent deepening and twenty percent open-world
+discovery. The adversarial reserve remains outside both allocations.
+
 ## Record Research Expenditure
 
 After an approved paid action is actually charged, record its budget effect:
