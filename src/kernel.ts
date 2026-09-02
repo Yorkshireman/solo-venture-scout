@@ -334,6 +334,148 @@ type RecordEvidenceReasoningCommand = {
   };
 };
 
+type ResearchApprovalRequest = {
+  id: string;
+  access: "restricted" | "paid" | "restricted-and-paid";
+  action: string;
+  purpose: string;
+  source: {
+    id: string;
+    description: string;
+    url: string;
+  };
+  accessMethod: string;
+  data: {
+    accessed: string[];
+    retained: string[];
+  };
+  externalEffects: string[];
+  maximumCost: { amount: number; currency: string };
+  risks: string[];
+  duration: { startsAt: string; expiresAt: string };
+  alternatives: string[];
+  lawfulActivity: true;
+  externalValidationAction: false;
+};
+
+type PendingResearchApprovalDecision = {
+  id: string;
+  type: "research-approval";
+  requestedAt: string;
+  request: ResearchApprovalRequest;
+};
+
+type RequestResearchApprovalCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "requestResearchApproval";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    requestedAt: string;
+    request: ResearchApprovalRequest;
+  };
+};
+
+type ResearchApprovalInformation = {
+  id: string;
+  question: string;
+  explanation: string;
+};
+
+type RecordedResearchApprovalInformation = ResearchApprovalInformation & {
+  decisionId: string;
+  recordedAt: string;
+};
+
+type RecordResearchApprovalInformationCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordResearchApprovalInformation";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    decisionId: string;
+    information: ResearchApprovalInformation;
+  };
+};
+
+type ResearchApproval = {
+  id: string;
+  decisionId: string;
+  approvedAt: string;
+  scope: ResearchApprovalRequest;
+};
+
+type RecordedResearchApprovalResponse = {
+  decisionId: string;
+  respondedAt: string;
+  response: ResearchApprovalResponse;
+};
+
+type ApproveResearchResponse = {
+  kind: "approve";
+  approval: {
+    id: string;
+    explicitlyApproved: true;
+    scope: ResearchApprovalRequest;
+  };
+};
+
+type RefuseResearchResponse = {
+  kind: "refuse";
+  refusal: {
+    id: string;
+    explicitlyRefused: true;
+    rationale: string;
+    evidenceGap: EvidenceGap;
+  };
+};
+
+type ResearchApprovalResponse =
+  | ApproveResearchResponse
+  | RefuseResearchResponse;
+
+type RespondResearchApprovalCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "respondResearchApproval";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    respondedAt: string;
+    decisionId: string;
+    response: ResearchApprovalResponse;
+  };
+};
+
+type ResearchExpenditure = {
+  id: string;
+  approvalId: string;
+  approvalDecisionId: string;
+  sourceId: string;
+  purpose: string;
+  amount: number;
+  currency: string;
+  incurredAt: string;
+};
+
+type RecordResearchExpenditureCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordResearchExpenditure";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    incurredAt: string;
+    expenditure: Omit<
+      ResearchExpenditure,
+      "approvalDecisionId" | "incurredAt"
+    >;
+  };
+};
+
 type ResearchBudgetView = {
   sourceCap: number;
   adversarialSourceReserve: number;
@@ -341,6 +483,9 @@ type ResearchBudgetView = {
   reservedSourceUnits: number;
   settledSourceUnits: number;
   remainingOrdinarySourceUnits: number;
+  paidSpendCap?: { amount: number; currency: string };
+  recordedPaidSpend?: { amount: number; currency: string };
+  remainingPaidSpend?: { amount: number; currency: string };
 };
 
 type EvidenceLedger = {
@@ -369,7 +514,15 @@ type WorkView = {
     | "campaign-created"
     | "campaign-intake-confirmed"
     | "public-research-active";
-  pause: null;
+  pause:
+    | null
+    | {
+        reason: "pending-decision";
+        pendingDecisionId: string;
+        decisionType: "research-approval";
+        requestedAction: string;
+        resumable: true;
+      };
   completedWork: string[];
   nextPermittedActions: string[];
   publicResearchAvailable: boolean;
@@ -400,7 +553,11 @@ type AuthoritativeOperation =
   | "confirm-campaign-intake"
   | "reserve-public-research"
   | "record-public-research-observation"
-  | "record-evidence-reasoning";
+  | "record-evidence-reasoning"
+  | "request-research-approval"
+  | "record-research-approval-information"
+  | "respond-research-approval"
+  | "record-research-expenditure";
 
 type CampaignOperation = {
   campaignId: string;
@@ -917,7 +1074,7 @@ function validateConfirmCampaignIntakeFields(
 
 function validatePublicResearchCommandBase(
   payload: Record<string, unknown>,
-  instantField: "reservedAt" | "recordedAt",
+  instantField: "reservedAt" | "recordedAt" | "requestedAt" | "respondedAt" | "incurredAt",
 ): string[] {
   const details: string[] = [];
   for (const field of ["campaignPath", "coordinatorId"] as const) {
@@ -1587,6 +1744,359 @@ function validateRecordEvidenceReasoningFields(
   return details;
 }
 
+function validateResearchApprovalTextList(
+  value: unknown,
+  field: string,
+  allowEmpty: boolean,
+): string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    return [`${field} must be ${allowEmpty ? "an" : "a non-empty"} array.`];
+  }
+  const details: string[] = [];
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "string" || item.trim() === "") {
+      details.push(`${field}[${index}] must be a non-empty string.`);
+    }
+    details.push(...validatePersistableText(item, `${field}[${index}]`));
+  }
+  return details;
+}
+
+function validateResearchApprovalRequest(
+  value: unknown,
+  requestedAt: unknown,
+  field = "payload.request",
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "id",
+      "access",
+      "action",
+      "purpose",
+      "source",
+      "accessMethod",
+      "data",
+      "externalEffects",
+      "maximumCost",
+      "risks",
+      "duration",
+      "alternatives",
+      "lawfulActivity",
+      "externalValidationAction",
+    ])
+  ) {
+    return [`${field} must contain the complete scoped Research Approval request.`];
+  }
+  const details: string[] = [];
+  for (const textField of ["id", "action", "purpose", "accessMethod"] as const) {
+    if (typeof value[textField] !== "string" || value[textField].trim() === "") {
+      details.push(`${field}.${textField} must be a non-empty string.`);
+    }
+    details.push(
+      ...validatePersistableText(value[textField], `${field}.${textField}`),
+    );
+  }
+  if (!( ["restricted", "paid", "restricted-and-paid"] as unknown[]).includes(value.access)) {
+    details.push(`${field}.access must be restricted, paid, or restricted-and-paid.`);
+  }
+  if (
+    !isRecord(value.source) ||
+    !hasOnlyFields(value.source, ["id", "description", "url"])
+  ) {
+    details.push(`${field}.source must identify id, description, and URL.`);
+  } else {
+    for (const sourceField of ["id", "description"] as const) {
+      if (
+        typeof value.source[sourceField] !== "string" ||
+        value.source[sourceField].trim() === ""
+      ) {
+        details.push(`${field}.source.${sourceField} must be a non-empty string.`);
+      }
+      details.push(
+        ...validatePersistableText(
+          value.source[sourceField],
+          `${field}.source.${sourceField}`,
+        ),
+      );
+    }
+    if (typeof value.source.url !== "string") {
+      details.push(`${field}.source.url must be an HTTP or HTTPS URL without credentials.`);
+    } else {
+      try {
+        const sourceUrl = new URL(value.source.url);
+        if (
+          !["http:", "https:"].includes(sourceUrl.protocol) ||
+          sourceUrl.username !== "" ||
+          sourceUrl.password !== "" ||
+          [...sourceUrl.searchParams.keys()].some((name) =>
+            /^(?:password|secret|token|access_token|api_key|authorization|session)$/i.test(name),
+          )
+        ) {
+          details.push(`${field}.source.url must be an HTTP or HTTPS URL without credentials.`);
+        }
+      } catch {
+        details.push(`${field}.source.url must be a valid HTTP or HTTPS URL.`);
+      }
+    }
+  }
+  if (!isRecord(value.data) || !hasOnlyFields(value.data, ["accessed", "retained"])) {
+    details.push(`${field}.data must state accessed and retained data.`);
+  } else {
+    details.push(
+      ...validateResearchApprovalTextList(
+        value.data.accessed,
+        `${field}.data.accessed`,
+        false,
+      ),
+      ...validateResearchApprovalTextList(
+        value.data.retained,
+        `${field}.data.retained`,
+        true,
+      ),
+    );
+  }
+  details.push(
+    ...validateResearchApprovalTextList(
+      value.externalEffects,
+      `${field}.externalEffects`,
+      true,
+    ),
+    ...validateResearchApprovalTextList(value.risks, `${field}.risks`, false),
+    ...validateResearchApprovalTextList(
+      value.alternatives,
+      `${field}.alternatives`,
+      false,
+    ),
+  );
+  if (
+    !isRecord(value.maximumCost) ||
+    !hasOnlyFields(value.maximumCost, ["amount", "currency"]) ||
+    typeof value.maximumCost.amount !== "number" ||
+    !Number.isFinite(value.maximumCost.amount) ||
+    value.maximumCost.amount < 0 ||
+    typeof value.maximumCost.currency !== "string" ||
+    value.maximumCost.currency.trim() === ""
+  ) {
+    details.push(`${field}.maximumCost must state a non-negative amount and currency.`);
+  } else if (
+    (value.access === "paid" || value.access === "restricted-and-paid") &&
+    value.maximumCost.amount <= 0
+  ) {
+    details.push(`${field}.maximumCost.amount must be positive for paid access.`);
+  } else if (value.access === "restricted" && value.maximumCost.amount !== 0) {
+    details.push(`${field}.maximumCost.amount must be zero for restricted-only access.`);
+  }
+  if (
+    !isRecord(value.duration) ||
+    !hasOnlyFields(value.duration, ["startsAt", "expiresAt"]) ||
+    !isIsoInstant(value.duration.startsAt) ||
+    !isIsoInstant(value.duration.expiresAt) ||
+    value.duration.expiresAt <= value.duration.startsAt
+  ) {
+    details.push(`${field}.duration must have increasing ISO 8601 UTC startsAt and expiresAt instants.`);
+  } else if (isIsoInstant(requestedAt) && value.duration.startsAt < requestedAt) {
+    details.push(`${field}.duration.startsAt cannot predate payload.requestedAt.`);
+  }
+  if (value.lawfulActivity !== true) {
+    details.push(`${field}.lawfulActivity must be true; approval cannot authorize unlawful activity.`);
+  }
+  if (value.externalValidationAction !== false) {
+    details.push(`${field}.externalValidationAction must be false; Research Approval cannot authorize an External Validation Action.`);
+  }
+  return details;
+}
+
+function validateRequestResearchApprovalFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  return [
+    ...validatePublicResearchCommandBase(command.payload, "requestedAt"),
+    ...validateResearchApprovalRequest(
+      command.payload.request,
+      command.payload.requestedAt,
+    ),
+  ];
+}
+
+function validateRecordResearchApprovalInformationFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "recordedAt",
+  );
+  if (
+    typeof command.payload.decisionId !== "string" ||
+    command.payload.decisionId.trim() === ""
+  ) {
+    details.push("payload.decisionId must be a non-empty string.");
+  }
+  const information = command.payload.information;
+  if (
+    !isRecord(information) ||
+    !hasOnlyFields(information, ["id", "question", "explanation"])
+  ) {
+    details.push("payload.information must contain id, question, and explanation.");
+  } else {
+    for (const field of ["id", "question", "explanation"] as const) {
+      if (
+        typeof information[field] !== "string" ||
+        information[field].trim() === ""
+      ) {
+        details.push(`payload.information.${field} must be a non-empty string.`);
+      }
+      details.push(
+        ...validatePersistableText(
+          information[field],
+          `payload.information.${field}`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+function validateRespondResearchApprovalFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "respondedAt",
+  );
+  if (
+    typeof command.payload.decisionId !== "string" ||
+    command.payload.decisionId.trim() === ""
+  ) {
+    details.push("payload.decisionId must be a non-empty string.");
+  }
+  const response = command.payload.response;
+  if (
+    isRecord(response) &&
+    response.kind === "refuse" &&
+    hasOnlyFields(response, ["kind", "refusal"])
+  ) {
+    const refusal = response.refusal;
+    if (
+      !isRecord(refusal) ||
+      !hasOnlyFields(refusal, [
+        "id",
+        "explicitlyRefused",
+        "rationale",
+        "evidenceGap",
+      ])
+    ) {
+      details.push("payload.response.refusal must contain the complete explicit refusal and resulting Evidence Gap.");
+      return details;
+    }
+    for (const field of ["id", "rationale"] as const) {
+      if (typeof refusal[field] !== "string" || refusal[field].trim() === "") {
+        details.push(`payload.response.refusal.${field} must be a non-empty string.`);
+      }
+      details.push(
+        ...validatePersistableText(
+          refusal[field],
+          `payload.response.refusal.${field}`,
+        ),
+      );
+    }
+    if (refusal.explicitlyRefused !== true) {
+      details.push("payload.response.refusal.explicitlyRefused must be true.");
+    }
+    details.push(
+      ...validateEvidenceGap(
+        refusal.evidenceGap,
+        "payload.response.refusal.evidenceGap",
+      ),
+    );
+    return details;
+  }
+  if (
+    !isRecord(response) ||
+    !hasOnlyFields(response, ["kind", "approval"]) ||
+    response.kind !== "approve" ||
+    !isRecord(response.approval) ||
+    !hasOnlyFields(response.approval, ["id", "explicitlyApproved", "scope"])
+  ) {
+    details.push("payload.response must be one complete explicit approval.");
+    return details;
+  }
+  if (
+    typeof response.approval.id !== "string" ||
+    response.approval.id.trim() === ""
+  ) {
+    details.push("payload.response.approval.id must be a non-empty string.");
+  }
+  if (response.approval.explicitlyApproved !== true) {
+    details.push("payload.response.approval.explicitlyApproved must be true.");
+  }
+  details.push(
+    ...validateResearchApprovalRequest(
+      response.approval.scope,
+      isRecord(response.approval.scope) && isRecord(response.approval.scope.duration)
+        ? response.approval.scope.duration.startsAt
+        : undefined,
+      "payload.response.approval.scope",
+    ),
+  );
+  return details;
+}
+
+function validateRecordResearchExpenditureFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "incurredAt",
+  );
+  const expenditure = command.payload.expenditure;
+  if (
+    !isRecord(expenditure) ||
+    !hasOnlyFields(expenditure, [
+      "id",
+      "approvalId",
+      "sourceId",
+      "purpose",
+      "amount",
+      "currency",
+    ])
+  ) {
+    details.push("payload.expenditure must contain only identity, approval provenance, Source, purpose, amount, and currency.");
+    return details;
+  }
+  for (const field of ["id", "approvalId", "sourceId", "purpose", "currency"] as const) {
+    if (typeof expenditure[field] !== "string" || expenditure[field].trim() === "") {
+      details.push(`payload.expenditure.${field} must be a non-empty string.`);
+    }
+    details.push(
+      ...validatePersistableText(
+        expenditure[field],
+        `payload.expenditure.${field}`,
+      ),
+    );
+  }
+  if (
+    typeof expenditure.amount !== "number" ||
+    !Number.isFinite(expenditure.amount) ||
+    expenditure.amount <= 0
+  ) {
+    details.push("payload.expenditure.amount must be a positive finite number.");
+  }
+  return details;
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await lstat(targetPath);
@@ -1716,6 +2226,11 @@ type AuthoritativeHistoryRebuild = {
   inferences: Inference[];
   contradictions: Contradiction[];
   corrections: Correction[];
+  researchApprovalDecisions: PendingResearchApprovalDecision[];
+  researchApprovalInformation: RecordedResearchApprovalInformation[];
+  researchApprovalResponses: RecordedResearchApprovalResponse[];
+  researchApprovals: ResearchApproval[];
+  researchExpenditures: ResearchExpenditure[];
 };
 
 type AuthoritativeRecordPair = {
@@ -1731,6 +2246,20 @@ type AuthoritativeOperationDescriptor = {
   establishesLease: boolean;
   validateAndApply: (pair: AuthoritativeRecordPair) => void;
 };
+
+function activeResearchApprovalDecision(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    "researchApprovalDecisions" | "researchApprovalResponses"
+  >,
+) {
+  return history.researchApprovalDecisions.find(
+    (decision) =>
+      !history.researchApprovalResponses.some(
+        (response) => response.decisionId === decision.id,
+      ),
+  );
+}
 
 function invalidAuthoritativeRecord(sequence: number): never {
   throw new Error(`authoritative record ${sequence} is invalid`);
@@ -2041,6 +2570,205 @@ const authoritativeOperationDescriptors = {
       }
     },
   },
+  "request-research-approval": {
+    outcome: "research-approval-requested",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const pendingDecision = isRecord(outcome.pendingDecision)
+        ? outcome.pendingDecision
+        : {};
+      if (
+        history.intake === undefined ||
+        typeof outcome.recordedAt !== "string" ||
+        outcome.recordedAt < history.intake.confirmedAt ||
+        !isRecord(outcome.pendingDecision) ||
+        pendingDecision.type !== "research-approval" ||
+        pendingDecision.id !== intent.pendingDecisionId ||
+        pendingDecision.requestedAt !== outcome.recordedAt ||
+        validateResearchApprovalRequest(
+          pendingDecision.request,
+          outcome.recordedAt,
+          "pendingDecision.request",
+        ).length > 0 ||
+        history.researchApprovalDecisions.some(
+          (decision) => decision.id === pendingDecision.id,
+        ) ||
+        activeResearchApprovalDecision(history) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.researchApprovalDecisions.push(
+        outcome.pendingDecision as unknown as PendingResearchApprovalDecision,
+      );
+    },
+  },
+  "record-research-approval-information": {
+    outcome: "research-approval-information-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const information = outcome.information;
+      const informationRecord = isRecord(information) ? information : {};
+      if (
+        typeof outcome.decisionId !== "string" ||
+        outcome.decisionId !== intent.pendingDecisionId ||
+        activeResearchApprovalDecision(history)?.id !== outcome.decisionId ||
+        typeof outcome.recordedAt !== "string" ||
+        outcome.recordedAt <
+          activeResearchApprovalDecision(history)!.requestedAt ||
+        !isRecord(information) ||
+        !hasOnlyFields(informationRecord, ["id", "question", "explanation"]) ||
+        ["id", "question", "explanation"].some(
+          (field) =>
+            typeof informationRecord[field] !== "string" ||
+            String(informationRecord[field]).trim() === "" ||
+            validatePersistableText(
+              informationRecord[field],
+              `information.${field}`,
+            ).length > 0,
+        ) ||
+        history.researchApprovalInformation.some(
+          (existing) => existing.id === informationRecord.id,
+        )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.researchApprovalInformation.push({
+        ...(information as unknown as ResearchApprovalInformation),
+        decisionId: outcome.decisionId,
+        recordedAt: String(outcome.recordedAt),
+      });
+    },
+  },
+  "respond-research-approval": {
+    outcome: "research-approval-responded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const activeDecision = activeResearchApprovalDecision(history);
+      const response = outcome.response;
+      if (
+        activeDecision === undefined ||
+        outcome.decisionId !== activeDecision.id ||
+        outcome.decisionId !== intent.pendingDecisionId ||
+        typeof outcome.recordedAt !== "string" ||
+        outcome.recordedAt < activeDecision.requestedAt ||
+        !isRecord(response)
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      if (response.kind === "approve") {
+        const approval = isRecord(response.approval) ? response.approval : {};
+        if (
+          approval.explicitlyApproved !== true ||
+          typeof approval.id !== "string" ||
+          approval.id.trim() === "" ||
+          JSON.stringify(approval.scope) !== JSON.stringify(activeDecision.request) ||
+          history.researchApprovals.some(
+            (existing) => existing.id === approval.id,
+          )
+        ) {
+          invalidAuthoritativeRecord(outcomeSequence);
+        }
+        history.researchApprovals.push({
+          id: String(approval.id),
+          decisionId: activeDecision.id,
+          approvedAt: String(outcome.recordedAt),
+          scope: approval.scope as unknown as ResearchApprovalRequest,
+        });
+      } else if (response.kind === "refuse") {
+        const refusal = isRecord(response.refusal) ? response.refusal : {};
+        if (
+          refusal.explicitlyRefused !== true ||
+          typeof refusal.id !== "string" ||
+          refusal.id.trim() === "" ||
+          typeof refusal.rationale !== "string" ||
+          refusal.rationale.trim() === "" ||
+          validatePersistableText(
+            refusal.rationale,
+            "response.refusal.rationale",
+          ).length > 0 ||
+          !isRecord(refusal.evidenceGap) ||
+          applyReasoningEntries(
+            history,
+            [refusal.evidenceGap as unknown as EvidenceGap],
+          ) !== undefined
+        ) {
+          invalidAuthoritativeRecord(outcomeSequence);
+        }
+      } else {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.researchApprovalResponses.push({
+        decisionId: activeDecision.id,
+        respondedAt: String(outcome.recordedAt),
+        response: response as unknown as ResearchApprovalResponse,
+      });
+    },
+  },
+  "record-research-expenditure": {
+    outcome: "research-expenditure-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const expenditure = isRecord(outcome.expenditure)
+        ? outcome.expenditure
+        : {};
+      const approval = history.researchApprovals.find(
+        (existing) => existing.id === expenditure.approvalId,
+      );
+      const approvalSpend = history.researchExpenditures
+        .filter((existing) => existing.approvalId === approval?.id)
+        .reduce((total, existing) => total + existing.amount, 0);
+      const campaignSpend = history.researchExpenditures.reduce(
+        (total, existing) => total + existing.amount,
+        0,
+      );
+      if (
+        history.intake === undefined ||
+        approval === undefined ||
+        !hasOnlyFields(expenditure, [
+          "id",
+          "approvalId",
+          "approvalDecisionId",
+          "sourceId",
+          "purpose",
+          "amount",
+          "currency",
+          "incurredAt",
+        ]) ||
+        intent.expenditureId !== expenditure.id ||
+        expenditure.approvalDecisionId !== approval.decisionId ||
+        expenditure.sourceId !== approval.scope.source.id ||
+        expenditure.purpose !== approval.scope.purpose ||
+        validatePersistableText(
+          expenditure.purpose,
+          "expenditure.purpose",
+        ).length > 0 ||
+        expenditure.currency !== approval.scope.maximumCost.currency ||
+        expenditure.currency !== history.intake.researchBudget.paidSpendCap.currency ||
+        typeof expenditure.amount !== "number" ||
+        !Number.isFinite(expenditure.amount) ||
+        expenditure.amount <= 0 ||
+        approvalSpend + expenditure.amount > approval.scope.maximumCost.amount ||
+        campaignSpend + expenditure.amount > history.intake.researchBudget.paidSpendCap.amount ||
+        outcome.recordedAt !== expenditure.incurredAt ||
+        typeof outcome.recordedAt !== "string" ||
+        outcome.recordedAt < approval.approvedAt ||
+        outcome.recordedAt < approval.scope.duration.startsAt ||
+        outcome.recordedAt > approval.scope.duration.expiresAt ||
+        history.researchExpenditures.some(
+          (existing) => existing.id === expenditure.id,
+        )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.researchExpenditures.push(
+        expenditure as unknown as ResearchExpenditure,
+      );
+    },
+  },
 } as const satisfies Record<
   AuthoritativeOperation,
   AuthoritativeOperationDescriptor
@@ -2210,6 +2938,101 @@ function evidenceReasoningRecords(
   });
 }
 
+function researchApprovalRequestRecords(
+  campaignId: string,
+  command: RequestResearchApprovalCommand,
+  firstSequence: number,
+) {
+  const pendingDecision: PendingResearchApprovalDecision = {
+    id: command.payload.request.id,
+    type: "research-approval",
+    requestedAt: command.payload.requestedAt,
+    request: command.payload.request,
+  };
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.requestedAt,
+    firstSequence,
+    operation: "request-research-approval",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      pendingDecisionId: command.payload.request.id,
+    },
+    outcome: { pendingDecision },
+  });
+}
+
+function researchApprovalInformationRecords(
+  campaignId: string,
+  command: RecordResearchApprovalInformationCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-research-approval-information",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      pendingDecisionId: command.payload.decisionId,
+    },
+    outcome: {
+      decisionId: command.payload.decisionId,
+      information: command.payload.information,
+    },
+  });
+}
+
+function researchApprovalResponseRecords(
+  campaignId: string,
+  command: RespondResearchApprovalCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.respondedAt,
+    firstSequence,
+    operation: "respond-research-approval",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      pendingDecisionId: command.payload.decisionId,
+    },
+    outcome: {
+      decisionId: command.payload.decisionId,
+      response: command.payload.response,
+    },
+  });
+}
+
+function researchExpenditureRecords(
+  campaignId: string,
+  approval: ResearchApproval,
+  command: RecordResearchExpenditureCommand,
+  firstSequence: number,
+) {
+  const expenditure: ResearchExpenditure = {
+    ...command.payload.expenditure,
+    incurredAt: command.payload.incurredAt,
+    approvalDecisionId: approval.decisionId,
+  };
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.incurredAt,
+    firstSequence,
+    operation: "record-research-expenditure",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      expenditureId: command.payload.expenditure.id,
+      approvalId: command.payload.expenditure.approvalId,
+    },
+    outcome: { expenditure },
+  });
+}
+
 async function readJson(targetPath: string): Promise<unknown> {
   return JSON.parse(await readFile(targetPath, "utf8"));
 }
@@ -2295,6 +3118,11 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     inferences: [],
     contradictions: [],
     corrections: [],
+    researchApprovalDecisions: [],
+    researchApprovalInformation: [],
+    researchApprovalResponses: [],
+    researchApprovals: [],
+    researchExpenditures: [],
   };
   for (let index = 0; index < records.length; index += 2) {
     const sequence = index + 1;
@@ -2370,6 +3198,11 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     inferences,
     contradictions,
     corrections,
+    researchApprovalDecisions,
+    researchApprovalInformation,
+    researchApprovalResponses,
+    researchApprovals,
+    researchExpenditures,
   } = authoritativeHistory;
   const creationIntent = records[0];
   if (!isRecord(creationIntent) || manifest.createdAt !== creationIntent.recordedAt) {
@@ -2480,6 +3313,44 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       correctionIds: corrections.map((correction) => correction.id),
     };
   }
+  const pendingDecision = activeResearchApprovalDecision({
+    researchApprovalDecisions,
+    researchApprovalResponses,
+  });
+  if (pendingDecision !== undefined) {
+    workView.pause = {
+      reason: "pending-decision",
+      pendingDecisionId: pendingDecision.id,
+      decisionType: "research-approval",
+      requestedAction: pendingDecision.request.action,
+      resumable: true,
+    };
+    workView.completedWork.push(
+      `Research Approval ${pendingDecision.id} requested`,
+    );
+    if (researchApprovalInformation.length > 0) {
+      workView.completedWork.push(
+        `${researchApprovalInformation.length} Research Approval explanation${researchApprovalInformation.length === 1 ? "" : "s"} recorded`,
+      );
+    }
+    workView.nextPermittedActions = [
+      "respond-research-approval",
+      "explain-research-approval",
+      ...workView.nextPermittedActions,
+    ];
+  }
+  for (const approval of researchApprovals) {
+    workView.completedWork.push(`Research Approval ${approval.id} granted`);
+    workView.nextPermittedActions = [
+      "perform-approved-research-read-only",
+      ...workView.nextPermittedActions,
+    ];
+  }
+  for (const expenditure of researchExpenditures) {
+    workView.completedWork.push(
+      `Research Expenditure ${expenditure.id} recorded against approval ${expenditure.approvalId}`,
+    );
+  }
   if (
     [...reservations.keys()].some(
       (reservationId) => !settledReservationIds.has(reservationId),
@@ -2556,6 +3427,27 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
               (total, reservation) => total + reservation.sourceUnits,
               0,
             ),
+          ...(researchExpenditures.length === 0
+            ? {}
+            : {
+                paidSpendCap: intake.researchBudget.paidSpendCap,
+                recordedPaidSpend: {
+                  amount: researchExpenditures.reduce(
+                    (total, expenditure) => total + expenditure.amount,
+                    0,
+                  ),
+                  currency: intake.researchBudget.paidSpendCap.currency,
+                },
+                remainingPaidSpend: {
+                  amount:
+                    intake.researchBudget.paidSpendCap.amount -
+                    researchExpenditures.reduce(
+                      (total, expenditure) => total + expenditure.amount,
+                      0,
+                    ),
+                  currency: intake.researchBudget.paidSpendCap.currency,
+                },
+              }),
         };
   return {
     campaign: {
@@ -2579,6 +3471,11 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     projectionContracts: manifest.projections,
     ...(intake === undefined ? {} : { intake }),
     ...(researchBudget === undefined ? {} : { researchBudget, evidenceLedger }),
+    ...(pendingDecision === undefined
+      ? {}
+      : { pendingDecision, researchApprovalInformation }),
+    ...(researchApprovals.length === 0 ? {} : { researchApprovals }),
+    ...(researchExpenditures.length === 0 ? {} : { researchExpenditures }),
   };
 }
 
@@ -2692,6 +3589,19 @@ async function loadCampaign(campaignPath: string) {
           researchBudget: rebuiltCampaign.researchBudget,
           evidenceLedger: rebuiltCampaign.evidenceLedger,
         }),
+    ...(rebuiltCampaign.pendingDecision === undefined
+      ? {}
+      : {
+          pendingDecision: rebuiltCampaign.pendingDecision,
+          researchApprovalInformation:
+            rebuiltCampaign.researchApprovalInformation,
+        }),
+    ...(rebuiltCampaign.researchApprovals === undefined
+      ? {}
+      : { researchApprovals: rebuiltCampaign.researchApprovals }),
+    ...(rebuiltCampaign.researchExpenditures === undefined
+      ? {}
+      : { researchExpenditures: rebuiltCampaign.researchExpenditures }),
   };
 }
 
@@ -2885,7 +3795,11 @@ type CoordinatorCommand =
   | ConfirmCampaignIntakeCommand
   | ReservePublicResearchCommand
   | RecordPublicResearchObservationCommand
-  | RecordEvidenceReasoningCommand;
+  | RecordEvidenceReasoningCommand
+  | RequestResearchApprovalCommand
+  | RecordResearchApprovalInformationCommand
+  | RespondResearchApprovalCommand
+  | RecordResearchExpenditureCommand;
 
 type CoordinatorOperationFailure = {
   code: string;
@@ -3079,6 +3993,9 @@ async function resumeCampaign(command: ResumeCampaignCommand, currentTime: strin
     workView: campaign.workView,
     lease: campaign.lease,
     validation: campaign.validation,
+    ...(campaign.pendingDecision === undefined
+      ? {}
+      : { pendingDecision: campaign.pendingDecision }),
   });
 
   return runCoordinatorOperation(command, currentTime, {
@@ -3369,6 +4286,501 @@ async function reservePublicResearch(
     },
     successResult(_command, after) {
       return buildReservationResult(true, after);
+    },
+  });
+}
+
+async function requestResearchApproval(
+  command: RequestResearchApprovalCommand,
+  currentTime: string,
+) {
+  const buildResult = (requested: boolean, campaign: LoadedCampaign) => ({
+    requested,
+    pendingDecision: campaign.pendingDecision,
+    workView: campaign.workView,
+  });
+
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not request approval concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Research Approval request identity was already used with different input.",
+      action: "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Research Approval could not be requested against valid Campaign history.",
+      action: "Preserve Campaign contents and do not perform the restricted or paid action.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["request-research-approval"].outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.pendingDecision) &&
+          JSON.stringify(record.pendingDecision.request) ===
+            JSON.stringify(command.payload.request),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const campaign = before!;
+      if (campaign.intake === undefined) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-NOT-AVAILABLE",
+          message: "Research Approval requires a confirmed Campaign Intake.",
+          action: "Confirm Campaign Intake before requesting restricted or paid research.",
+        };
+      }
+      if (campaign.pendingDecision !== undefined) {
+        return {
+          code: "SVS-PENDING-DECISION-ACTIVE",
+          message: `Pending Decision ${campaign.pendingDecision.id} already requires an explicit response.`,
+          action: "Answer, refuse, or ask about the active Pending Decision; do not replace it.",
+        };
+      }
+      const maximumCost = command.payload.request.maximumCost;
+      const recordedSpend = (campaign.researchExpenditures ?? []).reduce(
+        (total, expenditure) => total + expenditure.amount,
+        0,
+      );
+      if (
+        maximumCost.currency !== campaign.intake.researchBudget.paidSpendCap.currency ||
+        maximumCost.amount >
+          campaign.intake.researchBudget.paidSpendCap.amount - recordedSpend
+      ) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-BUDGET-INVALID",
+          message: "Requested maximum cost exceeds or uses a different currency from the Research Budget.",
+          action: "Reduce the maximum cost to the confirmed paid-spend cap or revise Campaign Intake explicitly.",
+        };
+      }
+      return undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Research Approval request requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before requesting approval.",
+        };
+      },
+    },
+    records({ before }) {
+      return researchApprovalRequestRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildResult(true, after);
+    },
+  });
+}
+
+async function recordResearchApprovalInformation(
+  command: RecordResearchApprovalInformationCommand,
+  currentTime: string,
+) {
+  const buildResult = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    pendingDecision: campaign.pendingDecision,
+    information: command.payload.information,
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record approval information concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Research Approval information request identity was already used with different input.",
+      action: "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Research Approval information could not be recorded against valid Campaign history.",
+      action: "Preserve Campaign contents and leave the Pending Decision unanswered.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors[
+              "record-research-approval-information"
+            ].outcome &&
+          record.requestId === command.requestId &&
+          record.decisionId === command.payload.decisionId &&
+          JSON.stringify(record.information) ===
+            JSON.stringify(command.payload.information),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const pendingDecision = before!.pendingDecision;
+      if (pendingDecision?.id !== command.payload.decisionId) {
+        return {
+            code: "SVS-PENDING-DECISION-NOT-FOUND",
+            message: "The named Research Approval Pending Decision is not active.",
+            action: "Use the active Pending Decision identity without treating information as consent.",
+          };
+      }
+      return command.payload.recordedAt < pendingDecision.requestedAt
+        ? {
+            code: "SVS-RESEARCH-APPROVAL-INFORMATION-INVALID",
+            message: "Research Approval information cannot predate its Pending Decision.",
+            action: "Record information only after the approval request was checkpointed.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Recording Research Approval information requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before recording information.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      return (rebuiltCampaign.researchApprovalInformation ?? []).some(
+        (information) => information.id === command.payload.information.id,
+      )
+        ? {
+            code: "SVS-RESEARCH-APPROVAL-INFORMATION-CONFLICT",
+            message: "Research Approval information identity already exists.",
+            action: "Replay the original request or use a new stable information identity.",
+          }
+        : undefined;
+    },
+    records({ before }) {
+      return researchApprovalInformationRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildResult(true, after);
+    },
+  });
+}
+
+async function respondResearchApproval(
+  command: RespondResearchApprovalCommand,
+  currentTime: string,
+) {
+  const buildResult = (responded: boolean, campaign: LoadedCampaign) => ({
+    responded,
+    pendingDecision: campaign.pendingDecision ?? null,
+    researchApprovals: campaign.researchApprovals ?? [],
+    ...(command.payload.response.kind === "refuse"
+      ? { evidenceGap: command.payload.response.refusal.evidenceGap }
+      : {}),
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not respond to approval concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Research Approval response identity was already used with different input.",
+      action: "Reuse the original response payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Research Approval response could not be recorded against valid Campaign history.",
+      action: "Preserve Campaign contents and do not perform the restricted or paid action.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["respond-research-approval"].outcome &&
+          record.requestId === command.requestId &&
+          record.decisionId === command.payload.decisionId &&
+          JSON.stringify(record.response) === JSON.stringify(command.payload.response),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const pendingDecision = before!.pendingDecision;
+      if (pendingDecision?.id !== command.payload.decisionId) {
+        return {
+          code: "SVS-PENDING-DECISION-NOT-FOUND",
+          message: "The named Research Approval Pending Decision is not active.",
+          action: "Use the active Pending Decision identity; silence and unrelated messages are not consent.",
+        };
+      }
+      if (command.payload.respondedAt < pendingDecision.requestedAt) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-RESPONSE-INVALID",
+          message: "Research Approval response cannot predate its Pending Decision.",
+          action: "Record the explicit response only after the approval request was checkpointed.",
+        };
+      }
+      if (command.payload.response.kind === "approve") {
+        if (
+          JSON.stringify(command.payload.response.approval.scope) !==
+          JSON.stringify(pendingDecision.request)
+        ) {
+          return {
+            code: "SVS-RESEARCH-APPROVAL-SCOPE-CHANGED",
+            message: "The approved scope differs from the active Research Approval request.",
+            action: "Keep the current decision pending or refuse it, then request renewed approval for the changed scope.",
+          };
+        }
+      }
+      if (
+        command.payload.response.kind === "approve" &&
+        command.payload.respondedAt > pendingDecision.request.duration.expiresAt
+      ) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-EXPIRED",
+          message: "The Research Approval request expired before the explicit response.",
+          action: "Request renewed approval with a current duration; do not use the expired scope.",
+        };
+      }
+      return undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Research Approval response requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before recording the response.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const response = command.payload.response;
+      const identityConflict = response.kind === "approve"
+        ? rebuiltCampaign.researchApprovals?.some(
+            (approval) => approval.id === response.approval.id,
+          )
+        : rebuiltCampaign.records.some(
+            (recorded) =>
+              isRecord(recorded) &&
+              recorded.type ===
+                authoritativeOperationDescriptors["respond-research-approval"].outcome &&
+              isRecord(recorded.response) &&
+              recorded.response.kind === "refuse" &&
+              isRecord(recorded.response.refusal) &&
+              recorded.response.refusal.id === response.refusal.id,
+          );
+      if (identityConflict) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-IDENTITY-CONFLICT",
+          message: "Research Approval response identity already exists.",
+          action: "Replay the original response or use a unique stable response identity.",
+        };
+      }
+      if (response.kind === "refuse") {
+        const ledger = rebuiltCampaign.evidenceLedger!;
+        const invalidLink = applyReasoningEntries(
+          {
+            sources: ledger.sources,
+            observations: ledger.observations,
+            sourceLineages: [...ledger.sourceLineages],
+            sourceCredibilities: [...ledger.sourceCredibilities],
+            sourceFreshnesses: [...ledger.sourceFreshnesses],
+            evidenceGaps: [...ledger.evidenceGaps],
+            assumptions: [...ledger.assumptions],
+            inferences: [...ledger.inferences],
+            contradictions: [...ledger.contradictions],
+            corrections: [...ledger.corrections],
+          },
+          [response.refusal.evidenceGap],
+        );
+        if (invalidLink !== undefined) {
+          return {
+            code: "SVS-EVIDENCE-LINK-INVALID",
+            message: `Refusal Evidence Gap uses an unknown or duplicate identity ${invalidLink}.`,
+            action: "Use a unique Evidence Gap identity and preserve the refused research boundary.",
+          };
+        }
+      }
+      return undefined;
+    },
+    records({ before }) {
+      return researchApprovalResponseRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildResult(true, after);
+    },
+  });
+}
+
+async function recordResearchExpenditure(
+  command: RecordResearchExpenditureCommand,
+  currentTime: string,
+) {
+  const buildResult = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    expenditure: campaign.researchExpenditures?.find(
+      (expenditure) => expenditure.id === command.payload.expenditure.id,
+    ),
+    researchBudget: campaign.researchBudget,
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record expenditure concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message: "Research Expenditure request identity was already used with different input.",
+      action: "Reuse the original expenditure payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message: "Research Expenditure could not be recorded against valid Campaign history.",
+      action: "Preserve Campaign contents and do not repeat an ambiguous purchase or charge.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["record-research-expenditure"].outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.expenditure) &&
+          record.expenditure.id === command.payload.expenditure.id &&
+          record.expenditure.approvalId === command.payload.expenditure.approvalId &&
+          record.expenditure.sourceId === command.payload.expenditure.sourceId &&
+          record.expenditure.purpose === command.payload.expenditure.purpose &&
+          record.expenditure.amount === command.payload.expenditure.amount &&
+          record.expenditure.currency === command.payload.expenditure.currency &&
+          record.expenditure.incurredAt === command.payload.incurredAt,
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildResult(false, replayed);
+    },
+    validateBeforeLease({ before }) {
+      const campaign = before!;
+      const expenditure = command.payload.expenditure;
+      const approval = campaign.researchApprovals?.find(
+        (existing) => existing.id === expenditure.approvalId,
+      );
+      if (approval === undefined) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-NOT-FOUND",
+          message: "Research Expenditure has no matching granted Research Approval.",
+          action: "Do not pay or retry; request explicit scoped approval first.",
+        };
+      }
+      if (
+        !["paid", "restricted-and-paid"].includes(approval.scope.access) ||
+        expenditure.sourceId !== approval.scope.source.id ||
+        expenditure.purpose !== approval.scope.purpose ||
+        expenditure.currency !== approval.scope.maximumCost.currency
+      ) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-SCOPE-CHANGED",
+          message: "Research Expenditure differs from the approved Source, purpose, access, or currency.",
+          action: "Do not pay; request renewed approval for the changed material scope.",
+        };
+      }
+      if (
+        command.payload.incurredAt < approval.approvedAt ||
+        command.payload.incurredAt < approval.scope.duration.startsAt ||
+        command.payload.incurredAt > approval.scope.duration.expiresAt
+      ) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-EXPIRED",
+          message: "Research Expenditure falls outside the granted approval duration.",
+          action: "Do not pay or retry; request renewed approval for a current duration.",
+        };
+      }
+      const approvalSpend = (campaign.researchExpenditures ?? [])
+        .filter((existing) => existing.approvalId === approval.id)
+        .reduce((total, existing) => total + existing.amount, 0);
+      const campaignSpend = (campaign.researchExpenditures ?? []).reduce(
+        (total, existing) => total + existing.amount,
+        0,
+      );
+      const paidCap = campaign.intake!.researchBudget.paidSpendCap;
+      if (
+        approvalSpend + expenditure.amount > approval.scope.maximumCost.amount ||
+        campaignSpend + expenditure.amount > paidCap.amount ||
+        expenditure.currency !== paidCap.currency
+      ) {
+        return {
+          code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
+          message: "Research Expenditure exceeds its approved maximum or Campaign Research Budget.",
+          action: "Do not pay; reduce the cost or explicitly revise the governing scope and budget.",
+        };
+      }
+      return undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Research Expenditure requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign before recording expenditure; do not repeat an ambiguous charge.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.researchExpenditures?.some(
+        (existing) => existing.id === command.payload.expenditure.id,
+      )
+        ? {
+            code: "SVS-RESEARCH-EXPENDITURE-IDENTITY-CONFLICT",
+            message: "Research Expenditure identity already exists.",
+            action: "Replay the original request; do not charge the expenditure again.",
+          }
+        : undefined;
+    },
+    records({ before }) {
+      const approval = before!.researchApprovals!.find(
+        (existing) => existing.id === command.payload.expenditure.approvalId,
+      )!;
+      return researchExpenditureRecords(
+        before!.campaign.id,
+        approval,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildResult(true, after);
     },
   });
 }
@@ -3838,6 +5250,10 @@ export async function executeCommand(
       "reservePublicResearch",
       "recordPublicResearchObservation",
       "recordEvidenceReasoning",
+      "requestResearchApproval",
+      "recordResearchApprovalInformation",
+      "respondResearchApproval",
+      "recordResearchExpenditure",
     ].includes(receivedCommand)
   ) {
     return {
@@ -4043,6 +5459,110 @@ export async function executeCommand(
     }
     return recordEvidenceReasoning(
       command as unknown as RecordEvidenceReasoningCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "requestResearchApproval") {
+    const invalidFields = validateRequestResearchApprovalFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-RESEARCH-APPROVAL-INVALID",
+          message: "Research Approval request is invalid.",
+          action:
+            "State the complete bounded scope and safety constraints before presenting a Pending Decision.",
+          details: invalidFields,
+        },
+      };
+    }
+    return requestResearchApproval(
+      command as unknown as RequestResearchApprovalCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordResearchApprovalInformation") {
+    const invalidFields = validateRecordResearchApprovalInformationFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-RESEARCH-APPROVAL-INFORMATION-INVALID",
+          message: "Research Approval information is invalid.",
+          action:
+            "Correct the bounded informational record without resolving the Pending Decision.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordResearchApprovalInformation(
+      command as unknown as RecordResearchApprovalInformationCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "respondResearchApproval") {
+    const invalidFields = validateRespondResearchApprovalFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-RESEARCH-APPROVAL-RESPONSE-INVALID",
+          message: "Research Approval response is invalid.",
+          action:
+            "Record only an explicit response bound to the complete unchanged Pending Decision scope.",
+          details: invalidFields,
+        },
+      };
+    }
+    return respondResearchApproval(
+      command as unknown as RespondResearchApprovalCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordResearchExpenditure") {
+    const invalidFields = validateRecordResearchExpenditureFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-RESEARCH-EXPENDITURE-INVALID",
+          message: "Research Expenditure is invalid.",
+          action:
+            "Record only approval provenance, Source, purpose, amount, and currency; never include credentials or payment details.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordResearchExpenditure(
+      command as unknown as RecordResearchExpenditureCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

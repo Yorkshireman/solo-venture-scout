@@ -122,3 +122,37 @@ test("packaged Scout derives auditable reasoning without blurring evidence types
     assert.match(reference, new RegExp(`"type": "${entryType}"`));
   }
 });
+
+test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(
+    instructions,
+    /action.+purpose.+Source.+access method.+data.+external effects.+maximum cost.+currency.+risks.+duration.+alternatives/is,
+  );
+  assert.match(instructions, /one active blocking\s+Pending Decision/i);
+  assert.match(instructions, /explicit.+unchanged scope.+consum/is);
+  assert.match(instructions, /informational.+preserve.+Pending Decision/is);
+  assert.match(instructions, /silence.+resumable pause/is);
+  assert.match(instructions, /refus.+Evidence Gap/is);
+  assert.match(instructions, /continue independent.+work/is);
+  assert.match(instructions, /material change.+renewed\s+approval/is);
+  assert.match(instructions, /Research Expenditure.+approval provenance.+Research Budget/is);
+  assert.match(instructions, /never.+credentials.+payment details/is);
+  assert.match(instructions, /ambiguous.+never.+retr/is);
+  assert.match(instructions, /unlawful.+External Validation Action/is);
+  for (const command of [
+    "requestResearchApproval",
+    "recordResearchApprovalInformation",
+    "respondResearchApproval",
+    "recordResearchExpenditure",
+  ]) {
+    assert.match(reference, new RegExp(`"command": "${command}"`));
+  }
+});

@@ -165,6 +165,38 @@ After a successful write, use the Work View's stable reasoning pointers and
 corrected entry. Do not load the entire Evidence Ledger unless the named decision,
 gap, contradiction, correction, or audit requires it.
 
+## Pause for Approved Research
+
+Public Research remains the autonomous baseline. Before any restricted access or paid
+research, use `requestResearchApproval` from
+[references/campaigns.md](references/campaigns.md) to checkpoint one active blocking
+Pending Decision. Show its complete scope in this order: action, purpose, Source,
+access method, data accessed and retained, external effects, maximum cost and
+currency, risks, duration, and alternatives. State explicitly that Research Approval
+cannot authorise unlawful activity or an External Validation Action.
+
+Leave the dependent research untouched until the developer responds. Silence remains
+a safe resumable pause. Informational questions, inspection, requests for an
+explanation, and other conversation do not imply consent: when an explanation should
+be retained, use `recordResearchApprovalInformation`, which must preserve the same
+Pending Decision. Never create a second active blocking Pending Decision or replace
+the first one.
+
+Only a `respondResearchApproval` command containing an explicit approval for the
+complete unchanged scope may consume the decision as approved. Any material change to
+access, purpose, Source, data, external effects, cost, or duration requires renewed
+approval. A refusal must be explicit and must record the resulting Evidence Gap;
+afterward, continue independent permitted work when possible without attempting the
+refused action.
+
+For paid research, use `recordResearchExpenditure` only after the approved action is
+actually charged. A Research Expenditure records its Research Approval provenance,
+Source, purpose, amount, currency, and Research Budget effect, but never credentials
+or payment details. If
+restricted access, a purchase, or its result is ambiguous, preserve the checkpoint
+and never retry automatically; report the ambiguity and require a precise developer
+decision.
+
 ## Inspect a Scouting Campaign
 
 Inspection is read-only. Use `inspectCampaign` from

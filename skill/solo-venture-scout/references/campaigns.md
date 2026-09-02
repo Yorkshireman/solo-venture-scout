@@ -357,6 +357,171 @@ The bounded `searchPath` locator may replace `campaignPath`. The command validat
 Campaign and returns the requested entries in request order without changing state or
 returning unrelated Evidence Ledger content. An unknown identity fails the whole read.
 
+## Request and resolve Research Approval
+
+Before restricted or paid research, checkpoint the complete proposed scope:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "request-research-approval-stable-request-id",
+  "command": "requestResearchApproval",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "requestedAt": "2026-08-31T10:00:00.000Z",
+    "request": {
+      "id": "stable-pending-decision-id",
+      "access": "restricted-and-paid",
+      "action": "Read one named report through the developer-controlled portal",
+      "purpose": "Resolve one named Evidence Gap",
+      "source": {
+        "id": "stable-proposed-source-id",
+        "description": "Named analyst report",
+        "url": "https://research.example.com/report"
+      },
+      "accessMethod": "Use the developer's existing signed-in browser session read-only",
+      "data": {
+        "accessed": ["Report text and publication metadata"],
+        "retained": ["Citation metadata and neutral atomic paraphrases"]
+      },
+      "externalEffects": [],
+      "maximumCost": { "amount": 12, "currency": "GBP" },
+      "risks": ["The report may be outdated or methodologically opaque"],
+      "duration": {
+        "startsAt": "2026-08-31T10:00:00.000Z",
+        "expiresAt": "2026-08-31T11:00:00.000Z"
+      },
+      "alternatives": ["Continue with public Sources and leave the Evidence Gap open"],
+      "lawfulActivity": true,
+      "externalValidationAction": false
+    }
+  }
+}
+```
+
+The request must fit the confirmed paid-spend cap and currency. `restricted` requires
+a zero maximum; `paid` and `restricted-and-paid` require a positive maximum. The URL
+may identify a restricted Source but must not contain credentials or sensitive query
+parameters. Success appends the request, writes its checkpoint, and only then returns
+the Pending Decision in the Work View. A second request cannot replace an active one.
+
+An informational exchange may be retained without answering the decision:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-approval-information-stable-request-id",
+  "command": "recordResearchApprovalInformation",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T10:02:00.000Z",
+    "decisionId": "stable-pending-decision-id",
+    "information": {
+      "id": "stable-information-id",
+      "question": "Can the Campaign continue without this Source?",
+      "explanation": "Yes; independent Public Research can continue and the Evidence Gap can remain open."
+    }
+  }
+}
+```
+
+This command checkpoints the explanation but leaves the same Pending Decision active.
+Inspection and resume are also informational and do not consume it. No response is a
+safe pause.
+
+Approval copies the entire request as the exact scope the developer saw:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "respond-research-approval-stable-request-id",
+  "command": "respondResearchApproval",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "respondedAt": "2026-08-31T10:03:00.000Z",
+    "decisionId": "stable-pending-decision-id",
+    "response": {
+      "kind": "approve",
+      "approval": {
+        "id": "stable-research-approval-id",
+        "explicitlyApproved": true,
+        "scope": "COPY THE COMPLETE UNCHANGED requestResearchApproval request OBJECT HERE"
+      }
+    }
+  }
+}
+```
+
+The `scope` placeholder above denotes the exact JSON request object, not a string in a
+real command. Any changed material field fails closed and requires a refused or newly
+requested scope. Expired approval requests cannot be approved.
+
+Refusal uses the same command with an explicit refusal and one complete open Evidence
+Gap:
+
+```json
+{
+  "response": {
+    "kind": "refuse",
+    "refusal": {
+      "id": "stable-refusal-id",
+      "explicitlyRefused": true,
+      "rationale": "Do not use paid or authenticated research for this question.",
+      "evidenceGap": {
+        "type": "evidence-gap",
+        "id": "stable-resulting-gap-id",
+        "question": "Can public independent Sources resolve the question?",
+        "affectedDecisionIds": ["stable-affected-decision-id"],
+        "resolutionCriteria": "Independent public evidence meets the named test.",
+        "resolutionMethod": "Continue Public Research or leave the decision unresolved.",
+        "status": "open",
+        "resolution": null
+      }
+    }
+  }
+}
+```
+
+Refusal clears the pause, appends the Evidence Gap, and leaves independent permitted
+work available. It does not make the refused research happen or turn missing evidence
+into evidence of absence.
+
+## Record Research Expenditure
+
+After an approved paid action is actually charged, record its budget effect:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-research-expenditure-stable-request-id",
+  "command": "recordResearchExpenditure",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "incurredAt": "2026-08-31T10:10:00.000Z",
+    "expenditure": {
+      "id": "stable-research-expenditure-id",
+      "approvalId": "stable-research-approval-id",
+      "sourceId": "stable-proposed-source-id",
+      "purpose": "Resolve one named Evidence Gap",
+      "amount": 8,
+      "currency": "GBP"
+    }
+  }
+}
+```
+
+The approval must be current and explicitly cover paid access to that exact Source,
+purpose, and currency. Cumulative spend cannot exceed either the approval maximum or
+Campaign paid-spend cap. Success records the approval decision provenance and returns
+recorded and remaining spend. The strict command has no credential, authenticated
+session, account, card, bank, or other payment-detail field. On an ambiguous purchase
+or write outcome, preserve the checkpoint and request a precise human decision; never
+retry payment or restricted access automatically.
+
 ## Resume
 
 ```json
