@@ -2,9 +2,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { publicResearchReservationCommand } from "./support/campaign-commands.mjs";
 import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
+
+const approvalRequestedAt = new Date(Date.now() - 120_000).toISOString();
+const approvalInformationAt = new Date(Date.now() - 110_000).toISOString();
+const approvalRespondedAt = new Date(Date.now() - 100_000).toISOString();
+const approvalFollowUpAt = new Date(Date.now() - 90_000).toISOString();
+const approvalExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
 
 /**
  * @param {string} kernelPath
@@ -14,6 +21,26 @@ async function runKernel(kernelPath, command) {
   const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify(command)}\n`,
   });
+  return { ...result, response: JSON.parse(result.stdout) };
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {Record<string, unknown>} command
+ * @param {string} now
+ */
+async function runKernelAt(kernelPath, command, now) {
+  const script = `
+    import { executeCommand } from ${JSON.stringify(pathToFileURL(kernelPath).href)};
+    const response = await executeCommand(${JSON.stringify(command)}, {
+      nodeVersion: process.versions.node,
+      probeWritableStorage: async () => true,
+      now: () => ${JSON.stringify(now)}
+    });
+    process.stdout.write(JSON.stringify(response));
+    if (!response.ok) process.exitCode = 3;
+  `;
+  const result = await runProcess(process.execPath, ["--input-type=module", "--eval", script]);
   return { ...result, response: JSON.parse(result.stdout) };
 }
 
@@ -102,8 +129,8 @@ function researchApprovalRequest() {
     maximumCost: { amount: 12, currency: "GBP" },
     risks: ["The report may be outdated or methodologically opaque"],
     duration: {
-      startsAt: "2026-09-01T09:20:00.000Z",
-      expiresAt: "2026-09-01T10:20:00.000Z",
+      startsAt: approvalRequestedAt,
+      expiresAt: approvalExpiresAt,
     },
     alternatives: ["Continue with public Sources and leave the Evidence Gap open"],
     lawfulActivity: true,
@@ -124,7 +151,7 @@ test("a complete Research Approval request becomes one durable checkpointed Pend
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      requestedAt: "2026-09-01T09:15:00.000Z",
+      requestedAt: approvalRequestedAt,
       request: researchApprovalRequest(),
     },
   });
@@ -146,7 +173,7 @@ test("a complete Research Approval request becomes one durable checkpointed Pend
     {
       campaignId: "campaign-approved-research",
       recordSequence: 6,
-      recordedAt: "2026-09-01T09:15:00.000Z",
+      recordedAt: approvalRequestedAt,
     },
   );
 
@@ -157,7 +184,7 @@ test("a complete Research Approval request becomes one durable checkpointed Pend
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      resumedAt: "2026-09-01T09:30:00.000Z",
+      resumedAt: approvalFollowUpAt,
       leaseExpiresAt: "2099-09-01T10:00:00.000Z",
     },
   });
@@ -184,7 +211,7 @@ test("informational actions preserve the active Pending Decision and it cannot b
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      requestedAt: "2026-09-01T09:15:00.000Z",
+      requestedAt: approvalRequestedAt,
       request: researchApprovalRequest(),
     },
   });
@@ -197,7 +224,7 @@ test("informational actions preserve the active Pending Decision and it cannot b
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      recordedAt: "2026-09-01T09:16:00.000Z",
+      recordedAt: approvalInformationAt,
       decisionId: "decision-analyst-report-access",
       information: {
         id: "approval-information-cost-alternative",
@@ -215,6 +242,7 @@ test("informational actions preserve the active Pending Decision and it cannot b
   const replacement = researchApprovalRequest();
   replacement.id = "decision-replacement";
   replacement.action = "Read a changed report scope";
+  replacement.duration.startsAt = approvalFollowUpAt;
   const replaced = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
     requestId: "replace-research-approval-1",
@@ -222,7 +250,7 @@ test("informational actions preserve the active Pending Decision and it cannot b
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      requestedAt: "2026-09-01T09:17:00.000Z",
+      requestedAt: approvalFollowUpAt,
       request: replacement,
     },
   });
@@ -252,7 +280,7 @@ test("only an explicit response for the unchanged scope consumes a Pending Decis
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      requestedAt: "2026-09-01T09:15:00.000Z",
+      requestedAt: approvalRequestedAt,
       request: scope,
     },
   });
@@ -267,7 +295,7 @@ test("only an explicit response for the unchanged scope consumes a Pending Decis
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      respondedAt: "2026-09-01T09:16:00.000Z",
+      respondedAt: approvalInformationAt,
       decisionId: scope.id,
       response: {
         kind: "approve",
@@ -289,7 +317,7 @@ test("only an explicit response for the unchanged scope consumes a Pending Decis
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      respondedAt: "2026-09-01T09:17:00.000Z",
+      respondedAt: approvalRespondedAt,
       decisionId: scope.id,
       response: {
         kind: "approve",
@@ -310,13 +338,13 @@ test("only an explicit response for the unchanged scope consumes a Pending Decis
     {
       id: "approval-analyst-report-access",
       decisionId: scope.id,
-      approvedAt: "2026-09-01T09:17:00.000Z",
+      approvedAt: approvalRespondedAt,
       scope,
     },
   ]);
   assert.match(
     approved.response.result.workView.nextPermittedActions.join(" "),
-    /approved-research/,
+    /research-approval-scope-and-duration/,
   );
 });
 
@@ -333,7 +361,7 @@ test("refusal records the resulting Evidence Gap and independent research can co
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      requestedAt: "2026-09-01T09:15:00.000Z",
+      requestedAt: approvalRequestedAt,
       request: scope,
     },
   });
@@ -346,7 +374,7 @@ test("refusal records the resulting Evidence Gap and independent research can co
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      respondedAt: "2026-09-01T09:16:00.000Z",
+      respondedAt: approvalInformationAt,
       decisionId: scope.id,
       response: {
         kind: "refuse",
@@ -391,7 +419,7 @@ test("refusal records the resulting Evidence Gap and independent research can co
     publicResearchReservationCommand(campaignPath, {
       requestId: "reserve-independent-public-research-1",
       payload: {
-        reservedAt: "2026-09-01T09:17:00.000Z",
+        reservedAt: approvalFollowUpAt,
         reservation: { id: "reservation-independent-public-source" },
       },
     }),
@@ -413,7 +441,7 @@ test("Research Expenditure records approval provenance and budget effects withou
       payload: {
         campaignPath,
         coordinatorId: "coordinator-primary",
-        requestedAt: "2026-09-01T09:15:00.000Z",
+        requestedAt: approvalRequestedAt,
         request: scope,
       },
     },
@@ -424,7 +452,7 @@ test("Research Expenditure records approval provenance and budget effects withou
       payload: {
         campaignPath,
         coordinatorId: "coordinator-primary",
-        respondedAt: "2026-09-01T09:17:00.000Z",
+        respondedAt: approvalRespondedAt,
         decisionId: scope.id,
         response: {
           kind: "approve",
@@ -448,7 +476,7 @@ test("Research Expenditure records approval provenance and budget effects withou
     payload: {
       campaignPath,
       coordinatorId: "coordinator-primary",
-      incurredAt: "2026-09-01T09:21:00.000Z",
+      incurredAt: approvalFollowUpAt,
       expenditure: {
         id: "expenditure-analyst-report",
         approvalId: "approval-analyst-report-access",
@@ -492,6 +520,17 @@ test("Research Expenditure records approval provenance and budget effects withou
   const rejected = await runKernel(kernelPath, unsafe);
   assert.equal(rejected.code, 3);
   assert.equal(rejected.response.error.code, "SVS-RESEARCH-EXPENDITURE-INVALID");
+
+  const embeddedPaymentDetails = structuredClone(command);
+  embeddedPaymentDetails.requestId = "record-embedded-payment-details-1";
+  embeddedPaymentDetails.payload.expenditure.purpose =
+    "Report bought with card ending 4242";
+  const embeddedRejected = await runKernel(kernelPath, embeddedPaymentDetails);
+  assert.equal(embeddedRejected.code, 3);
+  assert.equal(
+    embeddedRejected.response.error.code,
+    "SVS-RESEARCH-EXPENDITURE-INVALID",
+  );
 });
 
 test("Research Approval cannot authorize unlawful, external-validation, or over-budget work", async () => {
@@ -519,6 +558,20 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
       },
       "SVS-RESEARCH-APPROVAL-BUDGET-INVALID",
     ],
+    [
+      "request-mislabeled-customer-outreach-1",
+      (request) => {
+        request.action = "Contact prospective customers and interview them";
+      },
+      "SVS-RESEARCH-APPROVAL-INVALID",
+    ],
+    [
+      "request-mislabeled-unlawful-access-1",
+      (request) => {
+        request.accessMethod = "Bypass the Source paywall and access controls";
+      },
+      "SVS-RESEARCH-APPROVAL-INVALID",
+    ],
   ]);
   for (const [requestId, mutate, expectedCode] of cases) {
     const request = researchApprovalRequest();
@@ -530,7 +583,7 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
       payload: {
         campaignPath,
         coordinatorId: "coordinator-primary",
-        requestedAt: "2026-09-01T09:15:00.000Z",
+        requestedAt: approvalRequestedAt,
         request,
       },
     });
@@ -541,4 +594,55 @@ test("Research Approval cannot authorize unlawful, external-validation, or over-
       recordsBefore,
     );
   }
+});
+
+test("an expired Pending Decision cannot be consumed by a backdated approval", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-expired-approval-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+  const campaignPath = path.join(storagePath, "expired-approval");
+  await createConfirmedCampaign(kernelPath, campaignPath);
+  const scope = researchApprovalRequest();
+  const requested = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "request-expiring-research-approval-1",
+    command: "requestResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      requestedAt: approvalRequestedAt,
+      request: scope,
+    },
+  });
+  assert.equal(requested.code, 0, requested.stderr);
+
+  const approved = await runKernelAt(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "backdate-expired-research-approval-1",
+    command: "respondResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: new Date(Date.now() - 90_000).toISOString(),
+      decisionId: scope.id,
+      response: {
+        kind: "approve",
+        approval: {
+          id: "approval-expired-scope",
+          explicitlyApproved: true,
+          scope,
+        },
+      },
+    },
+  }, new Date(new Date(scope.duration.expiresAt).valueOf() + 60_000).toISOString());
+
+  assert.equal(approved.code, 3);
+  assert.equal(approved.response.error.code, "SVS-RESEARCH-APPROVAL-EXPIRED");
+  const inspected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-expired-pending-decision-1",
+    command: "inspectCampaign",
+    payload: { campaignPath },
+  });
+  assert.equal(inspected.response.result.pendingDecision.id, scope.id);
+  assert.equal(inspected.response.result.workView.pause.reason, "pending-decision");
 });

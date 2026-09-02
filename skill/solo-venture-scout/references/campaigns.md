@@ -448,16 +448,43 @@ Approval copies the entire request as the exact scope the developer saw:
       "approval": {
         "id": "stable-research-approval-id",
         "explicitlyApproved": true,
-        "scope": "COPY THE COMPLETE UNCHANGED requestResearchApproval request OBJECT HERE"
+        "scope": {
+          "id": "stable-pending-decision-id",
+          "access": "restricted-and-paid",
+          "action": "Read one named report through the developer-controlled portal",
+          "purpose": "Resolve one named Evidence Gap",
+          "source": {
+            "id": "stable-proposed-source-id",
+            "description": "Named analyst report",
+            "url": "https://research.example.com/report"
+          },
+          "accessMethod": "Use the developer's existing signed-in browser session read-only",
+          "data": {
+            "accessed": ["Report text and publication metadata"],
+            "retained": ["Citation metadata and neutral atomic paraphrases"]
+          },
+          "externalEffects": [],
+          "maximumCost": { "amount": 12, "currency": "GBP" },
+          "risks": ["The report may be outdated or methodologically opaque"],
+          "duration": {
+            "startsAt": "2026-08-31T10:00:00.000Z",
+            "expiresAt": "2026-08-31T11:00:00.000Z"
+          },
+          "alternatives": ["Continue with public Sources and leave the Evidence Gap open"],
+          "lawfulActivity": true,
+          "externalValidationAction": false
+        }
       }
     }
   }
 }
 ```
 
-The `scope` placeholder above denotes the exact JSON request object, not a string in a
-real command. Any changed material field fails closed and requires a refused or newly
-requested scope. Expired approval requests cannot be approved.
+Any changed material field fails closed and requires a refused or newly requested
+scope. The kernel compares its current clock—not the caller's `respondedAt`—with the
+recorded duration, so an expired request cannot be approved by backdating a response.
+Before any later use, recheck the recorded scope and duration; expired approvals are
+historical provenance and require renewal.
 
 Refusal uses the same command with an explicit refusal and one complete open Evidence
 Gap:

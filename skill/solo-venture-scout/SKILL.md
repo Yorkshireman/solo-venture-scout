@@ -173,7 +173,9 @@ research, use `requestResearchApproval` from
 Pending Decision. Show its complete scope in this order: action, purpose, Source,
 access method, data accessed and retained, external effects, maximum cost and
 currency, risks, duration, and alternatives. State explicitly that Research Approval
-cannot authorise unlawful activity or an External Validation Action.
+cannot authorise unlawful activity or an External Validation Action. Reject the
+request when its described action, access method, or external effects conflict with
+that boundary, regardless of its boolean safety declarations.
 
 Leave the dependent research untouched until the developer responds. Silence remains
 a safe resumable pause. Informational questions, inspection, requests for an
@@ -188,6 +190,10 @@ access, purpose, Source, data, external effects, cost, or duration requires rene
 approval. A refusal must be explicit and must record the resulting Evidence Gap;
 afterward, continue independent permitted work when possible without attempting the
 refused action.
+
+Immediately before using a Research Approval, compare the current UTC time with its
+recorded duration and recheck the complete scope. An expired approval is historical
+provenance, not permission; obtain renewed approval instead of performing the action.
 
 For paid research, use `recordResearchExpenditure` only after the approved action is
 actually charged. A Research Expenditure records its Research Approval provenance,

@@ -1140,9 +1140,33 @@ function containsProhibitedPersistedContent(value: string): boolean {
     /\b(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|secret|authorization)\b\s*(?:[:=]|\bis\b)\s*\S+/i,
     /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
     /\b(?:card|iban|bank account|routing number|sort code)\b.{0,24}(?:[:=]|\bis\b)\s*[A-Z0-9 -]{6,}/i,
+    /\b(?:credit|debit|payment)\s+card\b/i,
+    /\bcard\s+(?:ending|number|details?)\b/i,
+    /\b(?:cvv|cvc|iban|bank account|routing number|sort code|payment details?)\b/i,
+    /\b(?:last four|last 4|ending in)\s*\d{4}\b/i,
     /<\/?[A-Z][^>]*>|```/i,
     /^\s*(?:ignore|disregard|override)\b.{0,80}\b(?:instructions?|workflow|system prompt)\b/i,
   ].some((pattern) => pattern.test(value));
+}
+
+function describesProhibitedResearchAction(
+  request: Record<string, unknown>,
+): boolean {
+  const proposedActivity = [
+    request.action,
+    request.accessMethod,
+    ...(Array.isArray(request.externalEffects) ? request.externalEffects : []),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  return [
+    /\b(?:contact|message|email|call|interview|survey|solicit|outreach)\b.{0,80}\b(?:prospects?|customers?|buyers?|users?|market participants?)\b/i,
+    /\b(?:publish|post|advertise|launch)\b/i,
+    /\b(?:submit|complete|send)\b.{0,40}\bform\b/i,
+    /\b(?:accept|collect|receive|charge)\b.{0,40}\b(?:money|payments?|card details?)\b/i,
+    /\b(?:bypass|circumvent|evade)\b.{0,80}\b(?:access controls?|authentication|paywalls?|law|terms|robots)\b/i,
+    /\b(?:illegal|unlawful|stolen credentials?)\b/i,
+  ].some((pattern) => pattern.test(proposedActivity));
 }
 
 function validatePersistableText(value: unknown, field: string): string[] {
@@ -1904,6 +1928,9 @@ function validateResearchApprovalRequest(
   if (value.externalValidationAction !== false) {
     details.push(`${field}.externalValidationAction must be false; Research Approval cannot authorize an External Validation Action.`);
   }
+  if (describesProhibitedResearchAction(value)) {
+    details.push(`${field} describes an unlawful or External Validation Action and cannot be approved.`);
+  }
   return details;
 }
 
@@ -2259,6 +2286,55 @@ function activeResearchApprovalDecision(
         (response) => response.decisionId === decision.id,
       ),
   );
+}
+
+type ResearchExpenditurePolicyViolation =
+  | "scope"
+  | "duration"
+  | "approval-budget"
+  | "campaign-budget";
+
+function researchExpenditurePolicyViolation({
+  expenditure,
+  approval,
+  intake,
+  existingExpenditures,
+}: {
+  expenditure: ResearchExpenditure;
+  approval: ResearchApproval;
+  intake: ConfirmedCampaignIntake;
+  existingExpenditures: ResearchExpenditure[];
+}): ResearchExpenditurePolicyViolation | undefined {
+  if (
+    !["paid", "restricted-and-paid"].includes(approval.scope.access) ||
+    expenditure.approvalDecisionId !== approval.decisionId ||
+    expenditure.sourceId !== approval.scope.source.id ||
+    expenditure.purpose !== approval.scope.purpose ||
+    expenditure.currency !== approval.scope.maximumCost.currency ||
+    expenditure.currency !== intake.researchBudget.paidSpendCap.currency
+  ) {
+    return "scope";
+  }
+  if (
+    expenditure.incurredAt < approval.approvedAt ||
+    expenditure.incurredAt < approval.scope.duration.startsAt ||
+    expenditure.incurredAt > approval.scope.duration.expiresAt
+  ) {
+    return "duration";
+  }
+  const approvalSpend = existingExpenditures
+    .filter((existing) => existing.approvalId === approval.id)
+    .reduce((total, existing) => total + existing.amount, 0);
+  if (approvalSpend + expenditure.amount > approval.scope.maximumCost.amount) {
+    return "approval-budget";
+  }
+  const campaignSpend = existingExpenditures.reduce(
+    (total, existing) => total + existing.amount,
+    0,
+  );
+  return campaignSpend + expenditure.amount > intake.researchBudget.paidSpendCap.amount
+    ? "campaign-budget"
+    : undefined;
 }
 
 function invalidAuthoritativeRecord(sequence: number): never {
@@ -2718,13 +2794,6 @@ const authoritativeOperationDescriptors = {
       const approval = history.researchApprovals.find(
         (existing) => existing.id === expenditure.approvalId,
       );
-      const approvalSpend = history.researchExpenditures
-        .filter((existing) => existing.approvalId === approval?.id)
-        .reduce((total, existing) => total + existing.amount, 0);
-      const campaignSpend = history.researchExpenditures.reduce(
-        (total, existing) => total + existing.amount,
-        0,
-      );
       if (
         history.intake === undefined ||
         approval === undefined ||
@@ -2739,34 +2808,36 @@ const authoritativeOperationDescriptors = {
           "incurredAt",
         ]) ||
         intent.expenditureId !== expenditure.id ||
-        expenditure.approvalDecisionId !== approval.decisionId ||
-        expenditure.sourceId !== approval.scope.source.id ||
-        expenditure.purpose !== approval.scope.purpose ||
+        typeof expenditure.id !== "string" ||
+        expenditure.id.trim() === "" ||
+        typeof expenditure.purpose !== "string" ||
         validatePersistableText(
           expenditure.purpose,
           "expenditure.purpose",
         ).length > 0 ||
-        expenditure.currency !== approval.scope.maximumCost.currency ||
-        expenditure.currency !== history.intake.researchBudget.paidSpendCap.currency ||
         typeof expenditure.amount !== "number" ||
         !Number.isFinite(expenditure.amount) ||
         expenditure.amount <= 0 ||
-        approvalSpend + expenditure.amount > approval.scope.maximumCost.amount ||
-        campaignSpend + expenditure.amount > history.intake.researchBudget.paidSpendCap.amount ||
         outcome.recordedAt !== expenditure.incurredAt ||
         typeof outcome.recordedAt !== "string" ||
-        outcome.recordedAt < approval.approvedAt ||
-        outcome.recordedAt < approval.scope.duration.startsAt ||
-        outcome.recordedAt > approval.scope.duration.expiresAt ||
         history.researchExpenditures.some(
           (existing) => existing.id === expenditure.id,
         )
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
       }
-      history.researchExpenditures.push(
-        expenditure as unknown as ResearchExpenditure,
-      );
+      const validatedExpenditure = expenditure as unknown as ResearchExpenditure;
+      if (
+        researchExpenditurePolicyViolation({
+          expenditure: validatedExpenditure,
+          approval,
+          intake: history.intake,
+          existingExpenditures: history.researchExpenditures,
+        }) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      history.researchExpenditures.push(validatedExpenditure);
     },
   },
 } as const satisfies Record<
@@ -3318,6 +3389,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     researchApprovalResponses,
   });
   if (pendingDecision !== undefined) {
+    const pendingInformation = researchApprovalInformation.filter(
+      (information) => information.decisionId === pendingDecision.id,
+    );
     workView.pause = {
       reason: "pending-decision",
       pendingDecisionId: pendingDecision.id,
@@ -3328,9 +3402,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.completedWork.push(
       `Research Approval ${pendingDecision.id} requested`,
     );
-    if (researchApprovalInformation.length > 0) {
+    if (pendingInformation.length > 0) {
       workView.completedWork.push(
-        `${researchApprovalInformation.length} Research Approval explanation${researchApprovalInformation.length === 1 ? "" : "s"} recorded`,
+        `${pendingInformation.length} Research Approval explanation${pendingInformation.length === 1 ? "" : "s"} recorded for ${pendingDecision.id}`,
       );
     }
     workView.nextPermittedActions = [
@@ -3339,10 +3413,17 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       ...workView.nextPermittedActions,
     ];
   }
+  for (const response of researchApprovalResponses) {
+    if (response.response.kind === "refuse") {
+      workView.completedWork.push(
+        `Research Approval ${response.decisionId} refused`,
+      );
+    }
+  }
   for (const approval of researchApprovals) {
     workView.completedWork.push(`Research Approval ${approval.id} granted`);
     workView.nextPermittedActions = [
-      "perform-approved-research-read-only",
+      "verify-research-approval-scope-and-duration",
       ...workView.nextPermittedActions,
     ];
   }
@@ -4348,6 +4429,13 @@ async function requestResearchApproval(
           action: "Answer, refuse, or ask about the active Pending Decision; do not replace it.",
         };
       }
+      if (currentTime > command.payload.request.duration.expiresAt) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-EXPIRED",
+          message: "Research Approval request duration has already expired.",
+          action: "Create a current bounded scope and request renewed approval; do not backdate permission.",
+        };
+      }
       const maximumCost = command.payload.request.maximumCost;
       const recordedSpend = (campaign.researchExpenditures ?? []).reduce(
         (total, expenditure) => total + expenditure.amount,
@@ -4558,7 +4646,7 @@ async function respondResearchApproval(
       }
       if (
         command.payload.response.kind === "approve" &&
-        command.payload.respondedAt > pendingDecision.request.duration.expiresAt
+        currentTime > pendingDecision.request.duration.expiresAt
       ) {
         return {
           code: "SVS-RESEARCH-APPROVAL-EXPIRED",
@@ -4703,41 +4791,33 @@ async function recordResearchExpenditure(
           action: "Do not pay or retry; request explicit scoped approval first.",
         };
       }
-      if (
-        !["paid", "restricted-and-paid"].includes(approval.scope.access) ||
-        expenditure.sourceId !== approval.scope.source.id ||
-        expenditure.purpose !== approval.scope.purpose ||
-        expenditure.currency !== approval.scope.maximumCost.currency
-      ) {
+      const policyViolation = researchExpenditurePolicyViolation({
+        expenditure: {
+          ...expenditure,
+          approvalDecisionId: approval.decisionId,
+          incurredAt: command.payload.incurredAt,
+        },
+        approval,
+        intake: campaign.intake!,
+        existingExpenditures: campaign.researchExpenditures ?? [],
+      });
+      if (policyViolation === "scope") {
         return {
           code: "SVS-RESEARCH-APPROVAL-SCOPE-CHANGED",
           message: "Research Expenditure differs from the approved Source, purpose, access, or currency.",
           action: "Do not pay; request renewed approval for the changed material scope.",
         };
       }
-      if (
-        command.payload.incurredAt < approval.approvedAt ||
-        command.payload.incurredAt < approval.scope.duration.startsAt ||
-        command.payload.incurredAt > approval.scope.duration.expiresAt
-      ) {
+      if (policyViolation === "duration") {
         return {
           code: "SVS-RESEARCH-APPROVAL-EXPIRED",
           message: "Research Expenditure falls outside the granted approval duration.",
           action: "Do not pay or retry; request renewed approval for a current duration.",
         };
       }
-      const approvalSpend = (campaign.researchExpenditures ?? [])
-        .filter((existing) => existing.approvalId === approval.id)
-        .reduce((total, existing) => total + existing.amount, 0);
-      const campaignSpend = (campaign.researchExpenditures ?? []).reduce(
-        (total, existing) => total + existing.amount,
-        0,
-      );
-      const paidCap = campaign.intake!.researchBudget.paidSpendCap;
       if (
-        approvalSpend + expenditure.amount > approval.scope.maximumCost.amount ||
-        campaignSpend + expenditure.amount > paidCap.amount ||
-        expenditure.currency !== paidCap.currency
+        policyViolation === "approval-budget" ||
+        policyViolation === "campaign-budget"
       ) {
         return {
           code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
