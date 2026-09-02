@@ -165,6 +165,38 @@ After a successful write, use the Work View's stable reasoning pointers and
 corrected entry. Do not load the entire Evidence Ledger unless the named decision,
 gap, contradiction, correction, or audit requires it.
 
+## Discover Exploration Threads
+
+Run bounded Discovery Sweeps across heterogeneous Source Families. Build each sampling
+frame from external maps of economic activity and record its controlled sampling
+method, selection rule, size, and seed when random; do not start from a
+developer-supplied category list. Use a novelty check to compare each proposed thread
+with earlier Exploration Threads.
+
+An Exploration Thread names a specific customer group, situation or workflow, and
+problem family. It is not an industry label or a proposed product. For a source-led
+thread, work backward from cited Observations that show both a material consequence
+and committed behavior such as expenditure, workaround effort, switching, escalation,
+or measurable loss. A complaint or feature request is a direction for research, not
+proof of a Costly Problem.
+
+Use five-slot discovery tranches so exactly twenty percent of each discovery tranche
+is reserved for Novelty Probes. Give every retained Exploration Thread the same shallow initial research allowance.
+Familiar domain coverage cannot exceed one-third of all
+initial threads unless the tranche records a Campaign Intake-driven exception
+linked to a confirmed statement.
+
+A Novelty Probe may use cross-domain transfer, change combinations, inversion, or
+recombination. Record its derivation as an Assumption linked to an Evidence Gap. It
+receives no evidential credit and no comparison bonus; it becomes evidence-led only
+through later Public Research.
+
+After each bounded tranche, run `recordDiscoveryTranche` from
+[references/campaigns.md](references/campaigns.md). Report the Work View's coverage,
+Source Families, allowances, familiar-domain count and exception, and retained or
+dropped Exploration Threads. Do not hide overlaps or silently reallocate the Novelty
+Probe reserve.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

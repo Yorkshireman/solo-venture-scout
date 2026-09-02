@@ -123,6 +123,30 @@ test("packaged Scout derives auditable reasoning without blurring evidence types
   }
 });
 
+test("packaged Scout runs bounded source-led discovery without familiar-domain bias", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-discovery-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(instructions, /Discovery Sweep.+heterogeneous Source Families/is);
+  assert.match(instructions, /external maps of economic activity.+controlled sampling/is);
+  assert.match(instructions, /not.+developer-supplied category list/is);
+  assert.match(instructions, /customer group.+situation or workflow.+problem family/is);
+  assert.match(instructions, /familiar domain.+one-third.+Campaign Intake.+exception/is);
+  assert.match(instructions, /same shallow initial research allowance/is);
+  assert.match(instructions, /twenty percent.+discovery tranche.+Novelty Probes/is);
+  assert.match(instructions, /Novelty Probe.+Assumption.+Evidence Gap.+no evidential credit/is);
+  assert.match(instructions, /material consequence.+committed behavior.+complaint.+feature request/is);
+  assert.match(instructions, /Work View.+coverage.+Source Families.+allowances.+retained.+dropped/is);
+  assert.match(reference, /"command": "recordDiscoveryTranche"/);
+  assert.match(reference, /"frameOrigin": "external-map"/);
+  assert.match(reference, /"kind": "novelty-probe"/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

@@ -334,6 +334,118 @@ type RecordEvidenceReasoningCommand = {
   };
 };
 
+type DiscoverySampling = {
+  frameOrigin: "external-map";
+  method: "systematic" | "stratified" | "seeded-random" | "bounded-enumeration";
+  frame: string;
+  selectionRule: string;
+  sampleSize: number;
+  randomSeed: string | null;
+};
+
+type DiscoverySweep = {
+  id: string;
+  sourceFamily: {
+    id: string;
+    name: string;
+    economicActivityMap: string;
+  };
+  sourceIds: string[];
+  sampling: DiscoverySampling;
+};
+
+type ProblemSignal = {
+  materialConsequence: {
+    kind:
+      | "lost-money"
+      | "wasted-skilled-time"
+      | "blocked-revenue"
+      | "operational-risk"
+      | "compliance-exposure"
+      | "workaround-expenditure";
+    description: string;
+    observationIds: string[];
+  };
+  committedBehavior: {
+    kind:
+      | "expenditure"
+      | "workaround-effort"
+      | "switching"
+      | "escalation"
+      | "measurable-loss";
+    description: string;
+    observationIds: string[];
+  };
+};
+
+type ExplorationThreadBase = {
+  id: string;
+  customerGroup: string;
+  situation: string;
+  problemFamily: string;
+  familiarDomain: boolean;
+  noveltyCheck: {
+    comparedWithThreadIds: string[];
+    result: "distinct" | "overlaps-existing";
+    rationale: string;
+  };
+  disposition: {
+    status: "retained" | "dropped";
+    rationale: string;
+  };
+};
+
+type SourceLedExplorationThread = ExplorationThreadBase & {
+  origin: {
+    kind: "source-led";
+    sweepId: string;
+    observationIds: string[];
+  };
+  problemSignal: ProblemSignal;
+};
+
+type NoveltyProbeExplorationThread = ExplorationThreadBase & {
+  origin: {
+    kind: "novelty-probe";
+    method: "cross-domain-transfer" | "change-combination" | "inversion" | "recombination";
+    derivation: string;
+    assumption: Assumption;
+    evidenceGap: EvidenceGap;
+  };
+};
+
+type ExplorationThread =
+  | SourceLedExplorationThread
+  | NoveltyProbeExplorationThread;
+
+type FamiliarDomainException = {
+  intakeStatementId: string;
+  rationale: string;
+};
+
+type DiscoveryTranche = {
+  id: string;
+  ordinal: number;
+  threadSlots: number;
+  noveltyProbeSlots: number;
+  shallowResearchSourceUnitsPerRetainedThread: number;
+  familiarDomainException: FamiliarDomainException | null;
+  sweeps: DiscoverySweep[];
+  threads: ExplorationThread[];
+};
+
+type RecordDiscoveryTrancheCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordDiscoveryTranche";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    tranche: DiscoveryTranche;
+  };
+};
+
 type ResearchApprovalRequest = {
   id: string;
   access: "restricted" | "paid" | "restricted-and-paid";
@@ -516,7 +628,8 @@ type WorkView = {
   phase:
     | "campaign-created"
     | "campaign-intake-confirmed"
-    | "public-research-active";
+    | "public-research-active"
+    | "discovery-active";
   pause:
     | null
     | {
@@ -542,6 +655,46 @@ type WorkView = {
     unresolvedContradictionIds: string[];
     correctionIds: string[];
   };
+  discovery?: {
+    coverage: {
+      discoveryTranches: number;
+      discoverySweeps: number;
+      discoverySweepCap: number;
+      sourceFamilies: string[];
+      sourceFamilyMinimum: number;
+    };
+    allowances: {
+      threadSlots: number;
+      noveltyProbeSlots: number;
+      noveltyProbeShare: number;
+      shallowResearchSourceUnitsPerRetainedThread: number;
+    };
+    familiarDomain: {
+      familiarThreads: number;
+      totalInitialThreads: number;
+      maximumWithoutException: number;
+      exception: FamiliarDomainException | null;
+    };
+    retainedThreads: Array<{
+      id: string;
+      customerGroup: string;
+      situation: string;
+      problemFamily: string;
+      origin: "source-led" | "novelty-probe";
+      shallowResearchSourceUnits: number;
+      evidenceCredit: "source-led" | "none";
+      comparisonBonus: "none";
+    }>;
+    droppedThreads: Array<{
+      id: string;
+      customerGroup: string;
+      situation: string;
+      problemFamily: string;
+      origin: "source-led" | "novelty-probe";
+      familiarDomain: boolean;
+      rationale: string;
+    }>;
+  };
 };
 
 type CoordinatorLease = {
@@ -557,6 +710,7 @@ type AuthoritativeOperation =
   | "reserve-public-research"
   | "record-public-research-observation"
   | "record-evidence-reasoning"
+  | "record-discovery-tranche"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"
@@ -1752,6 +1906,412 @@ function validateRecordEvidenceReasoningFields(
   return details;
 }
 
+function validateDiscoverySampling(
+  value: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "frameOrigin",
+      "method",
+      "frame",
+      "selectionRule",
+      "sampleSize",
+      "randomSeed",
+    ])
+  ) {
+    return [`${field} must contain the complete controlled sampling method.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "frame",
+    "selectionRule",
+  ]);
+  if (value.frameOrigin !== "external-map") {
+    details.push(`${field}.frameOrigin must be external-map.`);
+  }
+  if (
+    !["systematic", "stratified", "seeded-random", "bounded-enumeration"].includes(
+      String(value.method),
+    )
+  ) {
+    details.push(`${field}.method must be a supported controlled sampling method.`);
+  }
+  if (!Number.isSafeInteger(value.sampleSize) || Number(value.sampleSize) <= 0) {
+    details.push(`${field}.sampleSize must be a positive safe integer.`);
+  }
+  if (
+    value.method === "seeded-random" &&
+    (typeof value.randomSeed !== "string" || value.randomSeed.trim() === "")
+  ) {
+    details.push(`${field}.randomSeed must be recorded for seeded-random sampling.`);
+  }
+  if (value.method !== "seeded-random" && value.randomSeed !== null) {
+    details.push(`${field}.randomSeed must be null unless sampling is seeded-random.`);
+  }
+  details.push(...validatePersistableText(value.randomSeed, `${field}.randomSeed`));
+  return details;
+}
+
+function validateDiscoverySweep(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["id", "sourceFamily", "sourceIds", "sampling"])
+  ) {
+    return [`${field} must contain identity, one Source Family, Sources, and controlled sampling.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id"]);
+  if (
+    !isRecord(value.sourceFamily) ||
+    !hasOnlyFields(value.sourceFamily, ["id", "name", "economicActivityMap"])
+  ) {
+    details.push(`${field}.sourceFamily must identify one external map Source Family.`);
+  } else {
+    details.push(
+      ...validateReasoningTextFields(value.sourceFamily, `${field}.sourceFamily`, [
+        "id",
+        "name",
+        "economicActivityMap",
+      ]),
+    );
+  }
+  details.push(...validateEntryIdList(value.sourceIds, `${field}.sourceIds`, false));
+  details.push(...validateDiscoverySampling(value.sampling, `${field}.sampling`));
+  return details;
+}
+
+function validateProblemSignal(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["materialConsequence", "committedBehavior"])
+  ) {
+    return [`${field} must contain a material consequence and committed behavior.`];
+  }
+  const details: string[] = [];
+  const consequence = value.materialConsequence;
+  if (
+    !isRecord(consequence) ||
+    !hasOnlyFields(consequence, ["kind", "description", "observationIds"])
+  ) {
+    details.push(`${field}.materialConsequence must contain kind, description, and Observation links.`);
+  } else {
+    if (
+      ![
+        "lost-money",
+        "wasted-skilled-time",
+        "blocked-revenue",
+        "operational-risk",
+        "compliance-exposure",
+        "workaround-expenditure",
+      ].includes(String(consequence.kind))
+    ) {
+      details.push(`${field}.materialConsequence.kind must name a material consequence.`);
+    }
+    details.push(
+      ...validateReasoningTextFields(
+        consequence,
+        `${field}.materialConsequence`,
+        ["description"],
+      ),
+      ...validateEntryIdList(
+        consequence.observationIds,
+        `${field}.materialConsequence.observationIds`,
+        false,
+      ),
+    );
+  }
+  const behavior = value.committedBehavior;
+  if (
+    !isRecord(behavior) ||
+    !hasOnlyFields(behavior, ["kind", "description", "observationIds"])
+  ) {
+    details.push(`${field}.committedBehavior must contain kind, description, and Observation links.`);
+  } else {
+    if (
+      ![
+        "expenditure",
+        "workaround-effort",
+        "switching",
+        "escalation",
+        "measurable-loss",
+      ].includes(String(behavior.kind))
+    ) {
+      details.push(`${field}.committedBehavior.kind must name committed behavior rather than a complaint.`);
+    }
+    details.push(
+      ...validateReasoningTextFields(
+        behavior,
+        `${field}.committedBehavior`,
+        ["description"],
+      ),
+      ...validateEntryIdList(
+        behavior.observationIds,
+        `${field}.committedBehavior.observationIds`,
+        false,
+      ),
+    );
+  }
+  return details;
+}
+
+function validateExplorationThread(value: unknown, field: string): string[] {
+  if (!isRecord(value)) {
+    return [`${field} must be an Exploration Thread.`];
+  }
+  const origin = value.origin;
+  const sourceLed = isRecord(origin) && origin.kind === "source-led";
+  const allowedFields = sourceLed
+    ? [
+        "id",
+        "customerGroup",
+        "situation",
+        "problemFamily",
+        "familiarDomain",
+        "origin",
+        "problemSignal",
+        "noveltyCheck",
+        "disposition",
+      ]
+    : [
+        "id",
+        "customerGroup",
+        "situation",
+        "problemFamily",
+        "familiarDomain",
+        "origin",
+        "noveltyCheck",
+        "disposition",
+      ];
+  if (!hasOnlyFields(value, allowedFields)) {
+    return [`${field} must contain only the complete Exploration Thread contract.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "customerGroup",
+    "situation",
+    "problemFamily",
+  ]);
+  if (typeof value.familiarDomain !== "boolean") {
+    details.push(`${field}.familiarDomain must be a boolean.`);
+  }
+  if (
+    !isRecord(value.noveltyCheck) ||
+    !hasOnlyFields(value.noveltyCheck, [
+      "comparedWithThreadIds",
+      "result",
+      "rationale",
+    ])
+  ) {
+    details.push(`${field}.noveltyCheck must record comparison, result, and rationale.`);
+  } else {
+    details.push(
+      ...validateEntryIdList(
+        value.noveltyCheck.comparedWithThreadIds,
+        `${field}.noveltyCheck.comparedWithThreadIds`,
+        true,
+      ),
+      ...validateReasoningTextFields(
+        value.noveltyCheck,
+        `${field}.noveltyCheck`,
+        ["rationale"],
+      ),
+    );
+    if (!['distinct', 'overlaps-existing'].includes(String(value.noveltyCheck.result))) {
+      details.push(`${field}.noveltyCheck.result must be distinct or overlaps-existing.`);
+    }
+  }
+  if (
+    !isRecord(value.disposition) ||
+    !hasOnlyFields(value.disposition, ["status", "rationale"])
+  ) {
+    details.push(`${field}.disposition must record retained or dropped with rationale.`);
+  } else {
+    details.push(
+      ...validateReasoningTextFields(value.disposition, `${field}.disposition`, [
+        "rationale",
+      ]),
+    );
+    if (!["retained", "dropped"].includes(String(value.disposition.status))) {
+      details.push(`${field}.disposition.status must be retained or dropped.`);
+    }
+  }
+  if (sourceLed) {
+    if (
+      !hasOnlyFields(origin, ["kind", "sweepId", "observationIds"]) ||
+      typeof origin.sweepId !== "string" ||
+      origin.sweepId.trim() === ""
+    ) {
+      details.push(`${field}.origin must link a source-led thread to one Discovery Sweep.`);
+    }
+    details.push(
+      ...validatePersistableText(origin.sweepId, `${field}.origin.sweepId`),
+      ...validateEntryIdList(
+        origin.observationIds,
+        `${field}.origin.observationIds`,
+        false,
+      ),
+      ...validateProblemSignal(value.problemSignal, `${field}.problemSignal`),
+    );
+  } else if (isRecord(origin) && origin.kind === "novelty-probe") {
+    if (
+      !hasOnlyFields(origin, [
+        "kind",
+        "method",
+        "derivation",
+        "assumption",
+        "evidenceGap",
+      ])
+    ) {
+      details.push(`${field}.origin must contain the complete Novelty Probe derivation.`);
+    }
+    if (
+      ![
+        "cross-domain-transfer",
+        "change-combination",
+        "inversion",
+        "recombination",
+      ].includes(String(origin.method))
+    ) {
+      details.push(`${field}.origin.method must be a supported Novelty Probe method.`);
+    }
+    details.push(
+      ...validateReasoningTextFields(origin, `${field}.origin`, ["derivation"]),
+      ...validateEvidenceGap(origin.evidenceGap, `${field}.origin.evidenceGap`),
+      ...validateAssumption(origin.assumption, `${field}.origin.assumption`),
+    );
+    if (
+      isRecord(origin.assumption) &&
+      isRecord(origin.evidenceGap) &&
+      origin.assumption.evidenceGapId !== origin.evidenceGap.id
+    ) {
+      details.push(`${field}.origin.assumption must link its Novelty Probe Evidence Gap.`);
+    }
+  } else {
+    details.push(`${field}.origin.kind must be source-led or novelty-probe.`);
+  }
+  return details;
+}
+
+function validateDiscoveryTranche(value: unknown, field = "payload.tranche"): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "id",
+      "ordinal",
+      "threadSlots",
+      "noveltyProbeSlots",
+      "shallowResearchSourceUnitsPerRetainedThread",
+      "familiarDomainException",
+      "sweeps",
+      "threads",
+    ])
+  ) {
+    return [`${field} must contain the complete bounded Discovery Tranche contract.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id"]);
+  for (const numberField of [
+    "ordinal",
+    "threadSlots",
+    "shallowResearchSourceUnitsPerRetainedThread",
+  ] as const) {
+    if (!Number.isSafeInteger(value[numberField]) || Number(value[numberField]) <= 0) {
+      details.push(`${field}.${numberField} must be a positive safe integer.`);
+    }
+  }
+  if (
+    !Number.isSafeInteger(value.noveltyProbeSlots) ||
+    Number(value.noveltyProbeSlots) <= 0 ||
+    Number.isSafeInteger(value.threadSlots) &&
+      (Number(value.threadSlots) % 5 !== 0 ||
+        Number(value.noveltyProbeSlots) !== Number(value.threadSlots) / 5)
+  ) {
+    details.push(`${field}.noveltyProbeSlots must reserve exactly twenty percent of threadSlots.`);
+  }
+  if (value.familiarDomainException !== null) {
+    if (
+      !isRecord(value.familiarDomainException) ||
+      !hasOnlyFields(value.familiarDomainException, ["intakeStatementId", "rationale"])
+    ) {
+      details.push(`${field}.familiarDomainException must be null or link one Campaign Intake statement.`);
+    } else {
+      details.push(
+        ...validateReasoningTextFields(
+          value.familiarDomainException,
+          `${field}.familiarDomainException`,
+          ["intakeStatementId", "rationale"],
+        ),
+      );
+    }
+  }
+  if (!Array.isArray(value.sweeps) || value.sweeps.length < 2) {
+    details.push(`${field}.sweeps must contain at least two heterogeneous Source Families.`);
+  } else {
+    const sweepIds = new Set<string>();
+    const familyIds = new Set<string>();
+    for (const [index, sweep] of value.sweeps.entries()) {
+      details.push(...validateDiscoverySweep(sweep, `${field}.sweeps[${index}]`));
+      if (isRecord(sweep) && typeof sweep.id === "string") {
+        if (sweepIds.has(sweep.id)) {
+          details.push(`${field}.sweeps must use unique stable identities.`);
+        }
+        sweepIds.add(sweep.id);
+      }
+      if (isRecord(sweep) && isRecord(sweep.sourceFamily) && typeof sweep.sourceFamily.id === "string") {
+        familyIds.add(sweep.sourceFamily.id);
+      }
+    }
+    if (familyIds.size < 2) {
+      details.push(`${field}.sweeps must use heterogeneous Source Families.`);
+    }
+  }
+  if (!Array.isArray(value.threads) || value.threads.length === 0) {
+    details.push(`${field}.threads must contain at least one inspectable Exploration Thread.`);
+  } else {
+    const threadIds = new Set<string>();
+    for (const [index, thread] of value.threads.entries()) {
+      details.push(...validateExplorationThread(thread, `${field}.threads[${index}]`));
+      if (isRecord(thread) && typeof thread.id === "string") {
+        if (threadIds.has(thread.id)) {
+          details.push(`${field}.threads must use unique stable identities.`);
+        }
+        threadIds.add(thread.id);
+      }
+    }
+    if (Number.isSafeInteger(value.threadSlots) && value.threads.length > Number(value.threadSlots)) {
+      details.push(`${field}.threads cannot exceed the bounded threadSlots.`);
+    }
+    const noveltyProbeCount = value.threads.filter(
+      (thread) => isRecord(thread) && isRecord(thread.origin) && thread.origin.kind === "novelty-probe",
+    ).length;
+    if (Number.isSafeInteger(value.noveltyProbeSlots) && noveltyProbeCount > Number(value.noveltyProbeSlots)) {
+      details.push(`${field}.threads cannot exceed the reserved Novelty Probe slots.`);
+    }
+    const sourceLedCount = value.threads.filter(
+      (thread) => isRecord(thread) && isRecord(thread.origin) && thread.origin.kind === "source-led",
+    ).length;
+    if (
+      Number.isSafeInteger(value.threadSlots) &&
+      Number.isSafeInteger(value.noveltyProbeSlots) &&
+      sourceLedCount > Number(value.threadSlots) - Number(value.noveltyProbeSlots)
+    ) {
+      details.push(`${field}.threads cannot consume a reserved Novelty Probe slot with a source-led thread.`);
+    }
+  }
+  return details;
+}
+
+function validateRecordDiscoveryTrancheFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  return [
+    ...validatePublicResearchCommandBase(command.payload, "recordedAt"),
+    ...validateDiscoveryTranche(command.payload.tranche),
+  ];
+}
+
 function validateResearchApprovalTextList(
   value: unknown,
   field: string,
@@ -2259,6 +2819,7 @@ type AuthoritativeHistoryRebuild = {
   inferences: Inference[];
   contradictions: Contradiction[];
   corrections: Correction[];
+  discoveryTranches: DiscoveryTranche[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
   researchApprovalResponses: RecordedResearchApprovalResponse[];
@@ -2518,6 +3079,183 @@ function applyReasoningEntries(
   return undefined;
 }
 
+function discoveryTrancheViolation(
+  history: AuthoritativeHistoryRebuild,
+  tranche: DiscoveryTranche,
+): string | undefined {
+  const intake = history.intake;
+  if (intake === undefined) {
+    return "Campaign Intake is not confirmed";
+  }
+  if (tranche.ordinal !== history.discoveryTranches.length + 1) {
+    return "Discovery Tranche ordinal is not the next sequential ordinal";
+  }
+  if (history.discoveryTranches.some((existing) => existing.id === tranche.id)) {
+    return `Discovery Tranche identity ${tranche.id} is already present`;
+  }
+  const existingSweeps = history.discoveryTranches.flatMap((existing) => existing.sweeps);
+  const existingThreads = history.discoveryTranches.flatMap((existing) => existing.threads);
+  if (existingSweeps.length + tranche.sweeps.length > intake.researchBudget.discoverySweepCap) {
+    return "Discovery Sweeps exceed the Campaign Intake cap";
+  }
+  if (
+    history.discoveryTranches.length > 0 &&
+    tranche.shallowResearchSourceUnitsPerRetainedThread !==
+      history.discoveryTranches[0]!.shallowResearchSourceUnitsPerRetainedThread
+  ) {
+    return "retained Exploration Threads must receive the same shallow research allowance";
+  }
+  const existingSweepIds = new Set(existingSweeps.map((sweep) => sweep.id));
+  const existingThreadIds = new Set(existingThreads.map((thread) => thread.id));
+  const existingFamilies = existingSweeps.map((sweep) => sweep.sourceFamily);
+  const trancheFamilies: DiscoverySweep["sourceFamily"][] = [];
+  const sourceIds = new Set(history.sources.map((source) => source.id));
+  const observationsById = new Map(
+    history.observations.map((observation) => [observation.id, observation]),
+  );
+  for (const sweep of tranche.sweeps) {
+    if (existingSweepIds.has(sweep.id)) {
+      return `Discovery Sweep identity ${sweep.id} is already present`;
+    }
+    const missingSourceId = sweep.sourceIds.find((sourceId) => !sourceIds.has(sourceId));
+    if (missingSourceId !== undefined) {
+      return `Discovery Sweep links unknown Source ${missingSourceId}`;
+    }
+    const sameIdentity = [...existingFamilies, ...trancheFamilies].find(
+      (family) => family.id === sweep.sourceFamily.id,
+    );
+    if (
+      sameIdentity !== undefined &&
+      JSON.stringify(sameIdentity) !== JSON.stringify(sweep.sourceFamily)
+    ) {
+      return `Source Family identity ${sweep.sourceFamily.id} conflicts with its recorded definition`;
+    }
+    const sameMap = [...existingFamilies, ...trancheFamilies].find(
+      (family) =>
+        family.name === sweep.sourceFamily.name &&
+        family.economicActivityMap === sweep.sourceFamily.economicActivityMap,
+    );
+    if (sameMap !== undefined && sameMap.id !== sweep.sourceFamily.id) {
+      return `Source Family ${sweep.sourceFamily.name} is already identified as ${sameMap.id}`;
+    }
+    trancheFamilies.push(sweep.sourceFamily);
+  }
+  const sweepsById = new Map(tranche.sweeps.map((sweep) => [sweep.id, sweep]));
+  const availableThreadIds = new Set(existingThreadIds);
+  for (const thread of tranche.threads) {
+    if (availableThreadIds.has(thread.id)) {
+      return `Exploration Thread identity ${thread.id} is already present`;
+    }
+    const unavailableComparisonId = thread.noveltyCheck.comparedWithThreadIds.find(
+      (threadId) => !availableThreadIds.has(threadId),
+    );
+    if (unavailableComparisonId !== undefined) {
+      return `Novelty check links unavailable Exploration Thread ${unavailableComparisonId}`;
+    }
+    if (
+      availableThreadIds.size > 0 &&
+      !thread.noveltyCheck.comparedWithThreadIds.some((threadId) =>
+        availableThreadIds.has(threadId),
+      )
+    ) {
+      return `Novelty check for ${thread.id} must compare at least one earlier Exploration Thread`;
+    }
+    if (
+      thread.noveltyCheck.result === "overlaps-existing" &&
+      thread.disposition.status !== "dropped"
+    ) {
+      return `overlapping Exploration Thread ${thread.id} must be dropped`;
+    }
+    if (thread.origin.kind === "source-led" && "problemSignal" in thread) {
+      const sweep = sweepsById.get(thread.origin.sweepId);
+      if (sweep === undefined) {
+        return `Exploration Thread ${thread.id} links unavailable Discovery Sweep ${thread.origin.sweepId}`;
+      }
+      const linkedObservationIds = new Set(thread.origin.observationIds);
+      const allSignalObservationIds = [
+        ...thread.problemSignal.materialConsequence.observationIds,
+        ...thread.problemSignal.committedBehavior.observationIds,
+      ];
+      const unavailableObservationId = [
+        ...thread.origin.observationIds,
+        ...allSignalObservationIds,
+      ].find((observationId) => {
+        const observation = observationsById.get(observationId);
+        return (
+          observation === undefined ||
+          !sweep.sourceIds.includes(observation.sourceId) ||
+          (allSignalObservationIds.includes(observationId) &&
+            !linkedObservationIds.has(observationId))
+        );
+      });
+      if (unavailableObservationId !== undefined) {
+        return `Exploration Thread ${thread.id} links unavailable sampled Observation ${unavailableObservationId}`;
+      }
+    }
+    availableThreadIds.add(thread.id);
+  }
+  const noveltyEntries = tranche.threads.flatMap((thread) =>
+    thread.origin.kind === "novelty-probe"
+      ? [thread.origin.evidenceGap, thread.origin.assumption]
+      : [],
+  );
+  const invalidNoveltyEntry = applyReasoningEntries(
+    {
+      sources: history.sources,
+      observations: history.observations,
+      sourceLineages: [...history.sourceLineages],
+      sourceCredibilities: [...history.sourceCredibilities],
+      sourceFreshnesses: [...history.sourceFreshnesses],
+      evidenceGaps: [...history.evidenceGaps],
+      assumptions: [...history.assumptions],
+      inferences: [...history.inferences],
+      contradictions: [...history.contradictions],
+      corrections: [...history.corrections],
+    },
+    noveltyEntries,
+  );
+  if (invalidNoveltyEntry !== undefined) {
+    return `Novelty Probe links invalid Evidence Ledger entry ${invalidNoveltyEntry}`;
+  }
+  const exception = tranche.familiarDomainException;
+  if (
+    exception !== null &&
+    !intake.statements.some((statement) => statement.id === exception.intakeStatementId)
+  ) {
+    return `familiar-domain exception does not link Campaign Intake statement ${exception.intakeStatementId}`;
+  }
+  const initialThreads = [...existingThreads, ...tranche.threads];
+  const familiarThreads = initialThreads.filter((thread) => thread.familiarDomain);
+  const hasRecordedException = [...history.discoveryTranches, tranche].some(
+    (recordedTranche) => recordedTranche.familiarDomainException !== null,
+  );
+  if (
+    !hasRecordedException &&
+    familiarThreads.length > Math.floor(initialThreads.length / 3)
+  ) {
+    return "familiar-domain Exploration Threads exceed one-third without a Campaign Intake exception";
+  }
+  return undefined;
+}
+
+function applyDiscoveryTranche(
+  history: AuthoritativeHistoryRebuild,
+  tranche: DiscoveryTranche,
+): string | undefined {
+  const violation = discoveryTrancheViolation(history, tranche);
+  if (violation !== undefined) {
+    return violation;
+  }
+  for (const thread of tranche.threads) {
+    if (thread.origin.kind === "novelty-probe") {
+      history.evidenceGaps.push(thread.origin.evidenceGap);
+      history.assumptions.push(thread.origin.assumption);
+    }
+  }
+  history.discoveryTranches.push(tranche);
+  return undefined;
+}
+
 const authoritativeOperationDescriptors = {
   "create-campaign": {
     outcome: "campaign-created",
@@ -2646,6 +3384,25 @@ const authoritativeOperationDescriptors = {
         applyReasoningEntries(
           history,
           outcome.entries as unknown as ReasoningEntry[],
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "record-discovery-tranche": {
+    outcome: "discovery-tranche-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        !isRecord(outcome.tranche) ||
+        intent.trancheId !== outcome.tranche.id ||
+        validateDiscoveryTranche(outcome.tranche, "tranche").length > 0 ||
+        applyDiscoveryTranche(
+          history,
+          outcome.tranche as unknown as DiscoveryTranche,
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -3015,6 +3772,25 @@ function evidenceReasoningRecords(
   });
 }
 
+function discoveryTrancheRecords(
+  campaignId: string,
+  command: RecordDiscoveryTrancheCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-discovery-tranche",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      trancheId: command.payload.tranche.id,
+    },
+    outcome: { tranche: command.payload.tranche },
+  });
+}
+
 function researchApprovalRequestRecords(
   campaignId: string,
   command: RequestResearchApprovalCommand,
@@ -3195,6 +3971,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     inferences: [],
     contradictions: [],
     corrections: [],
+    discoveryTranches: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
     researchApprovalResponses: [],
@@ -3275,6 +4052,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     inferences,
     contradictions,
     corrections,
+    discoveryTranches,
     researchApprovalDecisions,
     researchApprovalInformation,
     researchApprovalResponses,
@@ -3311,6 +4089,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.nextPermittedActions = [
       "reserve-public-research",
       "record-evidence-reasoning",
+      "record-discovery-tranche",
     ];
   }
   if (
@@ -3388,6 +4167,82 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         )
         .map((contradiction) => contradiction.id),
       correctionIds: corrections.map((correction) => correction.id),
+    };
+  }
+  if (discoveryTranches.length > 0) {
+    const sweeps = discoveryTranches.flatMap((tranche) => tranche.sweeps);
+    const threads = discoveryTranches.flatMap((tranche) => tranche.threads);
+    const retainedThreads = threads.filter(
+      (thread) => thread.disposition.status === "retained",
+    );
+    const droppedThreads = threads.filter(
+      (thread) => thread.disposition.status === "dropped",
+    );
+    const sourceFamilies = [
+      ...new Set(sweeps.map((sweep) => sweep.sourceFamily.id)),
+    ];
+    const threadSlots = discoveryTranches.reduce(
+      (total, tranche) => total + tranche.threadSlots,
+      0,
+    );
+    const noveltyProbeSlots = discoveryTranches.reduce(
+      (total, tranche) => total + tranche.noveltyProbeSlots,
+      0,
+    );
+    workView.phase = "discovery-active";
+    workView.completedWork.push(
+      `${discoveryTranches.length} Discovery Tranche${discoveryTranches.length === 1 ? "" : "s"} recorded`,
+    );
+    workView.nextPermittedActions = [
+      "reserve-public-research",
+      "record-evidence-reasoning",
+      "record-discovery-tranche",
+    ];
+    workView.discovery = {
+      coverage: {
+        discoveryTranches: discoveryTranches.length,
+        discoverySweeps: sweeps.length,
+        discoverySweepCap: intake!.researchBudget.discoverySweepCap,
+        sourceFamilies,
+        sourceFamilyMinimum: intake!.researchBudget.sourceFamilyMinimum,
+      },
+      allowances: {
+        threadSlots,
+        noveltyProbeSlots,
+        noveltyProbeShare: noveltyProbeSlots / threadSlots,
+        shallowResearchSourceUnitsPerRetainedThread:
+          discoveryTranches[0]!.shallowResearchSourceUnitsPerRetainedThread,
+      },
+      familiarDomain: {
+        familiarThreads: threads.filter((thread) => thread.familiarDomain).length,
+        totalInitialThreads: threads.length,
+        maximumWithoutException: Math.floor(threads.length / 3),
+        exception:
+          discoveryTranches.findLast(
+            (tranche) => tranche.familiarDomainException !== null,
+          )?.familiarDomainException ?? null,
+      },
+      retainedThreads: retainedThreads.map((thread) => ({
+        id: thread.id,
+        customerGroup: thread.customerGroup,
+        situation: thread.situation,
+        problemFamily: thread.problemFamily,
+        origin: thread.origin.kind,
+        shallowResearchSourceUnits:
+          discoveryTranches[0]!.shallowResearchSourceUnitsPerRetainedThread,
+        evidenceCredit:
+          thread.origin.kind === "source-led" ? "source-led" : "none",
+        comparisonBonus: "none",
+      })),
+      droppedThreads: droppedThreads.map((thread) => ({
+        id: thread.id,
+        customerGroup: thread.customerGroup,
+        situation: thread.situation,
+        problemFamily: thread.problemFamily,
+        origin: thread.origin.kind,
+        familiarDomain: thread.familiarDomain,
+        rationale: thread.disposition.rationale,
+      })),
     };
   }
   const pendingDecision = activeResearchApprovalDecision({
@@ -3537,6 +4392,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
               }),
         };
   return {
+    authoritativeHistory,
     campaign: {
       id: manifest.campaignId,
       path: resolvedPath,
@@ -3883,6 +4739,7 @@ type CoordinatorCommand =
   | ReservePublicResearchCommand
   | RecordPublicResearchObservationCommand
   | RecordEvidenceReasoningCommand
+  | RecordDiscoveryTrancheCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -5134,6 +5991,104 @@ async function recordEvidenceReasoning(
   });
 }
 
+async function recordDiscoveryTranche(
+  command: RecordDiscoveryTrancheCommand,
+  currentTime: string,
+) {
+  const buildDiscoveryResult = (
+    recorded: boolean,
+    campaign: LoadedCampaign,
+  ) => ({
+    recorded,
+    tranche: command.payload.tranche,
+    workView: campaign.workView,
+  });
+
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record a Discovery Tranche concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Discovery Tranche request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Discovery Tranche could not be recorded against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["record-discovery-tranche"].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.tranche) === JSON.stringify(command.payload.tranche),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildDiscoveryResult(false, replayed);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.intake === undefined ||
+        rebuiltCampaign.evidenceLedger === undefined
+        ? {
+            code: "SVS-DISCOVERY-NOT-AVAILABLE",
+            message:
+              "Discovery requires a valid explicitly confirmed Campaign Intake and cited Public Research.",
+            action:
+              "Confirm Campaign Intake and record the sampled public Sources before recording a Discovery Tranche.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Discovery requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before recording discovery.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const history = rebuiltCampaign.authoritativeHistory;
+      const violation = discoveryTrancheViolation(
+        history,
+        command.payload.tranche,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-DISCOVERY-INVARIANT-VIOLATION",
+            message: `Discovery Tranche violates a campaign invariant: ${violation}.`,
+            action:
+              "Preserve the existing campaign and correct the tranche coverage, evidence links, allowances, or bias control before retrying.",
+          };
+    },
+    records({ before }) {
+      return discoveryTrancheRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildDiscoveryResult(true, after);
+    },
+  });
+}
+
 async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -5336,6 +6291,7 @@ export async function executeCommand(
       "reservePublicResearch",
       "recordPublicResearchObservation",
       "recordEvidenceReasoning",
+      "recordDiscoveryTranche",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -5545,6 +6501,32 @@ export async function executeCommand(
     }
     return recordEvidenceReasoning(
       command as unknown as RecordEvidenceReasoningCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordDiscoveryTranche") {
+    const invalidFields = validateRecordDiscoveryTrancheFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-DISCOVERY-INVALID",
+          message: "Discovery Tranche is invalid.",
+          action:
+            "Correct the bounded sweeps, controlled sampling, Exploration Threads, or Novelty Probe records before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordDiscoveryTranche(
+      command as unknown as RecordDiscoveryTrancheCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

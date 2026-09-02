@@ -523,6 +523,164 @@ Refusal clears the pause, appends the Evidence Gap, and leaves independent permi
 work available. It does not make the refused research happen or turn missing evidence
 into evidence of absence.
 
+## Record a Discovery Tranche
+
+After importing the public Sources and Observations sampled by the Discovery Sweeps,
+record one bounded tranche:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-discovery-tranche-stable-request-id",
+  "command": "recordDiscoveryTranche",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T10:00:00.000Z",
+    "tranche": {
+      "id": "stable-discovery-tranche-id",
+      "ordinal": 1,
+      "threadSlots": 5,
+      "noveltyProbeSlots": 1,
+      "shallowResearchSourceUnitsPerRetainedThread": 1,
+      "familiarDomainException": null,
+      "sweeps": [
+        {
+          "id": "stable-occupation-sweep-id",
+          "sourceFamily": {
+            "id": "source-family-occupation-map",
+            "name": "Occupation and task maps",
+            "economicActivityMap": "Published occupation workflow taxonomy"
+          },
+          "sourceIds": ["stable-occupation-source-id"],
+          "sampling": {
+            "frameOrigin": "external-map",
+            "method": "systematic",
+            "frame": "Dispatch occupations in rows 1 through 40",
+            "selectionRule": "Inspect every fourth row from a fixed first row",
+            "sampleSize": 10,
+            "randomSeed": null
+          }
+        },
+        {
+          "id": "stable-procurement-sweep-id",
+          "sourceFamily": {
+            "id": "source-family-procurement-map",
+            "name": "Procurement and spending maps",
+            "economicActivityMap": "Published public award notices"
+          },
+          "sourceIds": ["stable-procurement-source-id"],
+          "sampling": {
+            "frameOrigin": "external-map",
+            "method": "seeded-random",
+            "frame": "Service award notices published in the sampled month",
+            "selectionRule": "Sample notice identities using the recorded seed",
+            "sampleSize": 12,
+            "randomSeed": "stable-recorded-seed"
+          }
+        }
+      ],
+      "threads": [
+        {
+          "id": "stable-source-led-thread-id",
+          "customerGroup": "Independent dispatch coordinators",
+          "situation": "Assigning urgent field work across changing schedules",
+          "problemFamily": "Repeated reconciliation of inconsistent availability data",
+          "familiarDomain": false,
+          "origin": {
+            "kind": "source-led",
+            "sweepId": "stable-occupation-sweep-id",
+            "observationIds": ["stable-workaround-observation-id"]
+          },
+          "problemSignal": {
+            "materialConsequence": {
+              "kind": "wasted-skilled-time",
+              "description": "Skilled time is diverted from paid operational work.",
+              "observationIds": ["stable-workaround-observation-id"]
+            },
+            "committedBehavior": {
+              "kind": "workaround-effort",
+              "description": "Operators repeatedly perform manual reconciliation.",
+              "observationIds": ["stable-workaround-observation-id"]
+            }
+          },
+          "noveltyCheck": {
+            "comparedWithThreadIds": [],
+            "result": "distinct",
+            "rationale": "The customer, workflow, and consequence form a distinct thread."
+          },
+          "disposition": {
+            "status": "retained",
+            "rationale": "The behavioral Problem Signal warrants shallow research."
+          }
+        },
+        {
+          "id": "stable-novelty-probe-thread-id",
+          "customerGroup": "Small equipment rental depots",
+          "situation": "Transferring returned equipment between contractors",
+          "problemFamily": "Unclear chain of custody during handoffs",
+          "familiarDomain": false,
+          "origin": {
+            "kind": "novelty-probe",
+            "method": "cross-domain-transfer",
+            "derivation": "Transfer exception-ledger practices from cold-chain logistics.",
+            "assumption": {
+              "type": "assumption",
+              "id": "stable-novelty-assumption-id",
+              "text": "Handoff ambiguity causes a material loss for small depots.",
+              "scope": "Small equipment rental depots using multiple contractors.",
+              "evidenceGapId": "stable-novelty-gap-id"
+            },
+            "evidenceGap": {
+              "type": "evidence-gap",
+              "id": "stable-novelty-gap-id",
+              "question": "Does ambiguity cause measurable loss or workaround effort?",
+              "affectedDecisionIds": ["decision-form-rental-handoff-opportunity"],
+              "resolutionCriteria": "Independent behavior evidence shows a material consequence.",
+              "resolutionMethod": "Sample public operational workflow evidence.",
+              "status": "open",
+              "resolution": null
+            }
+          },
+          "noveltyCheck": {
+            "comparedWithThreadIds": ["stable-source-led-thread-id"],
+            "result": "distinct",
+            "rationale": "The transferred workflow does not duplicate the source-led thread."
+          },
+          "disposition": {
+            "status": "retained",
+            "rationale": "Use the reserved probe slot without granting evidential credit."
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Every tranche must contain at least two Source Families, and every sweep links recorded
+Sources to an external-map sampling frame. `systematic`, `stratified`,
+`seeded-random`, and `bounded-enumeration` are the controlled sampling methods; only
+`seeded-random` carries a non-null seed. The cumulative sweep count cannot exceed the
+confirmed Research Budget's Discovery Sweep cap.
+
+`threadSlots` must be a multiple of five and `noveltyProbeSlots` must be exactly one
+fifth. A source-led thread links its material consequence and committed behavior to
+Observations from its sweep. The strict thread shape has no industry or proposed-product
+field. Overlap checks may drop a thread but cannot retain one marked as overlapping.
+
+Every Novelty Probe atomically appends its Evidence Gap and Assumption to the Evidence
+Ledger. Its Work View entry records `evidenceCredit: "none"` and
+`comparisonBonus: "none"`. All retained threads receive the tranche's common shallow
+Source-unit allowance. Later tranches must preserve that allowance, use the next
+ordinal, and stay within the campaign sweep cap.
+
+Without an exception, familiar-domain threads cannot exceed one-third of all initial
+threads. An exception must name an exact confirmed Campaign Intake
+statement and include a rationale; free-form familiarity claims are insufficient. The
+Work View reports cumulative coverage, Source Families, reserved allowances, the bias
+count and exception, and separate retained and dropped thread lists.
+
 ## Record Research Expenditure
 
 After an approved paid action is actually charged, record its budget effect:

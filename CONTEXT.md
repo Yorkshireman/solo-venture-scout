@@ -20,6 +20,10 @@ _Avoid_: Industry, product category, solution idea
 A bounded, source-led scan of heterogeneous external maps of economic activity and problem signals that generates Exploration Threads, including controlled random sampling and novelty checks.
 _Avoid_: Brainstorming, market questionnaire
 
+**Discovery Tranche**:
+A bounded allocation of Discovery Sweeps and initial Exploration Thread slots that reserves one-fifth of its thread capacity for evidence-neutral Novelty Probes.
+_Avoid_: Category list, idea batch
+
 **Source Family**:
 A broad kind of external map or problem-signal source used to measure Discovery Sweep diversity. Different Source Families broaden coverage but do not by themselves establish independent evidence.
 _Avoid_: Source Lineage, publisher count
