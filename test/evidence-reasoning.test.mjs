@@ -235,6 +235,10 @@ test("an Inference preserves its scope, reasoning, material evidence links, and 
   assert.deepEqual(recorded.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
     evidenceInspectionCommand: "inspectEvidence",
+    sourceLineageIds: [],
+    sourceCredibilityIds: [],
+    sourceFreshnessIds: [],
+    activeAssumptionIds: [],
     activeInferenceIds: ["inference-late-payments-have-admin-cost"],
     reassessmentInferenceIds: [],
     openEvidenceGapIds: [],
@@ -348,6 +352,10 @@ test("reasoning keeps unsupported premises, provenance assessments, and incompat
   assert.deepEqual(recorded.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
     evidenceInspectionCommand: "inspectEvidence",
+    sourceLineageIds: ["lineage-shared-research-institute"],
+    sourceCredibilityIds: ["credibility-follow-up-time-for-cost"],
+    sourceFreshnessIds: ["freshness-follow-up-time-for-cost"],
+    activeAssumptionIds: ["assumption-follow-up-cost-is-material"],
     activeInferenceIds: ["inference-manual-follow-up-can-be-costly"],
     reassessmentInferenceIds: [],
     openEvidenceGapIds: ["gap-independent-admin-cost"],
@@ -477,6 +485,10 @@ test("Corrections supersede and retract reasoning without deleting its historica
   assert.deepEqual(resumed.response.result.workView.reasoning, {
     evidenceLedgerPath: "evidence-ledger.json",
     evidenceInspectionCommand: "inspectEvidence",
+    sourceLineageIds: [],
+    sourceCredibilityIds: [],
+    sourceFreshnessIds: [],
+    activeAssumptionIds: [],
     activeInferenceIds: [],
     reassessmentInferenceIds: [],
     openEvidenceGapIds: [],

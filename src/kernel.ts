@@ -376,6 +376,10 @@ type WorkView = {
   reasoning?: {
     evidenceLedgerPath: "evidence-ledger.json";
     evidenceInspectionCommand: "inspectEvidence";
+    sourceLineageIds: string[];
+    sourceCredibilityIds: string[];
+    sourceFreshnessIds: string[];
+    activeAssumptionIds: string[];
     activeInferenceIds: string[];
     reassessmentInferenceIds: string[];
     openEvidenceGapIds: string[];
@@ -2439,6 +2443,18 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.reasoning = {
       evidenceLedgerPath: "evidence-ledger.json",
       evidenceInspectionCommand: "inspectEvidence",
+      sourceLineageIds: sourceLineages
+        .filter((lineage) => !correctedEntryIds.has(lineage.id))
+        .map((lineage) => lineage.id),
+      sourceCredibilityIds: sourceCredibilities
+        .filter((credibility) => !correctedEntryIds.has(credibility.id))
+        .map((credibility) => credibility.id),
+      sourceFreshnessIds: sourceFreshnesses
+        .filter((freshness) => !correctedEntryIds.has(freshness.id))
+        .map((freshness) => freshness.id),
+      activeAssumptionIds: assumptions
+        .filter((assumption) => !correctedEntryIds.has(assumption.id))
+        .map((assumption) => assumption.id),
       activeInferenceIds: inferences
         .filter((inference) => !invalidatedIds.has(inference.id))
         .map((inference) => inference.id),

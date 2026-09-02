@@ -140,9 +140,9 @@ Use `recordEvidenceReasoning` from
 [references/campaigns.md](references/campaigns.md) after recording the cited
 Observations needed by the reasoning:
 
-1. Give each Inference explicit supporting and challenging Observation or prior
-   Inference identities, followed by its scope and reasoning. Include every material
-   challenge instead of selecting only confirming evidence.
+1. Give each Inference every material supporting and challenging Observation or prior
+   Inference identity, followed by its scope and reasoning. Never select only
+   confirming evidence.
 2. Record every material Assumption with no evidential credit and link it to an
    Evidence Gap that names affected decisions, resolution criteria, and a concrete
    resolution method. An Assumption never supports an Inference.

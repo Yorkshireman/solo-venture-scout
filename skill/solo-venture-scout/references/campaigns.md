@@ -332,10 +332,11 @@ Contradictions retain both or all incompatible entries even after reconciliation
 Corrections append `supersede` with a different replacement identity or `retract` with
 `null`; the target remains in authoritative history. Success checkpoints the append,
 rebuilds `evidence-ledger.json`, and adds only current Inference, open Evidence Gap,
-unresolved Contradiction, and Correction identities plus the stable Ledger path to the
-Work View. If a Correction invalidates evidence used by an Inference, that Inference
-is removed from current evidence and listed for reassessment; its dependent Inferences
-are handled transitively.
+unresolved Contradiction, active Assumption, Source Lineage, Source Credibility, Source
+Freshness, and Correction identities plus the stable Ledger path to the Work View. If
+a Correction invalidates evidence used by an Inference, that Inference is removed from
+current evidence and listed for reassessment; its dependent Inferences are handled
+transitively.
 
 Inspect only the entries named by a Work View without returning the entire Evidence
 Ledger:
