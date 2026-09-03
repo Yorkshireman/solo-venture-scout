@@ -538,7 +538,7 @@ export function validatePublicResearchCommandBase(
   return details;
 }
 
-export function validatePublicResearchReservation(
+export function validateCampaignResearchReservation(
   value: unknown,
   field = "payload.reservation",
 ): string[] {
@@ -603,11 +603,11 @@ export function validatePublicResearchReservation(
   ) {
     details.push(`${field}.opportunityId is available only for Opportunity deepening or adversarial challenge.`);
   }
-  if (value.opportunityId === undefined && value.approvalId !== undefined) {
-    details.push(`${field}.approvalId requires an Opportunity-specific reservation.`);
-  }
   return details;
 }
+
+export const validatePublicResearchReservation =
+  validateCampaignResearchReservation;
 
 export function validateReservePublicResearchFields(
   command: Record<string, unknown>,
@@ -617,8 +617,30 @@ export function validateReservePublicResearchFields(
   }
   return [
     ...validatePublicResearchCommandBase(command.payload, "reservedAt"),
-    ...validatePublicResearchReservation(command.payload.reservation),
+    ...validateCampaignResearchReservation(command.payload.reservation),
   ];
+}
+
+export function validateReserveApprovedResearchFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = [
+    ...validatePublicResearchCommandBase(command.payload, "reservedAt"),
+    ...validateCampaignResearchReservation(command.payload.reservation),
+  ];
+  if (
+    !isRecord(command.payload.reservation) ||
+    typeof command.payload.reservation.approvalId !== "string" ||
+    command.payload.reservation.approvalId.trim() === ""
+  ) {
+    details.push(
+      "payload.reservation.approvalId must identify the granted Research Approval.",
+    );
+  }
+  return details;
 }
 
 export function isNullableNonEmptyString(value: unknown): value is string | null {
@@ -648,7 +670,7 @@ export function validatePersistableText(value: unknown, field: string): string[]
     : [];
 }
 
-export function validatePublicSource(value: unknown, recordedAt: unknown): string[] {
+export function validateSource(value: unknown, recordedAt: unknown): string[] {
   const field = "payload.source";
   if (
     !isRecord(value) ||
@@ -665,7 +687,7 @@ export function validatePublicSource(value: unknown, recordedAt: unknown): strin
     ])
   ) {
     return [
-      `${field} must contain only identity, public retrieval provenance, dates, access time, and an exact locator.`,
+      `${field} must contain only identity, retrieval provenance, dates, access time, and an exact locator.`,
     ];
   }
   const details: string[] = [];
@@ -675,7 +697,7 @@ export function validatePublicSource(value: unknown, recordedAt: unknown): strin
     }
   }
   if (typeof value.url !== "string") {
-    details.push(`${field}.url must be a public HTTP or HTTPS URL.`);
+    details.push(`${field}.url must be an HTTP or HTTPS URL.`);
   } else {
     try {
       const sourceUrl = new URL(value.url);
@@ -684,7 +706,7 @@ export function validatePublicSource(value: unknown, recordedAt: unknown): strin
         sourceUrl.username !== "" ||
         sourceUrl.password !== ""
       ) {
-        details.push(`${field}.url must be a public HTTP or HTTPS URL without credentials.`);
+        details.push(`${field}.url must be an HTTP or HTTPS URL without credentials.`);
       }
       const sensitiveQuery = [...sourceUrl.searchParams].some(
         ([name, parameterValue]) =>
@@ -699,7 +721,7 @@ export function validatePublicSource(value: unknown, recordedAt: unknown): strin
         details.push(`${field}.url must not contain credential-bearing or sensitive query or fragment data.`);
       }
     } catch {
-      details.push(`${field}.url must be a valid public HTTP or HTTPS URL.`);
+      details.push(`${field}.url must be a valid HTTP or HTTPS URL.`);
     }
   }
   if (!isNullableNonEmptyString(value.publisher)) {
@@ -733,7 +755,9 @@ export function validatePublicSource(value: unknown, recordedAt: unknown): strin
   return details;
 }
 
-export function validatePublicObservation(value: unknown, source: unknown): string[] {
+export const validatePublicSource = validateSource;
+
+export function validateObservation(value: unknown, source: unknown): string[] {
   const field = "payload.observation";
   if (
     !isRecord(value) ||
@@ -764,6 +788,8 @@ export function validatePublicObservation(value: unknown, source: unknown): stri
   return details;
 }
 
+export const validatePublicObservation = validateObservation;
+
 export function validateRecordPublicResearchObservationFields(
   command: Record<string, unknown>,
 ): string[] {
@@ -778,8 +804,66 @@ export function validateRecordPublicResearchObservationFields(
     details.push("payload.reservationId must be a non-empty string.");
   }
   details.push(
-    ...validatePublicSource(command.payload.source, command.payload.recordedAt),
-    ...validatePublicObservation(command.payload.observation, command.payload.source),
+    ...validateSource(command.payload.source, command.payload.recordedAt),
+    ...validateObservation(command.payload.observation, command.payload.source),
+  );
+  return details;
+}
+
+function validateResearchChargeResolution(
+  value: unknown,
+  field: string,
+): string[] {
+  if (!isRecord(value) || typeof value.incurred !== "boolean") {
+    return [`${field} must explicitly state whether a charge was incurred.`];
+  }
+  if (value.incurred === false) {
+    return hasOnlyFields(value, ["incurred"])
+      ? []
+      : [`${field} must contain only incurred when no charge occurred.`];
+  }
+  return hasOnlyFields(value, ["incurred", "expenditureId"]) &&
+    typeof value.expenditureId === "string" &&
+    value.expenditureId.trim() !== ""
+    ? []
+    : [
+        `${field}.expenditureId must identify the recorded Research Expenditure when a charge occurred.`,
+      ];
+}
+
+export function validateRecordApprovedResearchObservationFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const payload = command.payload;
+  const details = validatePublicResearchCommandBase(payload, "recordedAt");
+  if (
+    !hasOnlyFields(payload, [
+      "campaignPath",
+      "coordinatorId",
+      "recordedAt",
+      "reservationId",
+      "source",
+      "observation",
+      "charge",
+    ])
+  ) {
+    details.push(
+      "payload must contain only Campaign identity, Approved Research result provenance, and charge resolution.",
+    );
+  }
+  if (
+    typeof payload.reservationId !== "string" ||
+    payload.reservationId.trim() === ""
+  ) {
+    details.push("payload.reservationId must be a non-empty string.");
+  }
+  details.push(
+    ...validateSource(payload.source, payload.recordedAt),
+    ...validateObservation(payload.observation, payload.source),
+    ...validateResearchChargeResolution(payload.charge, "payload.charge"),
   );
   return details;
 }
@@ -3403,6 +3487,110 @@ export function validateRespondResearchApprovalFields(
         ? response.approval.scope.duration.startsAt
         : undefined,
       "payload.response.approval.scope",
+    ),
+  );
+  return details;
+}
+
+export function validateRespondInterruptedResearchFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const payload = command.payload;
+  const details = validatePublicResearchCommandBase(payload, "respondedAt");
+  if (
+    !hasOnlyFields(payload, [
+      "campaignPath",
+      "coordinatorId",
+      "respondedAt",
+      "decisionId",
+      "response",
+    ])
+  ) {
+    details.push(
+      "payload must contain only Campaign identity, response time, Pending Decision identity, and response.",
+    );
+  }
+  if (
+    typeof payload.decisionId !== "string" ||
+    payload.decisionId.trim() === ""
+  ) {
+    details.push("payload.decisionId must be a non-empty string.");
+  }
+  if (
+    !isRecord(payload.response) ||
+    !hasOnlyFields(payload.response, [
+      "kind",
+      "reservations",
+      "explicitlyConfirmed",
+      "rationale",
+    ])
+  ) {
+    details.push(
+      "payload.response must contain the complete explicit interrupted-research decision.",
+    );
+    return details;
+  }
+  const response = payload.response;
+  if (response.kind !== "resolve-without-result") {
+    details.push("payload.response.kind must be resolve-without-result.");
+  }
+  if (!Array.isArray(response.reservations) || response.reservations.length === 0) {
+    details.push(
+      "payload.response.reservations must be a non-empty array of exact reservation resolutions.",
+    );
+  } else {
+    const reservationIds = new Set<string>();
+    for (const [index, resolution] of response.reservations.entries()) {
+      const field = `payload.response.reservations[${index}]`;
+      if (
+        !isRecord(resolution) ||
+        !hasOnlyFields(resolution, [
+          "reservationId",
+          "externalWorkCompleted",
+          "charge",
+        ])
+      ) {
+        details.push(
+          `${field} must contain only reservationId, externalWorkCompleted, and charge.`,
+        );
+        continue;
+      }
+      if (
+        typeof resolution.reservationId !== "string" ||
+        resolution.reservationId.trim() === ""
+      ) {
+        details.push(`${field}.reservationId must be a non-empty string.`);
+      } else if (reservationIds.has(resolution.reservationId)) {
+        details.push("payload.response.reservations must not contain duplicates.");
+      } else {
+        reservationIds.add(resolution.reservationId);
+      }
+      if (typeof resolution.externalWorkCompleted !== "boolean") {
+        details.push(
+          `${field}.externalWorkCompleted must explicitly state whether Source work completed.`,
+        );
+      }
+      details.push(
+        ...validateResearchChargeResolution(resolution.charge, `${field}.charge`),
+      );
+    }
+  }
+  if (response.explicitlyConfirmed !== true) {
+    details.push("payload.response.explicitlyConfirmed must be true.");
+  }
+  if (
+    typeof response.rationale !== "string" ||
+    response.rationale.trim() === ""
+  ) {
+    details.push("payload.response.rationale must be a non-empty string.");
+  }
+  details.push(
+    ...validatePersistableText(
+      response.rationale,
+      "payload.response.rationale",
     ),
   );
   return details;

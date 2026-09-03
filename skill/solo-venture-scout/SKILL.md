@@ -408,6 +408,10 @@ refused action.
 Immediately before using a Research Approval, compare the current UTC time with its
 recorded duration and recheck the complete scope. An expired approval is historical
 provenance, not permission; obtain renewed approval instead of performing the action.
+Reserve the approved Source with `reserveApprovedResearch` before access, carrying
+the granted `approvalId` and the exact approved purpose and access method. Do not
+begin access until that reservation is durably checkpointed. A Research Approval can
+back exactly one reservation; request a new scoped approval for different Source work.
 
 For paid research, use `recordResearchExpenditure` only after the approved action is
 actually charged. A Research Expenditure records its Research Approval provenance,
@@ -416,7 +420,13 @@ or payment details. Omit account identifiers and card numbers from every descrip
 field as well as from the command shape. If
 restricted access, a purchase, or its result is ambiguous, preserve the checkpoint
 and never retry automatically; report the ambiguity and require a precise developer
-decision.
+decision. On Resume, use the returned `interrupted-approved-research` Pending
+Decision. If work completed, record any incurred Research Expenditure and then use
+`recordApprovedResearchObservation` with an explicit charge resolution to import the
+completed result without repeating access. If no result completed, use
+`respondInterruptedResearch` to state the work and charge outcome for every exact
+reservation. A charged outcome must name its already recorded Research Expenditure;
+the reservation remains consumed conservatively.
 
 ## Inspect a Scouting Campaign
 
@@ -475,9 +485,15 @@ native agent state:
 2. Create a stable request identity and a coordinator identity for this session;
    record the current UTC instant and a short lease expiry.
 3. Run `resumeCampaign`. Report completed work, current phase or pause, the exclusive
-   lease, and next permitted actions exactly from the validated response.
+   lease, recovered operations, regenerated projections, unresolved reservations,
+   and next permitted actions exactly from the validated response.
 4. If another coordinator holds the lease or validation fails, report the returned
    action and stop without continuing Campaign work.
+
+Resume completes safe durable intents before recording takeover, rebuilds damaged
+Work Views, leases, checkpoints, budgets, Evidence Ledgers, and deterministic terminal
+renderings from authoritative history, and continues autonomously only when no
+Pending Decision remains. Never bypass or replace an interruption-recovery decision.
 
 Replaying the same create, resume, intake-confirmation, reservation, or evidence-import
 request is safe. Reuse its request identity and payload for a retry; do not invent a

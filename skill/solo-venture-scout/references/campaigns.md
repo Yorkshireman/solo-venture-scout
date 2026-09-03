@@ -232,6 +232,79 @@ rebuilds private `research-budget.json` and `evidence-ledger.json` projections, 
 writes a checkpoint. Replaying the identical request is idempotent; a reservation,
 Source identity, or Observation identity cannot be settled or imported twice.
 
+## Reserve Approved Research capacity
+
+After an explicit Research Approval, reserve its exact Approved Research scope before
+authenticated, restricted, or paid Source access:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "reserve-approved-source-stable-request-id",
+  "command": "reserveApprovedResearch",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "reservedAt": "2026-08-31T09:20:00.000Z",
+    "reservation": {
+      "id": "stable-approved-research-reservation-id",
+      "sourceUnits": 1,
+      "purpose": "Exact approved purpose",
+      "retrievalRoute": "developer-controlled-authenticated-and-paid-read-only",
+      "approvalId": "stable-research-approval-id"
+    }
+  }
+}
+```
+
+The purpose and retrieval route must exactly match the current approval. A Research
+Approval can back only one reservation. Restricted or paid Approved Research may omit
+`opportunityId`; an Elevated-Risk approval remains Opportunity-specific Public
+Research and uses `reservePublicResearch` with a deepening reservation.
+
+## Record an Approved Research Observation
+
+Import a completed Approved Research result with inert Source provenance, one neutral
+Observation, and an explicit charge resolution:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-approved-observation-stable-request-id",
+  "command": "recordApprovedResearchObservation",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T09:25:00.000Z",
+    "reservationId": "stable-approved-research-reservation-id",
+    "source": {
+      "id": "stable-approved-source-id",
+      "retrievalMode": "developer-controlled-authenticated-read-only",
+      "url": "https://research.example/reports/named-report",
+      "publisher": "Example Publisher",
+      "originator": null,
+      "publishedAt": "2026-06-10",
+      "updatedAt": null,
+      "accessedAt": "2026-08-31T09:24:00.000Z",
+      "exactLocator": "Results, paragraph 3"
+    },
+    "observation": {
+      "id": "stable-approved-observation-id",
+      "text": "The report describes the named market estimate.",
+      "sourceId": "stable-approved-source-id",
+      "exactLocator": "Results, paragraph 3"
+    },
+    "charge": { "incurred": false }
+  }
+}
+```
+
+When a charge occurred, record it first with `recordResearchExpenditure`, then use
+`"charge": { "incurred": true, "expenditureId": "stable-expenditure-id" }`.
+The kernel rejects a charged result unless that expenditure matches the reservation's
+Research Approval. Never persist credentials, payment details, or raw restricted
+content.
+
 ## Record Evidence Ledger reasoning
 
 The coordinator makes semantic judgments outside the kernel, then submits typed,
@@ -1615,11 +1688,61 @@ different coordinator's recorded lease is active. The response summarizes comple
 work, current phase or pause, and next permitted actions. Replaying the identical
 request does not append the work twice; if interruption occurred after the authoritative
 records were appended, replay reconstructs the derived Work View, lease, and checkpoint.
-The short-lived operation-lock registry uses one atomically published owner file per
-contender. A resume proceeds only when no other unexpired owner is visible; release
-removes only that contender's unique token file, and expired files are safely ignored
-and removed. Process termination therefore does not leave the Campaign permanently
-locked, and stale-lock cleanup cannot remove a newer coordinator's lock.
+The short-lived operation-lock registry uses one atomically published active-owner
+file. The kernel claims that fully written file with an atomic exclusive filesystem
+link, so concurrent coordinators cannot both enter the mutation boundary.
+An abandoned lock owned by a terminated process is quarantined before a new claim;
+release verifies its token and cannot remove a newer coordinator's lock.
+
+Every mutation of an existing Campaign first writes and synchronizes a private
+durable intent journal, then atomically replaces authoritative history with the
+complete record pair.
+An interruption before the authoritative commit remains an explicit journal entry;
+Resume completes that exact validated intent once. An interruption after the commit
+regenerates every damaged or missing rebuildable projection and deterministic Markdown
+rendering from authoritative history before the journal is cleared. The Resume summary
+lists recovered operations and whether projections were regenerated.
+
+Unsettled Source reservations continue to consume their Source capacity. An unsettled
+paid reservation also reserves the unrecorded remainder of its approved maximum, so
+recovery cannot exceed the Research Budget. Public Research can continue from its
+existing reservation. Approved Research that crosses a Resume boundary becomes an
+`interrupted-approved-research` Pending Decision: do not access or pay again. If the
+result completed, record an incurred Research Expenditure when applicable and import
+the saved Observation with `recordApprovedResearchObservation`. If no result completed,
+respond with the exact work and charge state for every reservation:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "respond-interrupted-research-stable-request-id",
+  "command": "respondInterruptedResearch",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id-for-this-session",
+    "respondedAt": "2026-08-31T10:05:00.000Z",
+    "decisionId": "interrupted-approved-research:stable-reservation-id",
+    "response": {
+      "kind": "resolve-without-result",
+      "reservations": [
+        {
+          "reservationId": "stable-reservation-id",
+          "externalWorkCompleted": false,
+          "charge": { "incurred": false }
+        }
+      ],
+      "explicitlyConfirmed": true,
+      "rationale": "No Source access or charge completed before interruption."
+    }
+  }
+}
+```
+
+The response must cover the exact active reservation set, cannot be backdated, and is
+idempotent. A charged resolution names its already recorded Research Expenditure. The
+response closes those reservations without retry and keeps their Source units consumed
+conservatively. Silence, an informational message, or a partial response does not
+resolve the Pending Decision.
 
 - Exit `0`: the lifecycle command succeeded, including an idempotent replay.
 - Exit `3`: the command, path, Campaign state, or lease is invalid. Report the

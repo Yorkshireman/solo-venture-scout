@@ -13,7 +13,9 @@ import type {
   ResumeCampaignCommand,
   ConfirmCampaignIntakeCommand,
   ReservePublicResearchCommand,
+  ReserveApprovedResearchCommand,
   RecordPublicResearchObservationCommand,
+  RecordApprovedResearchObservationCommand,
   RecordEvidenceReasoningCommand,
   RecordDiscoveryTrancheCommand,
   RecordOpportunityExclusionGatesCommand,
@@ -27,6 +29,7 @@ import type {
   RequestResearchApprovalCommand,
   RecordResearchApprovalInformationCommand,
   RespondResearchApprovalCommand,
+  RespondInterruptedResearchCommand,
   RecordResearchExpenditureCommand,
   ReevaluateCampaignCommand,
 } from "./kernel/types.js";
@@ -47,11 +50,14 @@ import {
   validateRespondInconclusiveComparisonFields,
   validateRecordOpportunityFormationFields,
   validateRecordPublicResearchObservationFields,
+  validateRecordApprovedResearchObservationFields,
   validateRecordResearchApprovalInformationFields,
   validateRecordResearchExpenditureFields,
   validateRequestResearchApprovalFields,
   validateReservePublicResearchFields,
+  validateReserveApprovedResearchFields,
   validateRespondResearchApprovalFields,
+  validateRespondInterruptedResearchFields,
   validateReevaluateCampaignFields,
   validateResumeCampaignFields,
   isRecord,
@@ -70,12 +76,15 @@ import {
   respondInconclusiveComparison,
   recordOpportunityFormation,
   recordPublicResearchObservation,
+  recordApprovedResearchObservation,
   recordResearchApprovalInformation,
   recordResearchExpenditure,
   requestResearchApproval,
   reevaluateCampaign,
   reservePublicResearch,
+  reserveApprovedResearch,
   respondResearchApproval,
+  respondInterruptedResearch,
   resumeCampaign,
 } from "./kernel/commands.js";
 import { inspectCampaign, inspectEvidence } from "./kernel/authority.js";
@@ -155,7 +164,9 @@ export async function executeCommand(
       "resumeCampaign",
       "confirmCampaignIntake",
       "reservePublicResearch",
+      "reserveApprovedResearch",
       "recordPublicResearchObservation",
+      "recordApprovedResearchObservation",
       "recordEvidenceReasoning",
       "recordDiscoveryTranche",
       "recordOpportunityFormation",
@@ -170,6 +181,7 @@ export async function executeCommand(
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
+      "respondInterruptedResearch",
       "recordResearchExpenditure",
     ].includes(receivedCommand)
   ) {
@@ -332,6 +344,32 @@ export async function executeCommand(
     );
   }
 
+  if (command.command === "reserveApprovedResearch") {
+    const invalidFields = validateReserveApprovedResearchFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-APPROVED-RESEARCH-INVALID",
+          message: "Approved Research reservation is invalid.",
+          action:
+            "Correct the reported fields and reserve the exact approved scope before Source access.",
+          details: invalidFields,
+        },
+      };
+    }
+    return reserveApprovedResearch(
+      command as unknown as ReserveApprovedResearchCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
   if (command.command === "recordPublicResearchObservation") {
     const invalidFields = validateRecordPublicResearchObservationFields(command);
     if (typeof command.envelopeVersion !== "string") {
@@ -353,6 +391,33 @@ export async function executeCommand(
     }
     return recordPublicResearchObservation(
       command as unknown as RecordPublicResearchObservationCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordApprovedResearchObservation") {
+    const invalidFields =
+      validateRecordApprovedResearchObservationFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-APPROVED-RESEARCH-INVALID",
+          message: "Approved Research result is invalid.",
+          action:
+            "Correct the inert provenance and explicit charge resolution; do not repeat Source access or payment.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordApprovedResearchObservation(
+      command as unknown as RecordApprovedResearchObservationCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }
@@ -715,6 +780,32 @@ export async function executeCommand(
     }
     return respondResearchApproval(
       command as unknown as RespondResearchApprovalCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "respondInterruptedResearch") {
+    const invalidFields = validateRespondInterruptedResearchFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-INTERRUPTED-RESEARCH-RESPONSE-INVALID",
+          message: "Interrupted Approved Research response is invalid.",
+          action:
+            "Explicitly confirm that no Source work or charge completed for every reservation in the Pending Decision.",
+          details: invalidFields,
+        },
+      };
+    }
+    return respondInterruptedResearch(
+      command as unknown as RespondInterruptedResearchCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

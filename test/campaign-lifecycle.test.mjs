@@ -599,7 +599,7 @@ test("manifest discovery ignores unrelated manifests", async () => {
   assert.equal(result.response.result.campaign.path, campaignPath);
 });
 
-test("resume reclaims an expired coordinator operation lock", async () => {
+test("resume reclaims an abandoned coordinator operation lock", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-stale-lock-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "stale-operation-lock");
@@ -617,12 +617,13 @@ test("resume reclaims an expired coordinator operation lock", async () => {
   });
   const lockDirectory = path.join(campaignPath, ".coordinator-locks");
   await mkdir(lockDirectory, { mode: 0o700 });
-  const lockPath = path.join(lockDirectory, "abandoned-operation.json");
+  const lockPath = path.join(lockDirectory, "active.json");
   await writeFile(
     lockPath,
     `${JSON.stringify({
       version: "0.1.0",
       token: "abandoned-operation",
+      processId: 99999999,
       requestId: "resume-abandoned-1",
       coordinatorId: "coordinator-abandoned",
       acquiredAt: "2026-08-31T23:31:00.000Z",

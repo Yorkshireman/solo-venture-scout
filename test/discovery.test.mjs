@@ -5,18 +5,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { publicResearchReservationCommand } from "./support/campaign-commands.mjs";
-import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
-
-/**
- * @param {string} kernelPath
- * @param {Record<string, unknown>} command
- */
-async function runKernel(kernelPath, command) {
-  const result = await runProcess(process.execPath, [kernelPath], {
-    input: `${JSON.stringify(command)}\n`,
-  });
-  return { ...result, response: JSON.parse(result.stdout) };
-}
+import {
+  buildPackagedScout,
+  runKernel,
+  runProcess,
+} from "./support/packaged-scout.mjs";
 
 /**
  * @param {string} kernelPath
@@ -1691,8 +1684,16 @@ function concludeInconclusiveComparisonCommand(campaignPath) {
   };
 }
 
-/** @param {string} kernelPath @param {string} campaignPath */
-async function enterInconclusiveComparison(kernelPath, campaignPath) {
+/**
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ * @param {NodeJS.ProcessEnv} [environment]
+ */
+async function enterInconclusiveComparison(
+  kernelPath,
+  campaignPath,
+  environment,
+) {
   await prepareEligibleCampaign(kernelPath, campaignPath);
   await completeAdversarialResearch(kernelPath, campaignPath);
   const gap = await runKernel(kernelPath, {
@@ -1721,12 +1722,15 @@ async function enterInconclusiveComparison(kernelPath, campaignPath) {
   const concluded = await runKernel(
     kernelPath,
     concludeInconclusiveComparisonCommand(campaignPath),
+    environment,
   );
-  assert.equal(
-    concluded.code,
-    0,
-    `${concluded.stderr}\n${JSON.stringify(concluded.response)}`,
-  );
+  if (environment === undefined) {
+    assert.equal(
+      concluded.code,
+      0,
+      `${concluded.stderr}\n${JSON.stringify(concluded.response)}`,
+    );
+  }
   return concluded;
 }
 
@@ -2831,6 +2835,7 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
         reservation: {
           id: "reservation-approved-elevated-risk-deepening",
           purpose: scope.purpose,
+          retrievalRoute: scope.accessMethod,
           researchClass: "deepening",
           opportunityId: scope.opportunityId,
           approvalId: "approval-elevated-dispatch",
@@ -2922,6 +2927,7 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
         reservation: {
           id: "reservation-wrong-opportunity-with-elevated-approval",
           purpose: scope.purpose,
+          retrievalRoute: scope.accessMethod,
           researchClass: "deepening",
           opportunityId: "opportunity-specialist-tender-review",
           approvalId: "approval-elevated-dispatch",
@@ -3905,6 +3911,52 @@ test("a genuine tie produces an immutable unscored Inconclusive Comparison Repor
       0o777,
     0o600,
   );
+});
+
+test("replaying a terminal operation regenerates an interrupted deterministic rendering", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-render-recovery-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "render-recovery-campaign");
+  const interrupted = await enterInconclusiveComparison(
+    kernelPath,
+    campaignPath,
+    {
+      ...process.env,
+      NODE_ENV: "test",
+      SVS_FAULT_INJECTION: "during-terminal-rendering",
+    },
+  );
+
+  assert.equal(interrupted.code, 3);
+
+  const replayed = await runKernel(
+    kernelPath,
+    concludeInconclusiveComparisonCommand(campaignPath),
+  );
+
+  assert.equal(
+    replayed.code,
+    0,
+    `${replayed.stderr}\n${JSON.stringify(replayed.response)}`,
+  );
+  assert.equal(replayed.response.result.completed, false);
+  const reportPath = path.join(
+    campaignPath,
+    "inconclusive-comparison-report.md",
+  );
+  const renderedOnce = await readFile(reportPath, "utf8");
+  assert.match(renderedOnce, /^# Inconclusive Comparison Report/m);
+  const replayedAgain = await runKernel(
+    kernelPath,
+    concludeInconclusiveComparisonCommand(campaignPath),
+  );
+  assert.equal(replayedAgain.code, 0, replayedAgain.stderr);
+  assert.equal(replayedAgain.response.result.completed, false);
+  assert.equal(await readFile(reportPath, "utf8"), renderedOnce);
 });
 
 test("an evidence-complete tie without an apparent leader needs no artificial blocker", async () => {

@@ -142,7 +142,7 @@ export type ConfirmCampaignIntakeCommand = {
   };
 };
 
-export type PublicResearchReservation = {
+export type CampaignResearchReservation = {
   id: string;
   sourceUnits: 1;
   purpose: string;
@@ -152,6 +152,12 @@ export type PublicResearchReservation = {
   approvalId?: string;
   decisionValuePriorityId?: string;
   evidenceGapId?: string;
+};
+
+export type PublicResearchReservation = CampaignResearchReservation;
+
+export type ApprovedResearchReservation = CampaignResearchReservation & {
+  approvalId: string;
 };
 
 export type ReservePublicResearchCommand = {
@@ -166,7 +172,19 @@ export type ReservePublicResearchCommand = {
   };
 };
 
-export type PublicSource = {
+export type ReserveApprovedResearchCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "reserveApprovedResearch";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    reservedAt: string;
+    reservation: ApprovedResearchReservation;
+  };
+};
+
+export type Source = {
   id: string;
   retrievalMode: string;
   url: string;
@@ -178,12 +196,16 @@ export type PublicSource = {
   exactLocator: string;
 };
 
-export type PublicObservation = {
+export type PublicSource = Source;
+
+export type Observation = {
   id: string;
   text: string;
   sourceId: string;
   exactLocator: string;
 };
+
+export type PublicObservation = Observation;
 
 export type EvidenceConfidenceLevel = "unknown" | "low" | "medium" | "high";
 
@@ -305,6 +327,25 @@ export type RecordPublicResearchObservationCommand = {
     reservationId: string;
     source: PublicSource;
     observation: PublicObservation;
+  };
+};
+
+export type ResearchChargeResolution =
+  | { incurred: false }
+  | { incurred: true; expenditureId: string };
+
+export type RecordApprovedResearchObservationCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordApprovedResearchObservation";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    reservationId: string;
+    source: Source;
+    observation: Observation;
+    charge: ResearchChargeResolution;
   };
 };
 
@@ -1245,6 +1286,63 @@ export type PendingResearchApprovalDecision = {
   request: ResearchApprovalRequest;
 };
 
+export type PendingInterruptedResearchDecision = {
+  id: string;
+  type: "interrupted-approved-research";
+  requestedAt: string;
+  question: string;
+  reservations: Array<{
+    reservationId: string;
+    approvalId: string;
+    access: "restricted" | "paid" | "restricted-and-paid";
+    sourceId: string;
+    purpose: string;
+    maximumCost: { amount: number; currency: string };
+  }>;
+  options: [
+    {
+      kind: "record-completed-result";
+      action: "recordApprovedResearchObservation";
+    },
+    {
+      kind: "resolve-without-result";
+      action: "respondInterruptedResearch";
+    },
+  ];
+};
+
+export type PendingDecision =
+  | PendingResearchApprovalDecision
+  | PendingInterruptedResearchDecision;
+
+export type InterruptedResearchResponse = {
+  decisionId: string;
+  respondedAt: string;
+  response: {
+    kind: "resolve-without-result";
+    reservations: Array<{
+      reservationId: string;
+      externalWorkCompleted: boolean;
+      charge: ResearchChargeResolution;
+    }>;
+    explicitlyConfirmed: true;
+    rationale: string;
+  };
+};
+
+export type RespondInterruptedResearchCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "respondInterruptedResearch";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    respondedAt: string;
+    decisionId: string;
+    response: InterruptedResearchResponse["response"];
+  };
+};
+
 export type RequestResearchApprovalCommand = {
   envelopeVersion: string;
   requestId: string;
@@ -1366,13 +1464,14 @@ export type ResearchBudgetView = {
   remainingAdversarialSourceUnits: number;
   paidSpendCap?: { amount: number; currency: string };
   recordedPaidSpend?: { amount: number; currency: string };
+  reservedPaidSpend?: { amount: number; currency: string };
   remainingPaidSpend?: { amount: number; currency: string };
 };
 
 export type EvidenceLedger = {
   campaignId: string;
-  sources: PublicSource[];
-  observations: PublicObservation[];
+  sources: Source[];
+  observations: Observation[];
   sourceLineages: SourceLineage[];
   sourceCredibilities: SourceCredibility[];
   sourceFreshnesses: SourceFreshness[];
@@ -1406,7 +1505,7 @@ export type WorkView = {
     | {
         reason: "pending-decision";
         pendingDecisionId: string;
-        decisionType: "research-approval";
+        decisionType: "research-approval" | "interrupted-approved-research";
         requestedAction: string;
         resumable: true;
       };
@@ -1612,27 +1711,34 @@ export type CoordinatorLease = {
   expiresAt: string;
 };
 
+export const authoritativeOperations = [
+  "create-campaign",
+  "resume-campaign",
+  "confirm-campaign-intake",
+  "reserve-public-research",
+  "reserve-approved-research",
+  "record-public-research-observation",
+  "record-approved-research-observation",
+  "record-evidence-reasoning",
+  "record-discovery-tranche",
+  "record-opportunity-formation",
+  "pass-breadth-gate",
+  "record-opportunity-exclusion-gates",
+  "record-opportunity-qualification-gates",
+  "conclude-no-qualifying-opportunity",
+  "conclude-leading-opportunity",
+  "conclude-inconclusive-comparison",
+  "respond-inconclusive-comparison",
+  "reevaluate-campaign",
+  "request-research-approval",
+  "record-research-approval-information",
+  "respond-research-approval",
+  "respond-interrupted-research",
+  "record-research-expenditure",
+] as const;
+
 export type AuthoritativeOperation =
-  | "create-campaign"
-  | "resume-campaign"
-  | "confirm-campaign-intake"
-  | "reserve-public-research"
-  | "record-public-research-observation"
-  | "record-evidence-reasoning"
-  | "record-discovery-tranche"
-  | "record-opportunity-formation"
-  | "pass-breadth-gate"
-  | "record-opportunity-exclusion-gates"
-  | "record-opportunity-qualification-gates"
-  | "conclude-no-qualifying-opportunity"
-  | "conclude-leading-opportunity"
-  | "conclude-inconclusive-comparison"
-  | "respond-inconclusive-comparison"
-  | "reevaluate-campaign"
-  | "request-research-approval"
-  | "record-research-approval-information"
-  | "respond-research-approval"
-  | "record-research-expenditure";
+  (typeof authoritativeOperations)[number];
 
 export type CampaignOperation = {
   campaignId: string;
@@ -1642,4 +1748,5 @@ export type CampaignOperation = {
   operation: "create-campaign" | "resume-campaign";
   coordinatorId: string;
   leaseExpiresAt: string;
+  commandDigest?: string;
 };

@@ -47,3 +47,16 @@ export function runProcess(command, args, options = {}) {
     }
   });
 }
+
+/**
+ * @param {string} kernelPath
+ * @param {Record<string, unknown>} command
+ * @param {NodeJS.ProcessEnv} [environment]
+ */
+export async function runKernel(kernelPath, command, environment) {
+  const result = await runProcess(process.execPath, [kernelPath], {
+    input: `${JSON.stringify(command)}\n`,
+    env: environment,
+  });
+  return { ...result, response: JSON.parse(result.stdout) };
+}

@@ -7,9 +7,11 @@ import type {
   ConfirmedCampaignIntake,
   ConfirmCampaignIntakeCommand,
   ReservePublicResearchCommand,
-  PublicSource,
-  PublicObservation,
+  ReserveApprovedResearchCommand,
+  Source,
+  Observation,
   RecordPublicResearchObservationCommand,
+  RecordApprovedResearchObservationCommand,
   RecordEvidenceReasoningCommand,
   RecordDiscoveryTrancheCommand,
   RecordOpportunityExclusionGatesCommand,
@@ -24,6 +26,7 @@ import type {
   RequestResearchApprovalCommand,
   RecordResearchApprovalInformationCommand,
   RespondResearchApprovalCommand,
+  RespondInterruptedResearchCommand,
   RecordResearchExpenditureCommand,
   CoordinatorLease,
 } from "./types.js";
@@ -67,18 +70,23 @@ import {
   pathExists,
   persistDerivedCampaignState,
   publicResearchObservationRecords,
-  publicResearchAllocationViolation,
+  approvedResearchObservationRecords,
+  campaignResearchAllocationViolation,
   researchDecisionValueViolation,
-  publicResearchApprovalScopeMismatch,
+  researchApprovalScopeMismatch,
   publicResearchReservationRecords,
+  approvedResearchReservationRecords,
   readCampaignRecords,
+  recoverCampaign,
   rebuildCampaignFromAuthority,
   researchApprovalInformationRecords,
   researchApprovalRequestRecords,
   researchApprovalResponseRecords,
+  interruptedResearchResponseRecords,
   researchExpenditureRecords,
   releaseCoordinatorOperationLock,
   researchExpenditurePolicyViolation,
+  interruptedApprovedResearchDecision,
   writePrivateJson,
   elevatedRiskApprovalRequestViolation,
   adversarialResearchViolation,
@@ -91,12 +99,16 @@ import {
   inconclusiveComparisonArtifactPath,
 } from "./authority.js";
 import type { CoordinatorOperationLock } from "./authority.js";
+import { commandDigest } from "./recovery.js";
+import type { CampaignRecovery } from "./authority.js";
 
 export type CoordinatorCommand =
   | ResumeCampaignCommand
   | ConfirmCampaignIntakeCommand
   | ReservePublicResearchCommand
+  | ReserveApprovedResearchCommand
   | RecordPublicResearchObservationCommand
+  | RecordApprovedResearchObservationCommand
   | RecordEvidenceReasoningCommand
   | RecordDiscoveryTrancheCommand
   | RecordOpportunityFormationCommand
@@ -111,6 +123,7 @@ export type CoordinatorCommand =
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
+  | RespondInterruptedResearchCommand
   | RecordResearchExpenditureCommand;
 
 export type CoordinatorOperationFailure = {
@@ -128,6 +141,7 @@ export type CoordinatorOperationContext<Command extends CoordinatorCommand> = {
   currentTime: string;
   campaignPath: string;
   rebuiltCampaign: RebuiltCampaign;
+  recovery: CampaignRecovery;
   before?: LoadedCampaign;
 };
 
@@ -143,7 +157,11 @@ export type CoordinatorOperationDescriptor<
   loadBeforeRequestConflict?: boolean;
   loadBeforeValidation?: boolean;
   isReplay: (context: CoordinatorOperationContext<Command>) => boolean;
-  replayResult: (command: Command, replayed: LoadedCampaign) => Result;
+  replayResult: (
+    command: Command,
+    replayed: LoadedCampaign,
+    context: CoordinatorOperationContext<Command>,
+  ) => Result;
   validateBeforeLease?: (
     context: CoordinatorOperationContext<Command>,
   ) => CoordinatorOperationFailure | undefined;
@@ -160,7 +178,11 @@ export type CoordinatorOperationDescriptor<
   records: (
     context: CoordinatorOperationContext<Command>,
   ) => Record<string, unknown>[];
-  successResult: (command: Command, after: LoadedCampaign) => Result;
+  successResult: (
+    command: Command,
+    after: LoadedCampaign,
+    context: CoordinatorOperationContext<Command>,
+  ) => Result;
 };
 
 export function coordinatorOperationSuccess<
@@ -220,19 +242,41 @@ export async function runCoordinatorOperation<
       });
     }
 
-    const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
+    const recoveredCampaign = await recoverCampaign(campaignPath);
+    const rebuiltCampaign = recoveredCampaign.rebuiltCampaign;
     let context: CoordinatorOperationContext<Command> = {
       command,
       currentTime,
       campaignPath,
       rebuiltCampaign,
+      recovery: recoveredCampaign.recovery,
     };
-    if (descriptor.isReplay(context)) {
+    const requestedCommandDigest = commandDigest(command);
+    const existingIntent = rebuiltCampaign.records.find(
+      (record) =>
+        isRecord(record) &&
+        record.type === "operation-intent" &&
+        record.requestId === command.requestId,
+    );
+    const digestReplay =
+      isRecord(existingIntent) &&
+      existingIntent.commandDigest === requestedCommandDigest &&
+      rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type !== "operation-intent" &&
+          record.requestId === command.requestId,
+      );
+    const legacyReplay =
+      isRecord(existingIntent) &&
+      existingIntent.commandDigest === undefined &&
+      descriptor.isReplay(context);
+    if (digestReplay || legacyReplay) {
       await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
       const replayed = await loadCampaign(campaignPath);
       return coordinatorOperationSuccess(
         command,
-        descriptor.replayResult(command, replayed),
+        descriptor.replayResult(command, replayed, context),
       );
     }
 
@@ -276,11 +320,7 @@ export async function runCoordinatorOperation<
     if (descriptor.loadBeforeRequestConflict) {
       context = { ...context, before: await loadCampaign(campaignPath) };
     }
-    if (
-      rebuiltCampaign.records.some(
-        (record) => isRecord(record) && record.requestId === command.requestId,
-      )
-    ) {
+    if (existingIntent !== undefined) {
       return coordinatorOperationFailure(command, descriptor.requestConflict);
     }
     if (descriptor.loadBeforeValidation && context.before === undefined) {
@@ -312,6 +352,9 @@ export async function runCoordinatorOperation<
     }
 
     const records = descriptor.records(context);
+    if (records[0] !== undefined) {
+      records[0].commandDigest = requestedCommandDigest;
+    }
     const operation = records[0]?.operation;
     if (!isAuthoritativeOperation(operation)) {
       throw new Error("coordinator operation records contain an unknown operation");
@@ -334,7 +377,7 @@ export async function runCoordinatorOperation<
     const after = await appendCampaignRecordsAndPersist(campaignPath, records);
     return coordinatorOperationSuccess(
       command,
-      descriptor.successResult(command, after),
+      descriptor.successResult(command, after, context),
     );
   } catch (error) {
     return coordinatorOperationFailure(command, {
@@ -438,22 +481,51 @@ export async function reevaluateCampaign(
 }
 
 export async function resumeCampaign(command: ResumeCampaignCommand, currentTime: string) {
-  const buildResumeResult = (resumed: boolean, campaign: LoadedCampaign) => ({
-    resumed,
-    campaign: campaign.campaign,
-    summary: {
-      completedWork: campaign.workView.completedWork,
-      currentPhase: campaign.workView.phase,
-      currentPause: campaign.workView.pause,
-      nextPermittedActions: campaign.workView.nextPermittedActions,
-    },
-    workView: campaign.workView,
-    lease: campaign.lease,
-    validation: campaign.validation,
-    ...(campaign.pendingDecision === undefined
-      ? {}
-      : { pendingDecision: campaign.pendingDecision }),
-  });
+  const buildResumeResult = (
+    resumed: boolean,
+    campaign: LoadedCampaign,
+    recovery: CampaignRecovery,
+  ) => {
+    const interruptedResearch =
+      campaign.pendingDecision?.type === "interrupted-approved-research"
+        ? campaign.pendingDecision
+        : undefined;
+    return {
+      resumed,
+      campaign: campaign.campaign,
+      summary: {
+        completedWork: campaign.workView.completedWork,
+        currentPhase: campaign.workView.phase,
+        currentPause: campaign.workView.pause,
+        nextPermittedActions: campaign.workView.nextPermittedActions,
+        ...(recovery.recoveredOperations.length === 0 &&
+        !recovery.projectionsRegenerated &&
+        interruptedResearch === undefined
+          ? {}
+          : {
+              recovery: {
+                recoveredOperations: recovery.recoveredOperations,
+                projectionsRegenerated: recovery.projectionsRegenerated,
+                ...(interruptedResearch === undefined
+                  ? {}
+                  : {
+                      unresolvedResearchReservations:
+                        interruptedResearch.reservations.map(
+                          (reservation) => reservation.reservationId,
+                        ),
+                    }),
+                autonomousContinuation: campaign.workView.pause === null,
+              },
+            }),
+      },
+      workView: campaign.workView,
+      lease: campaign.lease,
+      validation: campaign.validation,
+      ...(campaign.pendingDecision === undefined
+        ? {}
+        : { pendingDecision: campaign.pendingDecision }),
+    };
+  };
 
   return runCoordinatorOperation(command, currentTime, {
     async locateCampaign(command) {
@@ -494,8 +566,8 @@ export async function resumeCampaign(command: ResumeCampaignCommand, currentTime
       );
       return matchingIntent && matchingOutcome;
     },
-    replayResult(_command, replayed) {
-      return buildResumeResult(false, replayed);
+    replayResult(_command, replayed, context) {
+      return buildResumeResult(false, replayed, context.recovery);
     },
     lease: {
       mode: "reclaim",
@@ -520,8 +592,8 @@ export async function resumeCampaign(command: ResumeCampaignCommand, currentTime
         leaseExpiresAt: command.payload.leaseExpiresAt,
       });
     },
-    successResult(_command, after) {
-      return buildResumeResult(true, after);
+    successResult(_command, after, context) {
+      return buildResumeResult(true, after, context.recovery);
     },
   });
 }
@@ -612,10 +684,15 @@ export async function confirmCampaignIntake(
     },
   });
 }
-export async function reservePublicResearch(
-  command: ReservePublicResearchCommand,
+async function reserveCampaignResearch(
+  command: ReservePublicResearchCommand | ReserveApprovedResearchCommand,
   currentTime: string,
 ) {
+  const approvedResearch = command.command === "reserveApprovedResearch";
+  const researchLabel = approvedResearch ? "Approved Research" : "Public Research";
+  const authoritativeOperation = approvedResearch
+    ? "reserve-approved-research"
+    : "reserve-public-research";
   const buildReservationResult = (
     reserved: boolean,
     campaign: LoadedCampaign,
@@ -635,16 +712,16 @@ export async function reservePublicResearch(
     requestConflict: {
       code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
       message:
-        "Public Research reservation request identity was already used with different input.",
+        `${researchLabel} reservation request identity was already used with different input.`,
       action:
         "Reuse the original request payload or provide a new stable request identity.",
     },
     invalidCampaign: {
       code: "SVS-CAMPAIGN-INVALID",
       message:
-        "Public Research capacity could not be reserved against valid Campaign history.",
+        `${researchLabel} capacity could not be reserved against valid Campaign history.`,
       action:
-        "Preserve the Campaign contents and keep Public Research paused until validation succeeds.",
+        `Preserve the Campaign contents and keep ${researchLabel} paused until validation succeeds.`,
     },
     loadBeforeValidation: true,
     isReplay({ rebuiltCampaign }) {
@@ -652,7 +729,7 @@ export async function reservePublicResearch(
         (record) =>
           isRecord(record) &&
           record.type ===
-            authoritativeOperationDescriptors["reserve-public-research"].outcome &&
+            authoritativeOperationDescriptors[authoritativeOperation].outcome &&
           record.requestId === command.requestId &&
           JSON.stringify(record.reservation) ===
             JSON.stringify(command.payload.reservation),
@@ -669,20 +746,22 @@ export async function reservePublicResearch(
         campaign.evidenceLedger === undefined
       ) {
         return {
-          code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
+          code: approvedResearch
+            ? "SVS-APPROVED-RESEARCH-NOT-AVAILABLE"
+            : "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
           message:
-            "Public Research requires a valid explicitly confirmed Campaign Intake.",
+            `${researchLabel} requires a valid explicitly confirmed Campaign Intake.`,
           action:
-            "Complete and explicitly confirm Campaign Intake before reserving Public Research capacity.",
+            `Complete and explicitly confirm Campaign Intake before reserving ${researchLabel} capacity.`,
         };
       }
       if (command.payload.reservedAt < campaign.intake.confirmedAt) {
         return {
           code: "SVS-RESEARCH-RESERVATION-INVALID",
           message:
-            "Public Research reservation cannot predate Campaign Intake confirmation.",
+            `${researchLabel} reservation cannot predate Campaign Intake confirmation.`,
           action:
-            "Reserve capacity only after the confirmed Campaign Intake makes Public Research available.",
+            `Reserve capacity only after the confirmed Campaign Intake makes ${researchLabel} available.`,
         };
       }
       return undefined;
@@ -693,7 +772,7 @@ export async function reservePublicResearch(
         return {
           code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
           message:
-            "Public Research reservation requires the active coordinator lease.",
+            `${researchLabel} reservation requires the active coordinator lease.`,
           action:
             "Resume the Scouting Campaign with this coordinator before reserving research.",
         };
@@ -719,16 +798,9 @@ export async function reservePublicResearch(
             "Reserve only deepening work for a named affected Opportunity and targeted Evidence Gap.",
         };
       }
-      if (
-        rebuiltCampaign.records.some(
-          (record) =>
-            isRecord(record) &&
-            record.type ===
-              authoritativeOperationDescriptors["reserve-public-research"].outcome &&
-            isRecord(record.reservation) &&
-            record.reservation.id === command.payload.reservation.id,
-        )
-      ) {
+      if (rebuiltCampaign.authoritativeHistory.reservations.has(
+        command.payload.reservation.id,
+      )) {
         return {
           code: "SVS-RESEARCH-RESERVATION-CONFLICT",
           message:
@@ -736,6 +808,90 @@ export async function reservePublicResearch(
           action:
             "Reuse the original reservation request or create a new stable reservation identity.",
         };
+      }
+      const approvalId = command.payload.reservation.approvalId;
+      if (approvalId === undefined && approvedResearch) {
+        return {
+          code: "SVS-RESEARCH-APPROVAL-SCOPE-MISMATCH",
+          message:
+            "Approved Research requires the exact granted Research Approval.",
+          action:
+            "Do not access the Source; reserve Approved Research using its current approval identity.",
+        };
+      }
+      if (approvalId !== undefined) {
+        const approval = campaign.researchApprovals?.find(
+          (candidate) => candidate.id === approvalId,
+        );
+        const approvalAccessMatchesCommand = approvedResearch
+          ? approval !== undefined &&
+            ["restricted", "paid", "restricted-and-paid"].includes(
+              approval.scope.access,
+            )
+          : approval?.scope.access === "elevated-risk";
+        if (
+          approval === undefined ||
+          !approvalAccessMatchesCommand ||
+          approval.scope.purpose !== command.payload.reservation.purpose ||
+          approval.scope.accessMethod !==
+            command.payload.reservation.retrievalRoute ||
+          (approvedResearch &&
+            approval.scope.opportunityId !==
+              command.payload.reservation.opportunityId) ||
+          command.payload.reservedAt < approval.approvedAt ||
+          command.payload.reservedAt < approval.scope.duration.startsAt ||
+          command.payload.reservedAt > approval.scope.duration.expiresAt ||
+          currentTime > approval.scope.duration.expiresAt ||
+          (approval.scope.access === "elevated-risk" &&
+            (command.payload.reservation.researchClass !== "deepening" ||
+              command.payload.reservation.opportunityId !==
+                approval.scope.opportunityId))
+        ) {
+          return {
+            code: approvedResearch
+              ? "SVS-RESEARCH-APPROVAL-SCOPE-MISMATCH"
+              : "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+            message:
+              "Research reservation differs from the granted Source access, purpose, method, opportunity, or duration.",
+            action:
+              "Do not access the Source; use the exact current approval scope or request renewed approval.",
+          };
+        }
+        if (
+          approvedResearch &&
+          [...rebuiltCampaign.authoritativeHistory.reservations.values()].some(
+            (reservation) => reservation.approvalId === approvalId,
+          )
+        ) {
+          return {
+            code: "SVS-RESEARCH-APPROVAL-ALREADY-RESERVED",
+            message:
+              "This Research Approval is already bound to a Research Budget reservation.",
+            action:
+              "Resolve the existing reservation; request a new scoped Research Approval for different Source work.",
+          };
+        }
+        if (
+          approvedResearch &&
+          ["paid", "restricted-and-paid"].includes(approval.scope.access)
+        ) {
+          const recordedSpend = (campaign.researchExpenditures ?? []).reduce(
+            (total, expenditure) => total + expenditure.amount,
+            0,
+          );
+          const availablePaidSpend =
+            campaign.researchBudget?.remainingPaidSpend?.amount ??
+            campaign.intake!.researchBudget.paidSpendCap.amount - recordedSpend;
+          if (approval.scope.maximumCost.amount > availablePaidSpend) {
+            return {
+              code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
+              message:
+                "Approved Research reservation would exceed conservatively available paid spend.",
+              action:
+                "Do not pay or access the Source; resolve outstanding paid reservations or explicitly revise the Research Budget.",
+            };
+          }
+        }
       }
       if (
         command.payload.reservation.researchClass === "adversarial" &&
@@ -758,7 +914,7 @@ export async function reservePublicResearch(
         return {
           code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
           message:
-            "The ordinary Public Research Source cap has no unreserved capacity.",
+            "The ordinary Campaign Research Source cap has no unreserved capacity.",
           action:
             "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
         };
@@ -814,7 +970,7 @@ export async function reservePublicResearch(
       }
       const allocationViolation =
         activeExtension === undefined
-          ? publicResearchAllocationViolation(
+          ? campaignResearchAllocationViolation(
               rebuiltCampaign.authoritativeHistory,
               command.payload.reservation,
             )
@@ -879,16 +1035,36 @@ export async function reservePublicResearch(
     },
     records({ before }) {
       const campaign = before!;
-      return publicResearchReservationRecords(
-        campaign.campaign.id,
-        command,
-        campaign.validation.recordCount + 1,
-      );
+      return approvedResearch
+        ? approvedResearchReservationRecords(
+            campaign.campaign.id,
+            command as ReserveApprovedResearchCommand,
+            campaign.validation.recordCount + 1,
+          )
+        : publicResearchReservationRecords(
+            campaign.campaign.id,
+            command as ReservePublicResearchCommand,
+            campaign.validation.recordCount + 1,
+          );
     },
     successResult(_command, after) {
       return buildReservationResult(true, after);
     },
   });
+}
+
+export function reservePublicResearch(
+  command: ReservePublicResearchCommand,
+  currentTime: string,
+) {
+  return reserveCampaignResearch(command, currentTime);
+}
+
+export function reserveApprovedResearch(
+  command: ReserveApprovedResearchCommand,
+  currentTime: string,
+) {
+  return reserveCampaignResearch(command, currentTime);
 }
 
 export async function requestResearchApproval(
@@ -1055,7 +1231,10 @@ export async function recordResearchApprovalInformation(
     },
     validateBeforeLease({ before }) {
       const pendingDecision = before!.pendingDecision;
-      if (pendingDecision?.id !== command.payload.decisionId) {
+      if (
+        pendingDecision?.type !== "research-approval" ||
+        pendingDecision.id !== command.payload.decisionId
+      ) {
         return {
             code: "SVS-PENDING-DECISION-NOT-FOUND",
             message: "The named Research Approval Pending Decision is not active.",
@@ -1150,7 +1329,10 @@ export async function respondResearchApproval(
     },
     validateBeforeLease({ before }) {
       const pendingDecision = before!.pendingDecision;
-      if (pendingDecision?.id !== command.payload.decisionId) {
+      if (
+        pendingDecision?.type !== "research-approval" ||
+        pendingDecision.id !== command.payload.decisionId
+      ) {
         return {
           code: "SVS-PENDING-DECISION-NOT-FOUND",
           message: "The named Research Approval Pending Decision is not active.",
@@ -1250,6 +1432,157 @@ export async function respondResearchApproval(
     },
     records({ before }) {
       return researchApprovalResponseRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, after) {
+      return buildResult(true, after);
+    },
+  });
+}
+
+export async function respondInterruptedResearch(
+  command: RespondInterruptedResearchCommand,
+  currentTime: string,
+) {
+  const buildResult = (responded: boolean, campaign: LoadedCampaign) => ({
+    responded,
+    decisionId: command.payload.decisionId,
+    closedReservationIds: command.payload.response.reservations.map(
+      (resolution) => resolution.reservationId,
+    ),
+    pendingDecision: campaign.pendingDecision ?? null,
+    researchBudget: campaign.researchBudget,
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not answer interruption recovery concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Interrupted Research response identity was already used with different input.",
+      action:
+        "Reuse the original response payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Interrupted Approved Research response could not be recorded against valid Campaign history.",
+      action:
+        "Preserve Campaign contents and do not repeat Source access or payment.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["respond-interrupted-research"]
+              .outcome &&
+          record.requestId === command.requestId &&
+          record.decisionId === command.payload.decisionId &&
+          JSON.stringify(record.response) ===
+            JSON.stringify(command.payload.response),
+      );
+    },
+    replayResult(_command, replayed) {
+      return buildResult(false, replayed);
+    },
+    validateBeforeLease({ before, rebuiltCampaign }) {
+      const pendingDecision = before!.pendingDecision;
+      if (
+        pendingDecision?.type !== "interrupted-approved-research" ||
+        pendingDecision.id !== command.payload.decisionId
+      ) {
+        return {
+          code: "SVS-PENDING-DECISION-NOT-FOUND",
+          message:
+            "The named interrupted Approved Research Pending Decision is not active.",
+          action:
+            "Resume the Campaign and answer the exact active Pending Decision; do not retry access or payment.",
+        };
+      }
+      if (
+        command.payload.respondedAt < pendingDecision.requestedAt ||
+        JSON.stringify(
+          command.payload.response.reservations.map(
+            (resolution) => resolution.reservationId,
+          ),
+        ) !==
+          JSON.stringify(
+            pendingDecision.reservations.map(
+              (reservation) => reservation.reservationId,
+            ),
+          )
+      ) {
+        return {
+          code: "SVS-INTERRUPTED-RESEARCH-RESPONSE-INVALID",
+          message:
+            "Interrupted Research response does not cover the exact active reservations or predates the Pending Decision.",
+          action:
+            "Confirm all named reservations together using the current Pending Decision without changing their identities.",
+        };
+      }
+      for (const resolution of command.payload.response.reservations) {
+        if (!resolution.charge.incurred) {
+          continue;
+        }
+        const expenditureId = resolution.charge.expenditureId;
+        const decisionReservation = pendingDecision.reservations.find(
+          (reservation) =>
+            reservation.reservationId === resolution.reservationId,
+        );
+        const expenditure = before!.researchExpenditures?.find(
+          (candidate) => candidate.id === expenditureId,
+        );
+        if (
+          decisionReservation === undefined ||
+          expenditure === undefined ||
+          expenditure.approvalId !== decisionReservation.approvalId
+        ) {
+          return {
+            code: "SVS-INTERRUPTED-RESEARCH-RESPONSE-INVALID",
+            message:
+              "A charged interruption resolution must name the matching recorded Research Expenditure.",
+            action:
+              "Record the exact incurred Research Expenditure, then resolve the existing reservation without retrying Source work or payment.",
+          };
+        }
+      }
+      const authoritativeDecision = interruptedApprovedResearchDecision(
+        rebuiltCampaign.authoritativeHistory,
+      );
+      if (authoritativeDecision?.id !== pendingDecision.id) {
+        return {
+          code: "SVS-INTERRUPTED-RESEARCH-RESPONSE-INVALID",
+          message:
+            "Interrupted Research recovery no longer matches authoritative history.",
+          action:
+            "Resume again and answer only the newly summarized Pending Decision.",
+        };
+      }
+      return undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Interrupted Research response requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator; do not repeat Source access or payment.",
+        };
+      },
+    },
+    records({ before }) {
+      return interruptedResearchResponseRecords(
         before!.campaign.id,
         command,
         before!.validation.recordCount + 1,
@@ -1396,10 +1729,18 @@ export async function recordResearchExpenditure(
     },
   });
 }
-export async function recordPublicResearchObservation(
-  command: RecordPublicResearchObservationCommand,
+async function recordCampaignResearchObservation(
+  command:
+    | RecordPublicResearchObservationCommand
+    | RecordApprovedResearchObservationCommand,
   currentTime: string,
 ) {
+  const approvedResearch =
+    command.command === "recordApprovedResearchObservation";
+  const researchLabel = approvedResearch ? "Approved Research" : "Public Research";
+  const authoritativeOperation = approvedResearch
+    ? "record-approved-research-observation"
+    : "record-public-research-observation";
   const buildObservationImportResult = (
     recorded: boolean,
     campaign: LoadedCampaign,
@@ -1419,14 +1760,14 @@ export async function recordPublicResearchObservation(
     requestConflict: {
       code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
       message:
-        "Public Research import request identity was already used with different input.",
+        `${researchLabel} import request identity was already used with different input.`,
       action:
         "Reuse the original request payload or provide a new stable request identity.",
     },
     invalidCampaign: {
       code: "SVS-CAMPAIGN-INVALID",
       message:
-        "Public Research Observation could not be imported against valid Campaign history.",
+        `${researchLabel} Observation could not be imported against valid Campaign history.`,
       action:
         "Preserve the Campaign contents and reservation; do not repeat retrieval until validation succeeds.",
     },
@@ -1436,15 +1777,19 @@ export async function recordPublicResearchObservation(
         (record) =>
           isRecord(record) &&
           record.type ===
-            authoritativeOperationDescriptors[
-              "record-public-research-observation"
-            ].outcome &&
+            authoritativeOperationDescriptors[authoritativeOperation].outcome &&
           record.requestId === command.requestId &&
           record.reservationId === command.payload.reservationId &&
           JSON.stringify(record.source) ===
             JSON.stringify(command.payload.source) &&
           JSON.stringify(record.observation) ===
-            JSON.stringify(command.payload.observation),
+            JSON.stringify(command.payload.observation) &&
+          (!approvedResearch ||
+            JSON.stringify(record.charge) ===
+              JSON.stringify(
+                (command as RecordApprovedResearchObservationCommand).payload
+                  .charge,
+              )),
       );
     },
     replayResult(_command, replayed) {
@@ -1457,9 +1802,11 @@ export async function recordPublicResearchObservation(
         campaign.evidenceLedger !== undefined
         ? undefined
         : {
-            code: "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
+            code: approvedResearch
+              ? "SVS-APPROVED-RESEARCH-NOT-AVAILABLE"
+              : "SVS-PUBLIC-RESEARCH-NOT-AVAILABLE",
             message:
-              "Public Research requires a valid explicitly confirmed Campaign Intake.",
+              `${researchLabel} requires a valid explicitly confirmed Campaign Intake.`,
             action:
               "Complete and explicitly confirm Campaign Intake before importing research.",
           };
@@ -1470,7 +1817,7 @@ export async function recordPublicResearchObservation(
         return {
           code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
           message:
-            "Public Research import requires the active coordinator lease.",
+            `${researchLabel} import requires the active coordinator lease.`,
           action:
             "Resume the Scouting Campaign with this coordinator before importing research.",
         };
@@ -1478,48 +1825,88 @@ export async function recordPublicResearchObservation(
     },
     validateAfterLease({ before, rebuiltCampaign }) {
       const campaign = before!;
-      const reservationOutcome = rebuiltCampaign.records.find(
-        (record) =>
-          isRecord(record) &&
-          record.type ===
-            authoritativeOperationDescriptors["reserve-public-research"].outcome &&
-          isRecord(record.reservation) &&
-          record.reservation.id === command.payload.reservationId,
+      const reservation = rebuiltCampaign.authoritativeHistory.reservations.get(
+        command.payload.reservationId,
       );
-      const alreadySettled = rebuiltCampaign.records.some(
-        (record) =>
-          isRecord(record) &&
-          record.type ===
-            authoritativeOperationDescriptors[
-              "record-public-research-observation"
-            ].outcome &&
-          record.reservationId === command.payload.reservationId,
-      );
-      if (!isRecord(reservationOutcome) || alreadySettled) {
+      const reservationOutcomeSequence =
+        rebuiltCampaign.authoritativeHistory.reservationOutcomeSequence.get(
+          command.payload.reservationId,
+        );
+      const reservationOutcome =
+        reservationOutcomeSequence === undefined
+          ? undefined
+          : rebuiltCampaign.records[reservationOutcomeSequence - 1];
+      const alreadySettled =
+        rebuiltCampaign.authoritativeHistory.settledReservationIds.has(
+          command.payload.reservationId,
+        );
+      if (!isRecord(reservationOutcome) || reservation === undefined || alreadySettled) {
         return {
           code: "SVS-RESEARCH-RESERVATION-INVALID",
           message: !isRecord(reservationOutcome)
-            ? "Public Research import has no matching capacity reservation."
-            : "Public Research reservation is already settled.",
+            ? `${researchLabel} import has no matching capacity reservation.`
+            : `${researchLabel} reservation is already settled.`,
           action: !isRecord(reservationOutcome)
             ? "Reserve capacity before retrieving and importing a Source."
             : "Inspect the existing Observation; do not charge or import the reservation twice.",
         };
       }
+      const approval = campaign.researchApprovals?.find(
+        (candidate) => candidate.id === reservation.approvalId,
+      );
+      const isApprovedAccess =
+        approval !== undefined &&
+        ["restricted", "paid", "restricted-and-paid"].includes(
+          approval.scope.access,
+        );
+      if (approvedResearch !== isApprovedAccess) {
+        return {
+          code: "SVS-RESEARCH-RESERVATION-INVALID",
+          message: approvedResearch
+            ? "Approved Research import requires an Approved Research reservation."
+            : "Public Research import cannot settle an Approved Research reservation.",
+          action: approvedResearch
+            ? "Use the exact approved reservation and report its charge state."
+            : "Use recordApprovedResearchObservation for approval-gated Source work.",
+        };
+      }
       if (
-        publicResearchApprovalScopeMismatch(
+        researchApprovalScopeMismatch(
           rebuiltCampaign.authoritativeHistory,
           command.payload.reservationId,
           command.payload.source,
         )
       ) {
         return {
-          code: "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+          code: approvedResearch
+            ? "SVS-RESEARCH-APPROVAL-SCOPE-MISMATCH"
+            : "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
           message:
-            "The retrieved Source differs from the Source named in the Opportunity-specific Research Approval.",
+            "The retrieved Source differs from the Source named in the Research Approval.",
           action:
-            "Leave the reservation unsettled and use only the exact approved public Source, or request renewed approval for the changed scope.",
+            "Leave the reservation unsettled and use only the exact approved Source, or request renewed approval for the changed scope.",
         };
+      }
+      if (approvedResearch) {
+        const charge = (command as RecordApprovedResearchObservationCommand)
+          .payload.charge;
+        const expenditure = charge.incurred
+          ? campaign.researchExpenditures?.find(
+              (candidate) => candidate.id === charge.expenditureId,
+            )
+          : undefined;
+        if (
+          charge.incurred &&
+          (expenditure === undefined || expenditure.approvalId !== approval!.id)
+        ) {
+          return {
+            code: "SVS-APPROVED-RESEARCH-CHARGE-UNRECORDED",
+            message:
+              "The completed Approved Research result names a charge without its matching Research Expenditure.",
+            action:
+              "Record the exact incurred Research Expenditure, then import the existing result without repeating Source access or payment.",
+          };
+        }
       }
       if (
         !isIsoInstant(reservationOutcome.recordedAt) ||
@@ -1536,10 +1923,10 @@ export async function recordPublicResearchObservation(
       }
       if (
         campaign.evidenceLedger!.sources.some(
-          (source: PublicSource) => source.id === command.payload.source.id,
+          (source: Source) => source.id === command.payload.source.id,
         ) ||
         campaign.evidenceLedger!.observations.some(
-          (observation: PublicObservation) =>
+          (observation: Observation) =>
             observation.id === command.payload.observation.id,
         )
       ) {
@@ -1555,16 +1942,36 @@ export async function recordPublicResearchObservation(
     },
     records({ before }) {
       const campaign = before!;
-      return publicResearchObservationRecords(
-        campaign.campaign.id,
-        command,
-        campaign.validation.recordCount + 1,
-      );
+      return approvedResearch
+        ? approvedResearchObservationRecords(
+            campaign.campaign.id,
+            command as RecordApprovedResearchObservationCommand,
+            campaign.validation.recordCount + 1,
+          )
+        : publicResearchObservationRecords(
+            campaign.campaign.id,
+            command as RecordPublicResearchObservationCommand,
+            campaign.validation.recordCount + 1,
+          );
     },
     successResult(_command, after) {
       return buildObservationImportResult(true, after);
     },
   });
+}
+
+export function recordPublicResearchObservation(
+  command: RecordPublicResearchObservationCommand,
+  currentTime: string,
+) {
+  return recordCampaignResearchObservation(command, currentTime);
+}
+
+export function recordApprovedResearchObservation(
+  command: RecordApprovedResearchObservationCommand,
+  currentTime: string,
+) {
+  return recordCampaignResearchObservation(command, currentTime);
 }
 
 export async function recordEvidenceReasoning(
@@ -2634,6 +3041,7 @@ export async function createCampaign(command: CreateCampaignCommand) {
       operation: "create-campaign",
       coordinatorId: command.payload.coordinatorId,
       leaseExpiresAt: command.payload.leaseExpiresAt,
+      commandDigest: commandDigest(command),
     });
     const workView = initialWorkView(command.payload.campaignId);
     const lease: CoordinatorLease = {

@@ -1,6 +1,6 @@
 import {
-  appendFile,
   chmod,
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -18,10 +18,11 @@ import type {
   InspectEvidenceCommand,
   ConfirmedCampaignIntake,
   ConfirmCampaignIntakeCommand,
-  PublicResearchReservation,
+  CampaignResearchReservation,
   ReservePublicResearchCommand,
-  PublicSource,
-  PublicObservation,
+  ReserveApprovedResearchCommand,
+  Source,
+  Observation,
   SourceLineage,
   SourceCredibility,
   SourceFreshness,
@@ -32,6 +33,7 @@ import type {
   Correction,
   ReasoningEntry,
   RecordPublicResearchObservationCommand,
+  RecordApprovedResearchObservationCommand,
   RecordEvidenceReasoningCommand,
   DiscoverySweep,
   DiscoveryTranche,
@@ -63,6 +65,10 @@ import type {
   PassBreadthGateCommand,
   ResearchApprovalRequest,
   PendingResearchApprovalDecision,
+  PendingDecision,
+  PendingInterruptedResearchDecision,
+  InterruptedResearchResponse,
+  RespondInterruptedResearchCommand,
   RequestResearchApprovalCommand,
   ResearchApprovalInformation,
   RecordedResearchApprovalInformation,
@@ -99,6 +105,7 @@ import {
   isRecord,
   validateBreadthGate,
   validateCampaignIntake,
+  validateCampaignResearchReservation,
   validateDiscoveryTranche,
   validatePersistableText,
   validatePublicObservation,
@@ -114,7 +121,20 @@ import {
   validateReevaluateCampaignFields,
   validateRecordOpportunityFormationFields,
   validateResearchApprovalRequest,
+  validateRespondInterruptedResearchFields,
+  validateRecordApprovedResearchObservationFields,
 } from "./validation.js";
+import {
+  commitStagedOperation,
+  completeOperationRecovery,
+  injectPersistenceFault,
+  recoverInterruptedOperations,
+  stageOperationIntent,
+} from "./recovery.js";
+import type {
+  InterruptedOperationRecovery,
+  RecoveredOperation,
+} from "./recovery.js";
 
 export async function pathExists(targetPath: string): Promise<boolean> {
   try {
@@ -145,6 +165,7 @@ async function replacePrivate(
   targetPath: string,
   writeTemporaryFile: (temporaryPath: string) => Promise<void>,
 ): Promise<void> {
+  await mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
   const temporaryDirectory = await mkdtemp(
     path.join(path.dirname(targetPath), ".svs-write-"),
   );
@@ -188,82 +209,96 @@ export async function acquireCoordinatorOperationLock(
   await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
   await chmod(lockDirectory, 0o700);
   const token = randomUUID();
-  const lockPath = path.join(lockDirectory, `${token}.json`);
-  const candidatePath = path.join(lockDirectory, `.${token}.tmp`);
+  const lockPath = path.join(lockDirectory, "active.json");
+  const candidatePath = path.join(lockDirectory, `.${token}.candidate`);
   const expiresAt = new Date(
     new Date(acquiredAt).valueOf() + 5 * 60 * 1_000,
   ).toISOString();
   await writePrivateJson(candidatePath, {
     version: contracts.records,
     token,
+    processId: process.pid,
     requestId,
     coordinatorId,
     acquiredAt,
     expiresAt,
   });
-  await rename(candidatePath, lockPath);
-
   try {
-    for (const entry of await readdir(lockDirectory, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) {
-        continue;
-      }
-      const contenderPath = path.join(lockDirectory, entry.name);
-      let contender: unknown;
+    for (;;) {
       try {
-        contender = await readJson(contenderPath);
-      } catch {
-        if (contenderPath !== lockPath) {
-          await rm(lockPath, { force: true });
-          return undefined;
+        await link(candidatePath, lockPath);
+        return { path: lockPath, token };
+      } catch (error) {
+        if (!isRecord(error) || error.code !== "EEXIST") {
+          throw error;
         }
-        throw new Error("coordinator operation lock is unreadable");
+      }
+
+      let owner: unknown;
+      try {
+        owner = await readJson(lockPath);
+      } catch (error) {
+        if (isRecord(error) && error.code === "ENOENT") {
+          continue;
+        }
+        throw error;
       }
       if (
-        !isRecord(contender) ||
-        typeof contender.token !== "string" ||
-        entry.name !== `${contender.token}.json` ||
-        !isIsoInstant(contender.acquiredAt) ||
-        !isIsoInstant(contender.expiresAt) ||
-        contender.expiresAt <= contender.acquiredAt
+        isRecord(owner) &&
+        Number.isSafeInteger(owner.processId) &&
+        Number(owner.processId) > 0
       ) {
-        if (contenderPath !== lockPath) {
-          await rm(lockPath, { force: true });
+        try {
+          process.kill(Number(owner.processId), 0);
           return undefined;
+        } catch (error) {
+          if (!isRecord(error) || error.code !== "ESRCH") {
+            return undefined;
+          }
         }
-        throw new Error("coordinator operation lock is invalid");
       }
-      if (contender.expiresAt <= acquiredAt) {
-        await rm(contenderPath, { force: true });
-        continue;
-      }
-      if (contenderPath !== lockPath) {
-        await rm(lockPath, { force: true });
-        return undefined;
+
+      const stalePath = path.join(lockDirectory, `.stale-${token}`);
+      try {
+        await rename(lockPath, stalePath);
+        await rm(stalePath, { force: true });
+      } catch (error) {
+        if (!isRecord(error) || error.code !== "ENOENT") {
+          throw error;
+        }
       }
     }
-    return { path: lockPath, token };
-  } catch (error) {
-    await rm(lockPath, { force: true });
-    throw error;
+  } finally {
+    await rm(candidatePath, { force: true });
   }
 }
 
 export async function releaseCoordinatorOperationLock(
   lock: CoordinatorOperationLock,
 ): Promise<void> {
-  await rm(lock.path, { force: true });
+  try {
+    const owner = await readJson(lock.path);
+    if (isRecord(owner) && owner.token === lock.token) {
+      await rm(lock.path, { force: true });
+    }
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
 }
 
 export type AuthoritativeHistoryRebuild = {
   campaignId: string;
   intake?: ConfirmedCampaignIntake;
-  reservations: Map<string, PublicResearchReservation>;
+  reservations: Map<string, CampaignResearchReservation>;
   reservationRecordedAt: Map<string, string>;
   reservationObservationIds: Map<string, string>;
+  reservationOutcomeSequence: Map<string, number>;
   settledReservationIds: Set<string>;
-  sources: PublicSource[];
-  observations: PublicObservation[];
+  closedResearchReservationIds: Set<string>;
+  sources: Source[];
+  observations: Observation[];
   sourceLineages: SourceLineage[];
   sourceCredibilities: SourceCredibility[];
   sourceFreshnesses: SourceFreshness[];
@@ -290,6 +325,12 @@ export type AuthoritativeHistoryRebuild = {
   researchApprovalResponses: RecordedResearchApprovalResponse[];
   researchApprovals: ResearchApproval[];
   researchExpenditures: ResearchExpenditure[];
+  resumeOutcomes: Array<{
+    requestId: string;
+    recordedAt: string;
+    outcomeSequence: number;
+  }>;
+  interruptedResearchResponses: InterruptedResearchResponse[];
 };
 
 export type AuthoritativeRecordPair = {
@@ -320,6 +361,93 @@ export function activeResearchApprovalDecision(
   );
 }
 
+export function interruptedApprovedResearchDecision(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    | "reservations"
+    | "reservationOutcomeSequence"
+    | "settledReservationIds"
+    | "researchApprovals"
+    | "resumeOutcomes"
+  >,
+): PendingInterruptedResearchDecision | undefined {
+  const interrupted = [...history.reservations.values()]
+    .flatMap((reservation) => {
+      if (
+        history.settledReservationIds.has(reservation.id) ||
+        reservation.approvalId === undefined
+      ) {
+        return [];
+      }
+      const reservationSequence = history.reservationOutcomeSequence.get(
+        reservation.id,
+      );
+      const firstResume = history.resumeOutcomes.find(
+        (resume) =>
+          reservationSequence !== undefined &&
+          resume.outcomeSequence > reservationSequence,
+      );
+      const approval = history.researchApprovals.find(
+        (candidate) => candidate.id === reservation.approvalId,
+      );
+      if (
+        firstResume === undefined ||
+        approval === undefined ||
+        !["restricted", "paid", "restricted-and-paid"].includes(
+          approval.scope.access,
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          reservationId: reservation.id,
+          approvalId: approval.id,
+          access: approval.scope.access as
+            | "restricted"
+            | "paid"
+            | "restricted-and-paid",
+          sourceId: approval.scope.source.id,
+          purpose: reservation.purpose,
+          maximumCost: approval.scope.maximumCost,
+          interruptedAt: firstResume.recordedAt,
+        },
+      ];
+    })
+    .sort((left, right) =>
+      left.reservationId.localeCompare(right.reservationId),
+    );
+  if (interrupted.length === 0) {
+    return undefined;
+  }
+  const requestedAt = interrupted.reduce(
+    (latest, reservation) =>
+      reservation.interruptedAt > latest ? reservation.interruptedAt : latest,
+    interrupted[0]!.interruptedAt,
+  );
+  const reservations = interrupted.map(
+    ({ interruptedAt: _interruptedAt, ...reservation }) => reservation,
+  );
+  return {
+    id: `interrupted-approved-research:${reservations.map((reservation) => reservation.reservationId).join(",")}`,
+    type: "interrupted-approved-research",
+    requestedAt,
+    question:
+      "Did the approved Source work complete, and was a charge incurred before interruption? Do not repeat access or payment.",
+    reservations,
+    options: [
+      {
+        kind: "record-completed-result",
+        action: "recordApprovedResearchObservation",
+      },
+      {
+        kind: "resolve-without-result",
+        action: "respondInterruptedResearch",
+      },
+    ],
+  };
+}
+
 export function latestInconclusiveResearchExtension(
   history: Pick<AuthoritativeHistoryRebuild, "inconclusiveComparisonResponses">,
 ) {
@@ -346,7 +474,7 @@ export function activeInconclusiveResearchExtension(
 
 export function reservationMatchesInconclusiveExtension(
   reservation: Pick<
-    PublicResearchReservation,
+    CampaignResearchReservation,
     "researchClass" | "opportunityId" | "evidenceGapId"
   >,
   extension: {
@@ -401,7 +529,8 @@ export function inconclusiveResearchExtensionViolation(
     case "conclude-leading-opportunity":
     case "conclude-inconclusive-comparison":
       return undefined;
-    case "reserve-public-research": {
+    case "reserve-public-research":
+    case "reserve-approved-research": {
       const reservation = isRecord(outcome.reservation)
         ? outcome.reservation
         : {};
@@ -413,9 +542,22 @@ export function inconclusiveResearchExtensionViolation(
         : "research reservation is outside the targeted extension";
     }
     case "record-public-research-observation":
+    case "record-approved-research-observation":
       return scopedReservationIds.has(String(outcome.reservationId))
         ? undefined
         : "research observation is outside the targeted extension";
+    case "respond-interrupted-research": {
+      const response = isRecord(outcome.response) ? outcome.response : {};
+      const reservationIds = Array.isArray(response.reservations)
+        ? response.reservations.map((resolution) =>
+            isRecord(resolution) ? String(resolution.reservationId) : "",
+          )
+        : [];
+      return reservationIds.length > 0 &&
+        reservationIds.every((id) => scopedReservationIds.has(id))
+        ? undefined
+        : "interrupted Approved Research is outside the targeted extension";
+    }
     case "record-evidence-reasoning": {
       if (!Array.isArray(outcome.entries) || outcome.entries.length === 0) {
         return "evidence reasoning is outside the targeted extension";
@@ -514,9 +656,9 @@ export type PublicResearchAllocationViolation =
   | "not-available"
   | "imbalanced";
 
-export function publicResearchAllocationViolation(
+export function campaignResearchAllocationViolation(
   history: AuthoritativeHistoryRebuild,
-  reservation: PublicResearchReservation,
+  reservation: CampaignResearchReservation,
 ): PublicResearchAllocationViolation | undefined {
   const breadthGatePassed = history.breadthGates.length > 0;
   if (reservation.researchClass === "adversarial") {
@@ -551,7 +693,7 @@ export type ResearchDecisionValueViolation = "required" | "scope" | "stopped";
 
 export function researchDecisionValueViolation(
   history: AuthoritativeHistoryRebuild,
-  reservation: PublicResearchReservation,
+  reservation: CampaignResearchReservation,
 ): ResearchDecisionValueViolation | undefined {
   const evaluation = history.opportunityQualificationEvaluations.at(-1);
   if (
@@ -632,7 +774,7 @@ export type OpportunityDeepeningViolation =
 
 export function opportunityDeepeningViolation(
   history: AuthoritativeHistoryRebuild,
-  reservation: PublicResearchReservation,
+  reservation: CampaignResearchReservation,
   reservedAt: string,
 ): OpportunityDeepeningViolation | undefined {
   if (reservation.researchClass !== "deepening") {
@@ -657,7 +799,7 @@ export function opportunityDeepeningViolation(
   }
   const targetsElevatedRisk =
     assessment.marketSafety.classification === "elevated-risk";
-  if (!targetsElevatedRisk && reservation.approvalId === undefined) {
+  if (!targetsElevatedRisk) {
     return undefined;
   }
   if (reservation.approvalId === undefined) {
@@ -687,7 +829,7 @@ export type AdversarialResearchViolation =
 
 export function adversarialResearchViolation(
   history: AuthoritativeHistoryRebuild,
-  reservation: PublicResearchReservation,
+  reservation: CampaignResearchReservation,
   reservedAt: string,
 ): AdversarialResearchViolation | undefined {
   if (reservation.researchClass !== "adversarial") {
@@ -868,10 +1010,10 @@ export function workViewAtInspectionTime(
   return { ...workView, nextPermittedActions, opportunities };
 }
 
-export function publicResearchApprovalScopeMismatch(
+export function researchApprovalScopeMismatch(
   history: AuthoritativeHistoryRebuild,
   reservationId: string,
-  source: PublicSource,
+  source: Source,
 ): boolean {
   const reservation = history.reservations.get(reservationId);
   if (reservation?.approvalId === undefined) {
@@ -4059,6 +4201,256 @@ export function renderNoQualifyingOpportunityReport(
   ].join("\n");
 }
 
+function validateAndApplyResearchReservation(
+  { intent, outcome, outcomeSequence, history }: AuthoritativeRecordPair,
+  researchKind: "public" | "approved",
+): void {
+  if (
+    history.intake === undefined ||
+    typeof outcome.recordedAt !== "string" ||
+    outcome.recordedAt < history.intake.confirmedAt ||
+    !isRecord(outcome.reservation) ||
+    validateCampaignResearchReservation(outcome.reservation, "reservation")
+      .length > 0 ||
+    intent.reservationId !== outcome.reservation.id ||
+    history.reservations.has(String(outcome.reservation.id))
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  const reservation =
+    outcome.reservation as unknown as CampaignResearchReservation;
+  const approval = history.researchApprovals.find(
+    (candidate) => candidate.id === reservation.approvalId,
+  );
+  const approvedAccess =
+    approval !== undefined &&
+    ["restricted", "paid", "restricted-and-paid"].includes(
+      approval.scope.access,
+    );
+  if (
+    researchKind === "public" &&
+    reservation.approvalId !== undefined &&
+    (approval === undefined ||
+      approval.scope.access !== "elevated-risk" ||
+      approval.scope.purpose !== reservation.purpose ||
+      approval.scope.accessMethod !== reservation.retrievalRoute ||
+      approval.scope.opportunityId !== reservation.opportunityId ||
+      reservation.researchClass !== "deepening" ||
+      outcome.recordedAt < approval.approvedAt ||
+      outcome.recordedAt < approval.scope.duration.startsAt ||
+      outcome.recordedAt > approval.scope.duration.expiresAt)
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  if (
+    (researchKind === "approved" &&
+      (!approvedAccess ||
+        approval.scope.purpose !== reservation.purpose ||
+        approval.scope.accessMethod !== reservation.retrievalRoute ||
+        approval.scope.opportunityId !== reservation.opportunityId ||
+        outcome.recordedAt < approval.approvedAt ||
+        outcome.recordedAt < approval.scope.duration.startsAt ||
+        outcome.recordedAt > approval.scope.duration.expiresAt ||
+        [...history.reservations.values()].some(
+          (existing) => existing.approvalId === approval.id,
+        )))
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  const activeExtension = activeInconclusiveResearchExtension(history);
+  if (
+    activeExtension?.response.kind === "extend" &&
+    !reservationMatchesInconclusiveExtension(reservation, activeExtension.response)
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  const sameClassReserved =
+    [...history.reservations.values()]
+      .filter(
+        (existing) =>
+          activeExtension === undefined ||
+          history.reservationRecordedAt.get(existing.id)! >=
+            activeExtension.respondedAt,
+      )
+      .filter((existing) =>
+        reservation.researchClass === "adversarial"
+          ? existing.researchClass === "adversarial"
+          : existing.researchClass !== "adversarial",
+      )
+      .reduce((total, existing) => total + existing.sourceUnits, 0) +
+    reservation.sourceUnits;
+  const classCap =
+    reservation.researchClass === "adversarial"
+      ? history.intake.researchBudget.adversarialSourceReserve
+      : history.intake.researchBudget.sourceCap -
+        history.intake.researchBudget.adversarialSourceReserve;
+  if (sameClassReserved > classCap) {
+    throw new Error(
+      `authoritative record ${outcomeSequence} exceeds the Research Budget`,
+    );
+  }
+  if (
+    activeExtension === undefined &&
+    campaignResearchAllocationViolation(history, reservation) !== undefined
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  if (
+    opportunityDeepeningViolation(
+      history,
+      reservation,
+      outcome.recordedAt,
+    ) !== undefined ||
+    adversarialResearchViolation(
+      history,
+      reservation,
+      outcome.recordedAt,
+    ) !== undefined
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  if (
+    researchKind === "approved" &&
+    approval !== undefined &&
+    ["paid", "restricted-and-paid"].includes(approval.scope.access)
+  ) {
+    const recordedSpend = history.researchExpenditures.reduce(
+      (total, expenditure) => total + expenditure.amount,
+      0,
+    );
+    const reservedSpend = [...history.reservations.values()].reduce(
+      (total, existing) => {
+        if (
+          history.settledReservationIds.has(existing.id) ||
+          existing.approvalId === undefined
+        ) {
+          return total;
+        }
+        const existingApproval = history.researchApprovals.find(
+          (candidate) => candidate.id === existing.approvalId,
+        );
+        if (
+          existingApproval === undefined ||
+          !["paid", "restricted-and-paid"].includes(
+            existingApproval.scope.access,
+          )
+        ) {
+          return total;
+        }
+        const spentForApproval = history.researchExpenditures
+          .filter(
+            (expenditure) => expenditure.approvalId === existingApproval.id,
+          )
+          .reduce((subtotal, expenditure) => subtotal + expenditure.amount, 0);
+        return (
+          total +
+          Math.max(
+            0,
+            existingApproval.scope.maximumCost.amount - spentForApproval,
+          )
+        );
+      },
+      0,
+    );
+    const spentForApproval = history.researchExpenditures
+      .filter((expenditure) => expenditure.approvalId === approval.id)
+      .reduce((total, expenditure) => total + expenditure.amount, 0);
+    if (
+      recordedSpend +
+        reservedSpend +
+        Math.max(0, approval.scope.maximumCost.amount - spentForApproval) >
+      history.intake.researchBudget.paidSpendCap.amount
+    ) {
+      invalidAuthoritativeRecord(outcomeSequence);
+    }
+  }
+  history.reservations.set(reservation.id, reservation);
+  history.reservationRecordedAt.set(
+    reservation.id,
+    outcome.recordedAt,
+  );
+  history.reservationOutcomeSequence.set(reservation.id, outcomeSequence);
+}
+
+function validateAndApplyResearchObservation(
+  { intent, outcome, outcomeSequence, history }: AuthoritativeRecordPair,
+  researchKind: "public" | "approved",
+): void {
+  const reservationId = String(outcome.reservationId);
+  if (!isRecord(outcome.source) || !isRecord(outcome.observation)) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  const source = outcome.source;
+  const observation = outcome.observation;
+  const reservation = history.reservations.get(reservationId);
+  const approval = history.researchApprovals.find(
+    (candidate) => candidate.id === reservation?.approvalId,
+  );
+  const approvedAccess =
+    approval !== undefined &&
+    ["restricted", "paid", "restricted-and-paid"].includes(
+      approval.scope.access,
+    );
+  const validationCommand = {
+    payload: {
+      campaignPath: "/authoritative-rebuild",
+      coordinatorId: intent.coordinatorId,
+      recordedAt: outcome.recordedAt,
+      reservationId,
+      source,
+      observation,
+      ...(researchKind === "approved" ? { charge: outcome.charge } : {}),
+    },
+  };
+  if (
+    history.intake === undefined ||
+    intent.reservationId !== outcome.reservationId ||
+    reservation === undefined ||
+    history.settledReservationIds.has(reservationId) ||
+    (researchKind === "approved"
+      ? validateRecordApprovedResearchObservationFields(validationCommand)
+          .length > 0 || !approvedAccess
+      : !approvedAccess &&
+        (validatePublicSource(source, outcome.recordedAt).length > 0 ||
+          validatePublicObservation(observation, source).length > 0)) ||
+    (researchKind === "public" && approvedAccess) ||
+    typeof source.accessedAt !== "string" ||
+    typeof outcome.recordedAt !== "string" ||
+    source.accessedAt < history.reservationRecordedAt.get(reservationId)! ||
+    outcome.recordedAt < history.reservationRecordedAt.get(reservationId)! ||
+    researchApprovalScopeMismatch(
+      history,
+      reservationId,
+      source as unknown as Source,
+    ) ||
+    history.sources.some((existingSource) => existingSource.id === source.id) ||
+    history.observations.some(
+      (existingObservation) => existingObservation.id === observation.id,
+    )
+  ) {
+    invalidAuthoritativeRecord(outcomeSequence);
+  }
+  if (researchKind === "approved") {
+    const charge = isRecord(outcome.charge) ? outcome.charge : {};
+    const expenditure = history.researchExpenditures.find(
+      (candidate) => candidate.id === charge.expenditureId,
+    );
+    if (
+      charge.incurred === true &&
+      (expenditure === undefined || expenditure.approvalId !== approval!.id)
+    ) {
+      invalidAuthoritativeRecord(outcomeSequence);
+    }
+  }
+  history.settledReservationIds.add(reservationId);
+  history.reservationObservationIds.set(
+    reservationId,
+    String(observation.id),
+  );
+  history.sources.push(source as unknown as Source);
+  history.observations.push(observation as unknown as Observation);
+}
+
 
 export const authoritativeOperationDescriptors = {
   "create-campaign": {
@@ -4071,7 +4463,13 @@ export const authoritativeOperationDescriptors = {
     outcome: "campaign-resumed",
     position: "subsequent",
     establishesLease: true,
-    validateAndApply() {},
+    validateAndApply({ outcome, outcomeSequence, history }) {
+      history.resumeOutcomes.push({
+        requestId: String(outcome.requestId),
+        recordedAt: String(outcome.recordedAt),
+        outcomeSequence,
+      });
+    },
   },
   "confirm-campaign-intake": {
     outcome: "campaign-intake-confirmed",
@@ -4098,124 +4496,32 @@ export const authoritativeOperationDescriptors = {
     outcome: "public-research-reserved",
     position: "subsequent",
     establishesLease: false,
-    validateAndApply({ intent, outcome, outcomeSequence, history }) {
-      if (
-        history.intake === undefined ||
-        typeof outcome.recordedAt !== "string" ||
-        outcome.recordedAt < history.intake.confirmedAt ||
-        !isRecord(outcome.reservation) ||
-        validatePublicResearchReservation(outcome.reservation, "reservation").length > 0 ||
-        intent.reservationId !== outcome.reservation.id ||
-        history.reservations.has(String(outcome.reservation.id))
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      const reservation = outcome.reservation as unknown as PublicResearchReservation;
-      const activeExtension = activeInconclusiveResearchExtension(history);
-      if (
-        activeExtension?.response.kind === "extend" &&
-        !reservationMatchesInconclusiveExtension(
-          reservation,
-          activeExtension.response,
-        )
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      const sameClassReserved = [...history.reservations.values()]
-        .filter(
-          (existing) =>
-            activeExtension === undefined ||
-            history.reservationRecordedAt.get(existing.id)! >=
-              activeExtension.respondedAt,
-        )
-        .filter((existing) =>
-          reservation.researchClass === "adversarial"
-            ? existing.researchClass === "adversarial"
-            : existing.researchClass !== "adversarial",
-        )
-        .reduce((total, existing) => total + existing.sourceUnits, 0) +
-        reservation.sourceUnits;
-      const classCap = reservation.researchClass === "adversarial"
-        ? history.intake.researchBudget.adversarialSourceReserve
-        : history.intake.researchBudget.sourceCap -
-          history.intake.researchBudget.adversarialSourceReserve;
-      if (sameClassReserved > classCap) {
-        throw new Error(
-          `authoritative record ${outcomeSequence} exceeds the Research Budget`,
-        );
-      }
-      if (
-        activeExtension === undefined &&
-        publicResearchAllocationViolation(history, reservation) !== undefined
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      if (
-        opportunityDeepeningViolation(
-          history,
-          reservation,
-          outcome.recordedAt as string,
-        ) !== undefined
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      if (
-        adversarialResearchViolation(
-          history,
-          reservation,
-          outcome.recordedAt as string,
-        ) !== undefined
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      history.reservations.set(reservation.id, reservation);
-      history.reservationRecordedAt.set(
-        reservation.id,
-        outcome.recordedAt as string,
-      );
+    validateAndApply(pair) {
+      validateAndApplyResearchReservation(pair, "public");
+    },
+  },
+  "reserve-approved-research": {
+    outcome: "approved-research-reserved",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply(pair) {
+      validateAndApplyResearchReservation(pair, "approved");
     },
   },
   "record-public-research-observation": {
     outcome: "public-research-observation-recorded",
     position: "subsequent",
     establishesLease: false,
-    validateAndApply({ intent, outcome, outcomeSequence, history }) {
-      const reservationId = String(outcome.reservationId);
-      if (!isRecord(outcome.source) || !isRecord(outcome.observation)) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      const source = outcome.source;
-      const observation = outcome.observation;
-      if (
-        history.intake === undefined ||
-        intent.reservationId !== outcome.reservationId ||
-        !history.reservations.has(reservationId) ||
-        history.settledReservationIds.has(reservationId) ||
-        validatePublicSource(source, outcome.recordedAt).length > 0 ||
-        validatePublicObservation(observation, source).length > 0 ||
-        typeof source.accessedAt !== "string" ||
-        typeof outcome.recordedAt !== "string" ||
-        source.accessedAt < history.reservationRecordedAt.get(reservationId)! ||
-        outcome.recordedAt < history.reservationRecordedAt.get(reservationId)! ||
-        publicResearchApprovalScopeMismatch(
-          history,
-          reservationId,
-          source as unknown as PublicSource,
-        ) ||
-        history.sources.some((existingSource) => existingSource.id === source.id) ||
-        history.observations.some(
-          (existingObservation) => existingObservation.id === observation.id,
-        )
-      ) {
-        invalidAuthoritativeRecord(outcomeSequence);
-      }
-      history.settledReservationIds.add(reservationId);
-      history.reservationObservationIds.set(
-        reservationId,
-        String(observation.id),
-      );
-      history.sources.push(source as unknown as PublicSource);
-      history.observations.push(observation as unknown as PublicObservation);
+    validateAndApply(pair) {
+      validateAndApplyResearchObservation(pair, "public");
+    },
+  },
+  "record-approved-research-observation": {
+    outcome: "approved-research-observation-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply(pair) {
+      validateAndApplyResearchObservation(pair, "approved");
     },
   },
   "record-evidence-reasoning": {
@@ -4726,6 +5032,71 @@ export const authoritativeOperationDescriptors = {
       });
     },
   },
+  "respond-interrupted-research": {
+    outcome: "interrupted-research-responded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const activeDecision = interruptedApprovedResearchDecision(history);
+      const response = outcome.response;
+      const command = {
+        payload: {
+          campaignPath: "/authoritative-rebuild",
+          coordinatorId: intent.coordinatorId,
+          respondedAt: outcome.recordedAt,
+          decisionId: outcome.decisionId,
+          response,
+        },
+      };
+      if (
+        activeResearchApprovalDecision(history) !== undefined ||
+        activeDecision === undefined ||
+        outcome.decisionId !== intent.pendingDecisionId ||
+        outcome.decisionId !== activeDecision.id ||
+        validateRespondInterruptedResearchFields(command).length > 0 ||
+        !isRecord(response) ||
+        JSON.stringify(
+          Array.isArray(response.reservations)
+            ? response.reservations.map((resolution) =>
+                isRecord(resolution) ? resolution.reservationId : undefined,
+              )
+            : undefined,
+        ) !==
+          JSON.stringify(
+            activeDecision.reservations.map(
+              (reservation) => reservation.reservationId,
+            ),
+          )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const responseRecord: InterruptedResearchResponse = {
+        decisionId: activeDecision.id,
+        respondedAt: String(outcome.recordedAt),
+        response:
+          response as unknown as InterruptedResearchResponse["response"],
+      };
+      for (const resolution of responseRecord.response.reservations) {
+        const reservation = history.reservations.get(resolution.reservationId)!;
+        const expenditureId = resolution.charge.incurred
+          ? resolution.charge.expenditureId
+          : undefined;
+        const expenditure = history.researchExpenditures.find(
+          (candidate) => candidate.id === expenditureId,
+        );
+        if (
+          resolution.charge.incurred &&
+          (expenditure === undefined ||
+            expenditure.approvalId !== reservation.approvalId)
+        ) {
+          invalidAuthoritativeRecord(outcomeSequence);
+        }
+        history.settledReservationIds.add(resolution.reservationId);
+        history.closedResearchReservationIds.add(resolution.reservationId);
+      }
+      history.interruptedResearchResponses.push(responseRecord);
+    },
+  },
   "record-research-expenditure": {
     outcome: "research-expenditure-recorded",
     position: "subsequent",
@@ -4866,6 +5237,9 @@ export function campaignOperationRecords(operation: CampaignOperation) {
     intent: {
       coordinatorId: operation.coordinatorId,
       leaseExpiresAt: operation.leaseExpiresAt,
+      ...(operation.commandDigest === undefined
+        ? {}
+        : { commandDigest: operation.commandDigest }),
     },
     outcome: {},
   });
@@ -4914,6 +5288,25 @@ export function publicResearchReservationRecords(
   });
 }
 
+export function approvedResearchReservationRecords(
+  campaignId: string,
+  command: ReserveApprovedResearchCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.reservedAt,
+    firstSequence,
+    operation: "reserve-approved-research",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      reservationId: command.payload.reservation.id,
+    },
+    outcome: { reservation: command.payload.reservation },
+  });
+}
+
 export function publicResearchObservationRecords(
   campaignId: string,
   command: RecordPublicResearchObservationCommand,
@@ -4933,6 +5326,30 @@ export function publicResearchObservationRecords(
       reservationId: command.payload.reservationId,
       source: command.payload.source,
       observation: command.payload.observation,
+    },
+  });
+}
+
+export function approvedResearchObservationRecords(
+  campaignId: string,
+  command: RecordApprovedResearchObservationCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-approved-research-observation",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      reservationId: command.payload.reservationId,
+    },
+    outcome: {
+      reservationId: command.payload.reservationId,
+      source: command.payload.source,
+      observation: command.payload.observation,
+      charge: command.payload.charge,
     },
   });
 }
@@ -5155,6 +5572,28 @@ export function researchApprovalResponseRecords(
   });
 }
 
+export function interruptedResearchResponseRecords(
+  campaignId: string,
+  command: RespondInterruptedResearchCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.respondedAt,
+    firstSequence,
+    operation: "respond-interrupted-research",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      pendingDecisionId: command.payload.decisionId,
+    },
+    outcome: {
+      decisionId: command.payload.decisionId,
+      response: command.payload.response,
+    },
+  });
+}
+
 export function researchExpenditureRecords(
   campaignId: string,
   approval: ResearchApproval,
@@ -5263,7 +5702,9 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     reservations: new Map(),
     reservationRecordedAt: new Map(),
     reservationObservationIds: new Map(),
+    reservationOutcomeSequence: new Map(),
     settledReservationIds: new Set(),
+    closedResearchReservationIds: new Set(),
     sources: [],
     observations: [],
     sourceLineages: [],
@@ -5292,6 +5733,8 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     researchApprovalResponses: [],
     researchApprovals: [],
     researchExpenditures: [],
+    resumeOutcomes: [],
+    interruptedResearchResponses: [],
   };
   for (let index = 0; index < records.length; index += 2) {
     const sequence = index + 1;
@@ -5305,6 +5748,9 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       record.recordId !== expectedRecordId ||
       typeof record.requestId !== "string" ||
       record.requestId.trim() === "" ||
+      (record.commandDigest !== undefined &&
+        (typeof record.commandDigest !== "string" ||
+          !/^[a-f0-9]{64}$/.test(record.commandDigest))) ||
       !isIsoInstant(record.recordedAt)
     ) {
       throw new Error(`authoritative record ${sequence} is invalid`);
@@ -5367,6 +5813,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     intake,
     reservations,
     settledReservationIds,
+    closedResearchReservationIds,
     sources,
     observations,
     sourceLineages,
@@ -5416,9 +5863,13 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.nextPermittedActions = ["reserve-public-research"];
     workView.publicResearchAvailable = true;
   }
-  for (const reservation of reservations.values()) {
+  for (const reservation of [...reservations.values()].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
     workView.completedWork.push(
-      settledReservationIds.has(reservation.id)
+      closedResearchReservationIds.has(reservation.id)
+        ? `Approved Research reservation ${reservation.id} closed without retry`
+        : settledReservationIds.has(reservation.id)
         ? `Public Research reservation ${reservation.id} settled`
         : `Public Research reservation ${reservation.id} reserved`,
     );
@@ -5980,27 +6431,30 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       };
     }
   }
-  const pendingDecision = activeResearchApprovalDecision({
+  const pendingResearchApprovalDecision = activeResearchApprovalDecision({
     researchApprovalDecisions,
     researchApprovalResponses,
   });
-  if (pendingDecision !== undefined) {
+  let pendingDecision: PendingDecision | undefined =
+    pendingResearchApprovalDecision;
+  if (pendingResearchApprovalDecision !== undefined) {
     const pendingInformation = researchApprovalInformation.filter(
-      (information) => information.decisionId === pendingDecision.id,
+      (information) =>
+        information.decisionId === pendingResearchApprovalDecision.id,
     );
     workView.pause = {
       reason: "pending-decision",
-      pendingDecisionId: pendingDecision.id,
+      pendingDecisionId: pendingResearchApprovalDecision.id,
       decisionType: "research-approval",
-      requestedAction: pendingDecision.request.action,
+      requestedAction: pendingResearchApprovalDecision.request.action,
       resumable: true,
     };
     workView.completedWork.push(
-      `Research Approval ${pendingDecision.id} requested`,
+      `Research Approval ${pendingResearchApprovalDecision.id} requested`,
     );
     if (pendingInformation.length > 0) {
       workView.completedWork.push(
-        `${pendingInformation.length} Research Approval explanation${pendingInformation.length === 1 ? "" : "s"} recorded for ${pendingDecision.id}`,
+        `${pendingInformation.length} Research Approval explanation${pendingInformation.length === 1 ? "" : "s"} recorded for ${pendingResearchApprovalDecision.id}`,
       );
     }
     workView.nextPermittedActions = [
@@ -6020,8 +6474,19 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
   }
   for (const approval of researchApprovals) {
     workView.completedWork.push(`Research Approval ${approval.id} granted`);
+    const approvedResearchCanBeReserved =
+      workView.phase !== "terminal" &&
+      ["restricted", "paid", "restricted-and-paid"].includes(
+        approval.scope.access,
+      ) &&
+      ![...reservations.values()].some(
+        (reservation) => reservation.approvalId === approval.id,
+      );
     workView.nextPermittedActions = [
       "verify-research-approval-scope-and-duration",
+      ...(approvedResearchCanBeReserved
+        ? ["reserve-approved-research"]
+        : []),
       ...workView.nextPermittedActions,
     ];
   }
@@ -6030,12 +6495,49 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       `Research Expenditure ${expenditure.id} recorded against approval ${expenditure.approvalId}`,
     );
   }
+  const interruptedResearchDecision =
+    interruptedApprovedResearchDecision(authoritativeHistory);
   if (
-    [...reservations.keys()].some(
-      (reservationId) => !settledReservationIds.has(reservationId),
-    )
+    pendingDecision === undefined &&
+    interruptedResearchDecision !== undefined
   ) {
-    workView.nextPermittedActions = ["record-public-research-observation"];
+    pendingDecision = interruptedResearchDecision;
+    workView.pause = {
+      reason: "pending-decision",
+      pendingDecisionId: pendingDecision.id,
+      decisionType: "interrupted-approved-research",
+      requestedAction: "record-completed-result-or-resolve-without-result",
+      resumable: true,
+    };
+    workView.completedWork.push(
+      `${interruptedResearchDecision.reservations.length} Approved Research reservation${interruptedResearchDecision.reservations.length === 1 ? "" : "s"} require interruption reconciliation`,
+    );
+    workView.nextPermittedActions = [
+      "record-completed-approved-research",
+      "respond-interrupted-research",
+    ];
+  }
+  const unsettledReservations = [...reservations.values()].filter(
+    (reservation) => !settledReservationIds.has(reservation.id),
+  );
+  if (unsettledReservations.length > 0) {
+    if (workView.pause?.decisionType !== "interrupted-approved-research") {
+      workView.nextPermittedActions = [
+        ...new Set(
+          unsettledReservations.map((reservation) => {
+            const approval = researchApprovals.find(
+              (candidate) => candidate.id === reservation.approvalId,
+            );
+            return approval !== undefined &&
+              ["restricted", "paid", "restricted-and-paid"].includes(
+                approval.scope.access,
+              )
+              ? "record-approved-research-observation"
+              : "record-public-research-observation";
+          }),
+        ),
+      ];
+    }
   }
   const latestReevaluation = reevaluations.at(-1);
   if (latestReevaluation !== undefined) {
@@ -6227,6 +6729,34 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       activeResearchExtension === undefined ||
       expenditure.incurredAt >= activeResearchExtension.respondedAt,
   );
+  const reservedPaidSpendAmount = budgetReservations
+    .filter(
+      (reservation) =>
+        !settledReservationIds.has(reservation.id) &&
+        reservation.approvalId !== undefined,
+    )
+    .reduce((total, reservation) => {
+      const approval = researchApprovals.find(
+        (candidate) => candidate.id === reservation.approvalId,
+      );
+      if (
+        approval === undefined ||
+        !["paid", "restricted-and-paid"].includes(approval.scope.access)
+      ) {
+        return total;
+      }
+      const recordedForApproval = budgetExpenditures
+        .filter((expenditure) => expenditure.approvalId === approval.id)
+        .reduce((subtotal, expenditure) => subtotal + expenditure.amount, 0);
+      return (
+        total +
+        Math.max(0, approval.scope.maximumCost.amount - recordedForApproval)
+      );
+    }, 0);
+  const recordedPaidSpendAmount = budgetExpenditures.reduce(
+    (total, expenditure) => total + expenditure.amount,
+    0,
+  );
   const researchBudget: ResearchBudgetView | undefined =
     intake === undefined
       ? undefined
@@ -6268,24 +6798,27 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
             budgetReservations.filter(
               (reservation) => reservation.researchClass === "adversarial",
             ).length,
-          ...(budgetExpenditures.length === 0
+          ...(budgetExpenditures.length === 0 && reservedPaidSpendAmount === 0
             ? {}
             : {
                 paidSpendCap: intake.researchBudget.paidSpendCap,
                 recordedPaidSpend: {
-                  amount: budgetExpenditures.reduce(
-                    (total, expenditure) => total + expenditure.amount,
-                    0,
-                  ),
+                  amount: recordedPaidSpendAmount,
                   currency: intake.researchBudget.paidSpendCap.currency,
                 },
+                ...(reservedPaidSpendAmount === 0
+                  ? {}
+                  : {
+                      reservedPaidSpend: {
+                        amount: reservedPaidSpendAmount,
+                        currency: intake.researchBudget.paidSpendCap.currency,
+                      },
+                    }),
                 remainingPaidSpend: {
                   amount:
                     intake.researchBudget.paidSpendCap.amount -
-                    budgetExpenditures.reduce(
-                      (total, expenditure) => total + expenditure.amount,
-                      0,
-                    ),
+                    recordedPaidSpendAmount -
+                    reservedPaidSpendAmount,
                   currency: intake.researchBudget.paidSpendCap.currency,
                 },
               }),
@@ -6457,6 +6990,7 @@ export async function loadCampaign(campaignPath: string) {
   }
   for (const report of rebuiltCampaign.authoritativeHistory
     .noQualifyingOpportunityReports) {
+    injectPersistenceFault("during-terminal-rendering");
     const reportPath = path.join(
       rebuiltCampaign.campaign.path,
       noQualifyingOpportunityArtifactPath(report),
@@ -6479,6 +7013,7 @@ export async function loadCampaign(campaignPath: string) {
     throw new Error("Opportunity Brief has no authoritative terminal record");
   }
   for (const brief of rebuiltCampaign.authoritativeHistory.opportunityBriefs) {
+    injectPersistenceFault("during-terminal-rendering");
     const briefPath = path.join(
       rebuiltCampaign.campaign.path,
       opportunityBriefArtifactPath(brief),
@@ -6503,6 +7038,7 @@ export async function loadCampaign(campaignPath: string) {
   }
   for (const report of rebuiltCampaign.authoritativeHistory
     .inconclusiveComparisonReports) {
+    injectPersistenceFault("during-terminal-rendering");
     const reportPath = path.join(
       rebuiltCampaign.campaign.path,
       inconclusiveComparisonArtifactPath(report),
@@ -6517,6 +7053,7 @@ export async function loadCampaign(campaignPath: string) {
     }
   }
   for (const brief of rebuiltCampaign.opportunityBriefs ?? []) {
+    injectPersistenceFault("during-terminal-rendering");
     const briefPath = path.join(
       rebuiltCampaign.campaign.path,
       brief.wayfinderHandoff.briefPath,
@@ -6595,10 +7132,12 @@ export async function persistDerivedCampaignState(
     path.join(campaignPath, "work-view.json"),
     rebuiltCampaign.workView,
   );
+  injectPersistenceFault("after-work-view-projection");
   await replacePrivateJson(
     path.join(campaignPath, "lease.json"),
     rebuiltCampaign.lease,
   );
+  injectPersistenceFault("after-lease-projection");
   await replacePrivateJson(
     path.join(
       campaignPath,
@@ -6607,6 +7146,7 @@ export async function persistDerivedCampaignState(
     ),
     rebuiltCampaign.checkpoint,
   );
+  injectPersistenceFault("after-checkpoint");
   if (rebuiltCampaign.intake !== undefined) {
     await replacePrivateJson(
       path.join(campaignPath, "campaign-intake.json"),
@@ -6618,6 +7158,7 @@ export async function persistDerivedCampaignState(
       path.join(campaignPath, "research-budget.json"),
       rebuiltCampaign.researchBudget,
     );
+    injectPersistenceFault("after-research-budget-projection");
     await replacePrivateJson(
       path.join(campaignPath, "evidence-ledger.json"),
       rebuiltCampaign.evidenceLedger,
@@ -6651,18 +7192,55 @@ export async function persistDerivedCampaignState(
   }
 }
 
+export type CampaignRecovery = {
+  recoveredOperations: RecoveredOperation[];
+  projectionsRegenerated: boolean;
+};
+
+export async function recoverCampaign(campaignPath: string): Promise<{
+  rebuiltCampaign: Awaited<ReturnType<typeof rebuildCampaignFromAuthority>>;
+  recovery: CampaignRecovery;
+}> {
+  const interrupted = await recoverInterruptedOperations(campaignPath);
+  const rebuiltCampaign = await rebuildCampaignFromAuthority(campaignPath);
+  let projectionsRegenerated = interrupted.some(
+    (entry) => entry.authoritativeRecordsChanged,
+  );
+  try {
+    await loadCampaign(campaignPath);
+  } catch {
+    await persistDerivedCampaignState(campaignPath, rebuiltCampaign);
+    await loadCampaign(campaignPath);
+    projectionsRegenerated = true;
+  }
+  for (const operation of interrupted) {
+    await completeOperationRecovery(operation);
+  }
+  return {
+    rebuiltCampaign,
+    recovery: {
+      recoveredOperations: interrupted.map((entry) => entry.operation),
+      projectionsRegenerated,
+    },
+  };
+}
+
 export async function appendCampaignRecordsAndPersist(
   campaignPath: string,
   records: Record<string, unknown>[],
 ) {
-  await appendFile(
-    path.join(campaignPath, "records.jsonl"),
-    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-    { encoding: "utf8", mode: 0o600 },
+  const journalPath = await stageOperationIntent(campaignPath, records);
+  injectPersistenceFault("after-operation-intent");
+  const committedOperation = await commitStagedOperation(
+    campaignPath,
+    journalPath,
   );
+  injectPersistenceFault("after-authoritative-commit");
   const updatedCampaign = await rebuildCampaignFromAuthority(campaignPath);
   await persistDerivedCampaignState(campaignPath, updatedCampaign);
-  return loadCampaign(campaignPath);
+  const campaign = await loadCampaign(campaignPath);
+  await completeOperationRecovery(committedOperation);
+  return campaign;
 }
 
 export async function hasCampaignManifest(campaignPath: string): Promise<boolean> {
