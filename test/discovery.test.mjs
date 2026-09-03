@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { publicResearchReservationCommand } from "./support/campaign-commands.mjs";
 import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
@@ -14,6 +15,29 @@ async function runKernel(kernelPath, command) {
   const result = await runProcess(process.execPath, [kernelPath], {
     input: `${JSON.stringify(command)}\n`,
   });
+  return { ...result, response: JSON.parse(result.stdout) };
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {Record<string, unknown>} command
+ * @param {string} now
+ */
+async function runKernelAt(kernelPath, command, now) {
+  const script = `
+    import { executeCommand } from ${JSON.stringify(pathToFileURL(kernelPath).href)};
+    const response = await executeCommand(${JSON.stringify(command)}, {
+      nodeVersion: process.versions.node,
+      probeWritableStorage: async () => true,
+      now: () => ${JSON.stringify(now)}
+    });
+    process.stdout.write(JSON.stringify(response));
+    if (!response.ok) process.exitCode = 3;
+  `;
+  const result = await runProcess(
+    process.execPath,
+    ["--input-type=module", "--eval", script],
+  );
   return { ...result, response: JSON.parse(result.stdout) };
 }
 
@@ -1614,6 +1638,37 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
     /must use the exact confirmed Hard Constraint text/,
   );
 
+  const omittedKnownGap = structuredClone(command);
+  omittedKnownGap.requestId = "record-terminal-gate-omitting-known-gap";
+  const omittedGapMarket = omittedKnownGap.payload.assessments[1].marketSafety;
+  omittedGapMarket.classification = "ordinary";
+  omittedGapMarket.intendedActivity =
+    "Help procurement teams review tender requirements";
+  omittedGapMarket.excludedCategory = null;
+  omittedGapMarket.directlyServesExcludedActivity = false;
+  omittedGapMarket.gate.state = "passed";
+  omittedGapMarket.gate.decision.outcome = "passed";
+  omittedGapMarket.gate.decision.supportingEvidenceEntryIds = [
+    "observation-procurement-escalation",
+  ];
+  omittedGapMarket.gate.decision.evidenceGapIds = [];
+  omittedGapMarket.gate.decision.rationale =
+    "The gate attempts to pass without recording its known material Evidence Gap.";
+  omittedGapMarket.gate.decision.confidence = {
+    level: "medium",
+    limitingFactors: ["The intended activity evidence is bounded."],
+  };
+  const omittedGapResult = await runKernel(kernelPath, omittedKnownGap);
+  assert.equal(omittedGapResult.code, 3);
+  assert.equal(
+    omittedGapResult.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(
+    omittedGapResult.response.error.message,
+    /must record every open Evidence Gap that affects it/,
+  );
+
   const recorded = await runKernel(kernelPath, command);
 
   assert.equal(
@@ -1989,30 +2044,18 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
     "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
   );
 
-  const afterExpiry = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "record-evidence-after-elevated-approval-expiry",
-    command: "recordEvidenceReasoning",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      recordedAt: "2100-09-01T10:00:00.000Z",
-      entries: [
-        {
-          type: "evidence-gap",
-          id: "gap-after-elevated-approval-expiry",
-          question: "Is renewed Elevated-Risk Research Approval available?",
-          affectedDecisionIds: [scope.id],
-          resolutionCriteria:
-            "A new exact Opportunity-specific approval is explicitly granted.",
-          resolutionMethod:
-            "Request renewed approval only if the developer chooses to continue.",
-          status: "open",
-          resolution: null,
-        },
-      ],
+  const afterExpiry = await runKernelAt(
+    kernelPath,
+    {
+      envelopeVersion: "0.1.0",
+      requestId: "inspect-after-elevated-approval-expiry",
+      command: "inspectCampaign",
+      payload: {
+        campaignPath,
+      },
     },
-  });
+    "2100-09-01T10:00:00.000Z",
+  );
   assert.equal(afterExpiry.code, 0, afterExpiry.stderr);
   const expiredOpportunity = afterExpiry.response.result.workView.opportunities[0];
   assert.equal(expiredOpportunity.disposition.status, "unresolved");

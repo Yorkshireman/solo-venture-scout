@@ -3763,11 +3763,11 @@ function opportunityDeepeningViolation(
 }
 
 function hasElevatedRiskResearchApproval(
-  history: AuthoritativeHistoryRebuild,
+  approvals: ResearchApproval[],
   opportunityId: string,
   availableAt: string,
 ): boolean {
-  return history.researchApprovals.some(
+  return approvals.some(
     (approval) =>
       approval.scope.access === "elevated-risk" &&
       approval.scope.opportunityId === opportunityId &&
@@ -3776,6 +3776,80 @@ function hasElevatedRiskResearchApproval(
       approval.scope.duration.startsAt <= availableAt &&
       approval.scope.duration.expiresAt >= availableAt,
   );
+}
+
+type OpportunityGateView = NonNullable<
+  NonNullable<WorkView["opportunities"]>[number]["exclusionGates"]
+>[number];
+
+function opportunityDispositionFor(
+  gates: OpportunityGateView[],
+  elevatedRiskApprovalUnavailable: boolean,
+) {
+  const failedGates = gates.filter((gate) => gate.state === "failed");
+  const unresolvedGates = gates.filter((gate) => gate.state === "unresolved");
+  const disposition =
+    failedGates.length > 0
+      ? {
+          status: "rejected" as const,
+          decisionIds: failedGates.map((gate) => gate.decisionId),
+        }
+      : unresolvedGates.length > 0 || elevatedRiskApprovalUnavailable
+        ? {
+            status: "unresolved" as const,
+            decisionIds:
+              unresolvedGates.length > 0
+                ? unresolvedGates.map((gate) => gate.decisionId)
+                : [
+                    gates.find((gate) => gate.kind === "market-safety")!
+                      .decisionId,
+                  ],
+          }
+        : {
+            status: "active" as const,
+            decisionIds: gates.map((gate) => gate.decisionId),
+          };
+  return {
+    disposition,
+    eligibility:
+      disposition.status === "active"
+        ? ("pending-qualification" as const)
+        : ("ineligible" as const),
+  };
+}
+
+function workViewAtInspectionTime(
+  workView: WorkView,
+  approvals: ResearchApproval[],
+  inspectedAt: string,
+): WorkView {
+  let renewalAvailable = false;
+  const opportunities = workView.opportunities?.map((opportunity) => {
+    if (
+      opportunity.marketSafety === undefined ||
+      opportunity.exclusionGates === undefined
+    ) {
+      return opportunity;
+    }
+    const elevatedRiskApprovalUnavailable =
+      opportunity.marketSafety.classification === "elevated-risk" &&
+      !hasElevatedRiskResearchApproval(approvals, opportunity.id, inspectedAt);
+    renewalAvailable ||= elevatedRiskApprovalUnavailable;
+    return {
+      ...opportunity,
+      ...opportunityDispositionFor(
+        opportunity.exclusionGates,
+        elevatedRiskApprovalUnavailable,
+      ),
+    };
+  });
+  const nextPermittedActions = workView.nextPermittedActions.filter(
+    (action) => action !== "request-elevated-risk-research-approval",
+  );
+  if (renewalAvailable) {
+    nextPermittedActions.push("request-elevated-risk-research-approval");
+  }
+  return { ...workView, nextPermittedActions, opportunities };
 }
 
 function publicResearchApprovalScopeMismatch(
@@ -4623,6 +4697,20 @@ function opportunityExclusionEvaluationViolation(
       );
       if (unavailableGapId !== undefined) {
         return `Campaign Decision ${decision.id} links unavailable open Evidence Gap ${unavailableGapId}`;
+      }
+      const affectedOpenGapIds = history.evidenceGaps
+        .filter(
+          (gap) =>
+            gap.status === "open" && gap.affectedDecisionIds.includes(decision.id),
+        )
+        .map((gap) => gap.id);
+      if (
+        affectedOpenGapIds.length !== decision.evidenceGapIds.length ||
+        affectedOpenGapIds.some(
+          (gapId) => !decision.evidenceGapIds.includes(gapId),
+        )
+      ) {
+        return `Campaign Decision ${decision.id} must record every open Evidence Gap that affects it`;
       }
       const unavailableContradictionId = decision.contradictionIds.find(
         (contradictionId) =>
@@ -5938,7 +6026,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         (assessment) =>
           assessment.marketSafety.classification === "elevated-risk" &&
           !hasElevatedRiskResearchApproval(
-            authoritativeHistory,
+            researchApprovals,
             assessment.opportunityId,
             workViewAsOf,
           ),
@@ -5968,33 +6056,17 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
           decisionId: constraint.gate.decision.id,
         })),
       ];
-      const failedGates = gates.filter((gate) => gate.state === "failed");
-      const unresolvedGates = gates.filter((gate) => gate.state === "unresolved");
       const elevatedRiskApprovalUnavailable =
         assessment.marketSafety.classification === "elevated-risk" &&
         !hasElevatedRiskResearchApproval(
-          authoritativeHistory,
+          researchApprovals,
           assessment.opportunityId,
           workViewAsOf,
         );
-      const disposition =
-        failedGates.length > 0
-          ? {
-              status: "rejected" as const,
-              decisionIds: failedGates.map((gate) => gate.decisionId),
-            }
-          : unresolvedGates.length > 0 || elevatedRiskApprovalUnavailable
-            ? {
-                status: "unresolved" as const,
-                decisionIds:
-                  unresolvedGates.length > 0
-                    ? unresolvedGates.map((gate) => gate.decisionId)
-                    : [assessment.marketSafety.gate.decision.id],
-              }
-            : {
-                status: "active" as const,
-                decisionIds: gates.map((gate) => gate.decisionId),
-              };
+      const disposition = opportunityDispositionFor(
+        gates,
+        elevatedRiskApprovalUnavailable,
+      );
       return {
         ...opportunity,
         marketSafety: {
@@ -6005,11 +6077,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
             assessment.marketSafety.directlyServesExcludedActivity,
         },
         exclusionGates: gates,
-        disposition,
-        eligibility:
-          disposition.status === "active"
-            ? ("pending-qualification" as const)
-            : ("ineligible" as const),
+        ...disposition,
         terminalRole: null,
       };
     });
@@ -6407,7 +6475,10 @@ async function locateCampaign(locator: CampaignLocator) {
   return { campaignPath: matches[0]!, locatedBy: "manifestDiscovery" as const };
 }
 
-async function inspectCampaign(command: InspectCampaignCommand) {
+async function inspectCampaign(
+  command: InspectCampaignCommand,
+  currentTime: string,
+) {
   try {
     const { campaignPath, locatedBy } = await locateCampaign(command.payload);
     const campaign = await loadCampaign(campaignPath);
@@ -6416,7 +6487,15 @@ async function inspectCampaign(command: InspectCampaignCommand) {
       requestId: command.requestId,
       command: command.command,
       ok: true as const,
-      result: { locatedBy, ...campaign },
+      result: {
+        locatedBy,
+        ...campaign,
+        workView: workViewAtInspectionTime(
+          campaign.workView,
+          campaign.researchApprovals ?? [],
+          currentTime,
+        ),
+      },
     };
   } catch (error) {
     return {
@@ -8482,7 +8561,10 @@ export async function executeCommand(
         },
       };
     }
-    return inspectCampaign(command as unknown as InspectCampaignCommand);
+    return inspectCampaign(
+      command as unknown as InspectCampaignCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
   }
 
   if (command.command === "inspectEvidence") {
