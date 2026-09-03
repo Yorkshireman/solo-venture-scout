@@ -1507,6 +1507,90 @@ or write outcome, preserve the checkpoint and request a precise human decision.
 Descriptive fields containing credential or payment-detail markers, including card
 numbers, are rejected; never retry payment or restricted access automatically.
 
+## Re-evaluate a challenge or revision
+
+Use one explicit append-only operation for a developer challenge, Campaign Intake
+revision, source correction or redaction, Source Freshness change, Contradiction, new
+evidence, or a refresh found during Resume:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "reevaluate-stable-request-id",
+  "command": "reevaluateCampaign",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "reevaluatedAt": "2026-08-31T12:00:00.000Z",
+    "operation": {
+      "id": "stable-reevaluation-id",
+      "kind": "developer-challenge",
+      "reason": "The confirmed capacity changed after meaningful work.",
+      "reasoningEntries": [],
+      "intakeRevision": {
+        "reason": "Reduce the confirmed weekly capacity.",
+        "intake": "the complete explicitly confirmed next Campaign Intake version"
+      },
+      "decision": {
+        "type": "campaign-decision",
+        "id": "stable-reevaluation-decision-id",
+        "kind": "campaign-re-evaluation",
+        "outcome": "resume",
+        "intakeVersion": 2,
+        "applicableRule": "Re-evaluate only decisions dependent on the changed capacity.",
+        "triggerEntryIds": [],
+        "affectedOpportunityIds": ["stable-affected-opportunity-id"],
+        "supersededDecisionIds": ["stable-dependent-decision-id"],
+        "rationale": "The prior feasibility decision used the superseded capacity.",
+        "confidence": {
+          "level": "medium",
+          "limitingFactors": ["The revised feasibility still needs evidence."]
+        },
+        "limitations": ["Unrelated decisions remain current."],
+        "decidedAt": "2026-08-31T12:00:00.000Z"
+      }
+    }
+  }
+}
+```
+
+`reasoningEntries` uses the same strict Evidence Ledger shapes as
+`recordEvidenceReasoning`; this lets a correction and its re-evaluation commit as one
+operation. A Correction action may be `reaffirm`, `supersede`, or `retract` and always
+uses stable target and replacement links. The kernel rejects an unrelated
+`supersededDecisionIds` entry, derives superseded terminal artifact identities, keeps
+the Campaign identity unchanged, and rebuilds only affected current views.
+
+To record replacement Exclusion or Qualification Gate decisions, use the existing
+gate command with `payload.reevaluationId` set to the stable re-evaluation identity.
+Submit only assessments for affected Opportunities. Each changed gate receives a new
+stable identity and Campaign Decision; unchanged gates may retain their prior decision
+and time. The current evaluation snapshot carries forward every unsubmitted
+Opportunity unchanged, and the kernel rejects a replacement not authorized by that
+re-evaluation.
+
+For time-sensitive evidence, Source Freshness may add an ISO UTC `refreshAfter` (or
+`null` when no scheduled review is justified):
+
+```json
+{
+  "type": "source-freshness",
+  "id": "stable-freshness-id",
+  "sourceId": "stable-source-id",
+  "observationId": "stable-observation-id",
+  "intendedUse": "Assess the current buyer process.",
+  "assessment": "medium",
+  "timeSensitivity": "The process may change monthly.",
+  "rationale": "Review after the stated monthly boundary.",
+  "limitations": ["A later change could alter the decision."],
+  "refreshAfter": "2026-09-30T00:00:00.000Z"
+}
+```
+
+Resume returns `workView.evidenceRefresh` only when the boundary has passed and the
+assessment is linked to an active Campaign Decision. Refresh exactly those listed
+freshness, Observation, and decision identities; do not repeat unrelated research.
+
 ## Resume
 
 ```json

@@ -53,6 +53,9 @@ import type {
   ConcludeInconclusiveComparisonCommand,
   RespondInconclusiveComparisonCommand,
   InconclusiveComparisonResponseRecord,
+  ReevaluateCampaignCommand,
+  CampaignReevaluation,
+  CampaignIntakeRevision,
   DeveloperOpportunitySelection,
   OpportunityFormation,
   RecordOpportunityFormationCommand,
@@ -108,6 +111,7 @@ import {
   validateConcludeLeadingOpportunityFields,
   validateConcludeInconclusiveComparisonFields,
   validateRespondInconclusiveComparisonFields,
+  validateReevaluateCampaignFields,
   validateRecordOpportunityFormationFields,
   validateResearchApprovalRequest,
 } from "./validation.js";
@@ -279,6 +283,7 @@ export type AuthoritativeHistoryRebuild = {
   inconclusiveComparisonReports: InconclusiveComparisonReport[];
   inconclusiveComparisonResponses: InconclusiveComparisonResponseRecord[];
   developerSelectedOpportunityBriefs: OpportunityBrief[];
+  reevaluations: CampaignReevaluation[];
   campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
@@ -939,7 +944,9 @@ export type ReasoningState = Omit<EvidenceLedger, "campaignId" | "campaignDecisi
 
 export function invalidatedEvidenceIds(state: ReasoningState): Set<string> {
   const invalidatedIds = new Set(
-    state.corrections.map((correction) => correction.targetEntryId),
+    state.corrections
+      .filter((correction) => correction.action !== "reaffirm")
+      .map((correction) => correction.targetEntryId),
   );
   let foundDependentInference = true;
   while (foundDependentInference) {
@@ -1008,7 +1015,9 @@ export function applyReasoningEntries(
     ),
   );
   const correctedEntryIds = new Set(
-    state.corrections.map((correction) => correction.targetEntryId),
+    state.corrections
+      .filter((correction) => correction.action !== "reaffirm")
+      .map((correction) => correction.targetEntryId),
   );
   const availableEvidenceIds = new Set<string>();
   const refreshAvailableEvidence = () => {
@@ -1106,7 +1115,9 @@ export function applyReasoningEntries(
           return entry.replacementEntryId ?? "missing replacement";
         }
         state.corrections.push(entry);
-        correctedEntryIds.add(entry.targetEntryId);
+        if (entry.action !== "reaffirm") {
+          correctedEntryIds.add(entry.targetEntryId);
+        }
         refreshAvailableEvidence();
         break;
     }
@@ -1484,6 +1495,104 @@ export function applyOpportunityFormation(
   return undefined;
 }
 
+function mergedReevaluatedExclusionEvaluation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityExclusionEvaluation,
+  reevaluationId?: string,
+): OpportunityExclusionEvaluation | string {
+  const previous = history.opportunityExclusionEvaluations.at(-1);
+  if (previous === undefined) {
+    return reevaluationId === undefined
+      ? evaluation
+      : `Campaign Re-evaluation ${reevaluationId} has no prior Exclusion Gates`;
+  }
+  const reevaluation = history.reevaluations.at(-1);
+  const invalidatedIds = invalidatedCampaignDecisionIds(history);
+  const confirmedHardConstraintIds = new Set(
+    history.intake!.statements.flatMap((statement) =>
+      statement.classification === "hard-constraint" ? [statement.id] : [],
+    ),
+  );
+  for (const assessment of evaluation.assessments) {
+    const previousAssessment = previous.assessments.find(
+      (candidate) => candidate.opportunityId === assessment.opportunityId,
+    );
+    const previousDecisionIds =
+      previousAssessment === undefined
+        ? []
+        : [
+            previousAssessment.marketSafety.gate.decision.id,
+            ...previousAssessment.hardConstraints.map(
+              ({ gate }) => gate.decision.id,
+            ),
+          ];
+    const previousHardConstraintIds = new Set(
+      previousAssessment?.hardConstraints.map(
+        ({ hardConstraintId }) => hardConstraintId,
+      ) ?? [],
+    );
+    const addsConfirmedHardConstraint = assessment.hardConstraints.some(
+      ({ hardConstraintId }) =>
+        confirmedHardConstraintIds.has(hardConstraintId) &&
+        !previousHardConstraintIds.has(hardConstraintId),
+    );
+    if (
+      reevaluation?.decision.outcome !== "resume" ||
+      reevaluation.id !== reevaluationId ||
+      previousAssessment === undefined ||
+      !reevaluation.decision.affectedOpportunityIds.includes(
+        assessment.opportunityId,
+      ) ||
+      !previousDecisionIds.some((id) => invalidatedIds.has(id)) &&
+      !addsConfirmedHardConstraint
+    ) {
+      return `Opportunity ${assessment.opportunityId} has no superseded Exclusion Gate to re-evaluate`;
+    }
+    const gatePairs: Array<
+      [
+        ReturnType<typeof exclusionGatesFor>[number],
+        ReturnType<typeof exclusionGatesFor>[number] | undefined,
+      ]
+    > = [[previousAssessment.marketSafety.gate, assessment.marketSafety.gate]];
+    for (const { hardConstraintId, gate } of previousAssessment.hardConstraints) {
+      gatePairs.push([
+        gate,
+        assessment.hardConstraints.find(
+          (candidate) => candidate.hardConstraintId === hardConstraintId,
+        )?.gate,
+      ]);
+    }
+    for (const [previousGate, replacementGate] of gatePairs) {
+      if (replacementGate === undefined) {
+        if (invalidatedIds.has(previousGate.decision.id)) {
+          continue;
+        }
+        return `Opportunity ${assessment.opportunityId} must retain every unaffected Exclusion Gate`;
+      }
+      const invalidated = invalidatedIds.has(previousGate.decision.id);
+      if (
+        (invalidated &&
+          replacementGate.decision.id === previousGate.decision.id) ||
+        (!invalidated &&
+          JSON.stringify(replacementGate) !== JSON.stringify(previousGate))
+      ) {
+        return `Opportunity ${assessment.opportunityId} must replace exactly its superseded Exclusion Gates`;
+      }
+    }
+  }
+  const replacements = new Map(
+    evaluation.assessments.map((assessment) => [
+      assessment.opportunityId,
+      assessment,
+    ]),
+  );
+  return {
+    assessments: previous.assessments.map(
+      (assessment) => replacements.get(assessment.opportunityId) ?? assessment,
+    ),
+  };
+}
+
 export function formedOpportunities(history: AuthoritativeHistoryRebuild) {
   return history.opportunityFormations.flatMap((formation) =>
     formation.assessments.flatMap((assessment) => {
@@ -1515,7 +1624,13 @@ export function breadthGateViolation(
   if (history.intake === undefined || history.opportunityFormations.length === 0) {
     return "Breadth Gate requires recorded Opportunity formation";
   }
-  if (history.breadthGates.length > 0) {
+  const previousBreadthGate = history.breadthGates.at(-1);
+  if (
+    previousBreadthGate !== undefined &&
+    !invalidatedCampaignDecisionIds(history).has(
+      previousBreadthGate.decision.id,
+    )
+  ) {
     return "Breadth Gate has already passed";
   }
   if (history.reservations.size !== history.settledReservationIds.size) {
@@ -1620,13 +1735,21 @@ export function applyBreadthGate(
 export function opportunityExclusionEvaluationViolation(
   history: AuthoritativeHistoryRebuild,
   evaluation: OpportunityExclusionEvaluation,
+  recordedAt?: string,
+  reevaluationId?: string,
 ): string | undefined {
   if (history.intake === undefined || history.breadthGates.length === 0) {
     return "Opportunity Exclusion Gates require a passed Breadth Gate";
   }
-  if (history.opportunityExclusionEvaluations.length > 0) {
-    return "Opportunity Exclusion Gates have already been recorded for the current Campaign Intake";
+  const mergedEvaluation = mergedReevaluatedExclusionEvaluation(
+    history,
+    evaluation,
+    reevaluationId,
+  );
+  if (typeof mergedEvaluation === "string") {
+    return mergedEvaluation;
   }
+  evaluation = mergedEvaluation;
   const opportunities = formedOpportunities(history);
   const opportunityIds = new Set(opportunities.map((opportunity) => opportunity.id));
   const assessedOpportunityIds = evaluation.assessments.map(
@@ -1690,7 +1813,17 @@ export function opportunityExclusionEvaluationViolation(
       }
       gateIds.add(gate.id);
       if (decisionIds.has(decision.id)) {
-        return `Campaign Decision identity ${decision.id} is already present`;
+        const existingGate = history.opportunityExclusionEvaluations
+          .flatMap((candidate) => candidate.assessments)
+          .flatMap((candidate) => exclusionGatesFor(candidate))
+          .find((candidate) => candidate.decision.id === decision.id);
+        if (JSON.stringify(existingGate) !== JSON.stringify(gate)) {
+          return `Campaign Decision identity ${decision.id} is already present`;
+        }
+        continue;
+      }
+      if (recordedAt !== undefined && decision.decidedAt !== recordedAt) {
+        return `new Campaign Decision ${decision.id} must be decided at the operation time`;
       }
       decisionIds.add(decision.id);
       if (decision.intakeVersion !== history.intake.version) {
@@ -1790,18 +1923,41 @@ export function opportunityExclusionEvaluationViolation(
 export function applyOpportunityExclusionEvaluation(
   history: AuthoritativeHistoryRebuild,
   evaluation: OpportunityExclusionEvaluation,
+  recordedAt?: string,
+  reevaluationId?: string,
 ): string | undefined {
-  const violation = opportunityExclusionEvaluationViolation(history, evaluation);
+  const violation = opportunityExclusionEvaluationViolation(
+    history,
+    evaluation,
+    recordedAt,
+    reevaluationId,
+  );
   if (violation !== undefined) {
     return violation;
   }
-  for (const assessment of evaluation.assessments) {
-    history.campaignDecisions.push(
-      assessment.marketSafety.gate.decision,
-      ...assessment.hardConstraints.map((constraint) => constraint.gate.decision),
-    );
+  const mergedEvaluation = mergedReevaluatedExclusionEvaluation(
+    history,
+    evaluation,
+    reevaluationId,
+  );
+  if (typeof mergedEvaluation === "string") {
+    return mergedEvaluation;
   }
-  history.opportunityExclusionEvaluations.push(evaluation);
+  const existingDecisionIds = new Set(
+    history.campaignDecisions.map((decision) => decision.id),
+  );
+  for (const assessment of evaluation.assessments) {
+    for (const decision of [
+      assessment.marketSafety.gate.decision,
+      ...assessment.hardConstraints.map(({ gate }) => gate.decision),
+    ]) {
+      if (!existingDecisionIds.has(decision.id)) {
+        history.campaignDecisions.push(decision);
+        existingDecisionIds.add(decision.id);
+      }
+    }
+  }
+  history.opportunityExclusionEvaluations.push(mergedEvaluation);
   return undefined;
 }
 
@@ -1962,9 +2118,73 @@ export function qualificationEvidenceViolation(
   return undefined;
 }
 
+function mergedReevaluatedQualificationEvaluation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityQualificationEvaluation,
+  reevaluationId?: string,
+): OpportunityQualificationEvaluation | string {
+  const previous = history.opportunityQualificationEvaluations.at(-1);
+  if (previous === undefined) {
+    return reevaluationId === undefined
+      ? evaluation
+      : `Campaign Re-evaluation ${reevaluationId} has no prior Qualification Gates`;
+  }
+  const reevaluation = history.reevaluations.at(-1);
+  const invalidatedIds = invalidatedCampaignDecisionIds(history);
+  for (const assessment of evaluation.assessments) {
+    const previousAssessment = previous.assessments.find(
+      (candidate) => candidate.opportunityId === assessment.opportunityId,
+    );
+    if (
+      reevaluation?.decision.outcome !== "resume" ||
+      reevaluation.id !== reevaluationId ||
+      !reevaluation.decision.affectedOpportunityIds.includes(
+        assessment.opportunityId,
+      ) ||
+      previousAssessment === undefined ||
+      !previousAssessment.gates.some((gate) =>
+        invalidatedIds.has(gate.decision.id),
+      )
+    ) {
+      return `Opportunity ${assessment.opportunityId} has no superseded Qualification Gate to re-evaluate`;
+    }
+    for (const previousGate of previousAssessment.gates) {
+      const replacementGate = assessment.gates.find(
+        (candidate) => candidate.kind === previousGate.kind,
+      );
+      if (replacementGate === undefined) {
+        return `Opportunity ${assessment.opportunityId} must retain every unaffected Qualification Gate`;
+      }
+      const invalidated = invalidatedIds.has(previousGate.decision.id);
+      if (
+        (invalidated &&
+          replacementGate.decision.id === previousGate.decision.id) ||
+        (!invalidated &&
+          JSON.stringify(replacementGate) !== JSON.stringify(previousGate))
+      ) {
+        return `Opportunity ${assessment.opportunityId} must replace exactly its superseded Qualification Gates`;
+      }
+    }
+  }
+  const replacements = new Map(
+    evaluation.assessments.map((assessment) => [
+      assessment.opportunityId,
+      assessment,
+    ]),
+  );
+  return {
+    ...evaluation,
+    assessments: previous.assessments.map(
+      (assessment) => replacements.get(assessment.opportunityId) ?? assessment,
+    ),
+  };
+}
+
 export function opportunityQualificationEvaluationViolation(
   history: AuthoritativeHistoryRebuild,
   evaluation: OpportunityQualificationEvaluation,
+  recordedAt?: string,
+  reevaluationId?: string,
 ): string | undefined {
   if (
     history.intake === undefined ||
@@ -1975,6 +2195,15 @@ export function opportunityQualificationEvaluationViolation(
   if (history.reservations.size !== history.settledReservationIds.size) {
     return "Qualification Gates require every reserved Source examination to be settled";
   }
+  const mergedEvaluation = mergedReevaluatedQualificationEvaluation(
+    history,
+    evaluation,
+    reevaluationId,
+  );
+  if (typeof mergedEvaluation === "string") {
+    return mergedEvaluation;
+  }
+  evaluation = mergedEvaluation;
   const exclusionEvaluation = history.opportunityExclusionEvaluations.at(-1)!;
   const survivingOpportunityIds = new Set(
     exclusionEvaluation.assessments
@@ -2032,7 +2261,17 @@ export function opportunityQualificationEvaluationViolation(
       }
       gateIds.add(gate.id);
       if (decisionIds.has(decision.id)) {
-        return `Campaign Decision identity ${decision.id} is already present`;
+        const existingGate = history.opportunityQualificationEvaluations
+          .flatMap((candidate) => candidate.assessments)
+          .flatMap((candidate) => candidate.gates)
+          .find((candidate) => candidate.decision.id === decision.id);
+        if (JSON.stringify(existingGate) !== JSON.stringify(gate)) {
+          return `Campaign Decision identity ${decision.id} is already present`;
+        }
+        continue;
+      }
+      if (recordedAt !== undefined && decision.decidedAt !== recordedAt) {
+        return `new Campaign Decision ${decision.id} must be decided at the operation time`;
       }
       decisionIds.add(decision.id);
       if (decision.intakeVersion !== history.intake.version) {
@@ -2240,21 +2479,39 @@ export function opportunityQualificationEvaluationViolation(
 export function applyOpportunityQualificationEvaluation(
   history: AuthoritativeHistoryRebuild,
   evaluation: OpportunityQualificationEvaluation,
+  recordedAt?: string,
+  reevaluationId?: string,
 ): string | undefined {
   const violation = opportunityQualificationEvaluationViolation(
     history,
     evaluation,
+    recordedAt,
+    reevaluationId,
   );
   if (violation !== undefined) {
     return violation;
   }
+  const mergedEvaluation = mergedReevaluatedQualificationEvaluation(
+    history,
+    evaluation,
+    reevaluationId,
+  );
+  if (typeof mergedEvaluation === "string") {
+    return mergedEvaluation;
+  }
+  const existingDecisionIds = new Set(
+    history.campaignDecisions.map((decision) => decision.id),
+  );
   for (const assessment of evaluation.assessments) {
-    history.campaignDecisions.push(
-      ...assessment.gates.map((gate) => gate.decision),
-    );
+    for (const decision of assessment.gates.map((gate) => gate.decision)) {
+      if (!existingDecisionIds.has(decision.id)) {
+        history.campaignDecisions.push(decision);
+        existingDecisionIds.add(decision.id);
+      }
+    }
   }
   history.campaignDecisions.push(evaluation.researchDecision);
-  history.opportunityQualificationEvaluations.push(evaluation);
+  history.opportunityQualificationEvaluations.push(mergedEvaluation);
   return undefined;
 }
 
@@ -2451,6 +2708,7 @@ export function buildNoQualifyingOpportunityReport(
     campaignId: history.campaignId,
     concludedAt,
     intakeVersion: history.intake!.version,
+    supersedes: latestSupersededArtifactId(history),
     outcome: "no-qualifying-opportunity",
     summary: `No Opportunity became eligible: ${rejectedOpportunities.length} rejected and ${unresolvedOpportunities.length} unresolved. This is a valid campaign outcome, not an error.`,
     rejectedOpportunities,
@@ -2495,11 +2753,11 @@ export function noQualifyingOpportunityViolation(
   ) {
     return "No Qualifying Opportunity requires completed Opportunity gates";
   }
-  if (
-    history.noQualifyingOpportunityReports.length > 0 ||
-    history.opportunityBriefs.length > 0
-  ) {
+  if (hasActiveTerminalOutcome(history)) {
     return "the Scouting Campaign already has a terminal report";
+  }
+  if (invalidatedTerminalPrerequisiteDecisionId(history) !== undefined) {
+    return "No Qualifying Opportunity requires new Campaign Decisions for re-evaluated gates";
   }
   if (history.reservations.size !== history.settledReservationIds.size) {
     return "No Qualifying Opportunity requires every reserved Source examination to be settled";
@@ -2620,6 +2878,10 @@ const leadingOpportunityModule = createLeadingOpportunityModule({
   noQualifyingOpportunityDisposition,
   supportingObservationIds,
   researchBudgetViewForHistory,
+  hasActiveTerminalOutcome,
+  latestSupersededArtifactId,
+  invalidatedTerminalPrerequisiteDecisionId,
+  opportunityBriefArtifactPath,
 });
 
 export const leadingOpportunityViolation =
@@ -2633,6 +2895,7 @@ const inconclusiveComparisonModule = createInconclusiveComparisonModule({
   availableAffirmativeEvidenceIds,
   unresolvedOpportunityIds: leadingOpportunityModule.unresolvedOpportunityIds,
   buildOpportunityBrief: leadingOpportunityModule.buildOpportunityBrief,
+  latestSupersededArtifactId,
 });
 
 export const inconclusiveComparisonViolation =
@@ -2926,6 +3189,771 @@ export function applyInconclusiveComparisonResponse(
   return undefined;
 }
 
+export function terminalArtifactIds(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    | "noQualifyingOpportunityReports"
+    | "opportunityBriefs"
+    | "inconclusiveComparisonReports"
+    | "developerSelectedOpportunityBriefs"
+  >,
+): string[] {
+  return terminalArtifacts(history).map((artifact) => artifact.id);
+}
+
+function terminalArtifacts(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    | "noQualifyingOpportunityReports"
+    | "opportunityBriefs"
+    | "inconclusiveComparisonReports"
+    | "developerSelectedOpportunityBriefs"
+  >,
+) {
+  return [
+    ...history.noQualifyingOpportunityReports,
+    ...history.opportunityBriefs,
+    ...history.inconclusiveComparisonReports,
+    ...history.developerSelectedOpportunityBriefs,
+  ];
+}
+
+export function activeTerminalArtifactIds(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    | "noQualifyingOpportunityReports"
+    | "opportunityBriefs"
+    | "inconclusiveComparisonReports"
+    | "developerSelectedOpportunityBriefs"
+    | "reevaluations"
+  >,
+): string[] {
+  const supersededIds = new Set(
+    [
+      ...history.reevaluations.flatMap((entry) => entry.supersededArtifactIds),
+      ...history.noQualifyingOpportunityReports.flatMap((report) =>
+        report.supersedes === null ? [] : [report.supersedes],
+      ),
+      ...history.opportunityBriefs.flatMap((brief) =>
+        brief.supersedes === null ? [] : [brief.supersedes],
+      ),
+      ...history.inconclusiveComparisonReports.flatMap((report) =>
+        report.supersedes === null ? [] : [report.supersedes],
+      ),
+    ],
+  );
+  return terminalArtifactIds(history).filter((id) => !supersededIds.has(id));
+}
+
+export function invalidatedCampaignDecisionIds(
+  history: Pick<AuthoritativeHistoryRebuild, "reevaluations">,
+): Set<string> {
+  return new Set(
+    history.reevaluations.flatMap((entry) => entry.invalidatedDecisionIds),
+  );
+}
+
+export function invalidatedTerminalPrerequisiteDecisionId(
+  history: AuthoritativeHistoryRebuild,
+): string | undefined {
+  const latestExclusion = history.opportunityExclusionEvaluations.at(-1)!;
+  const latestQualification =
+    history.opportunityQualificationEvaluations.at(-1)!;
+  const prerequisiteDecisionIds = [
+    history.breadthGates.at(-1)!.decision.id,
+    ...latestExclusion.assessments.flatMap((assessment) => [
+      assessment.marketSafety.gate.decision.id,
+      ...assessment.hardConstraints.map(({ gate }) => gate.decision.id),
+    ]),
+    latestQualification.researchDecision.id,
+    ...latestQualification.assessments.flatMap((assessment) =>
+      assessment.gates.map((gate) => gate.decision.id),
+    ),
+  ];
+  const invalidatedIds = invalidatedCampaignDecisionIds(history);
+  return prerequisiteDecisionIds.find((id) => invalidatedIds.has(id));
+}
+
+export function hasActiveTerminalOutcome(
+  history: AuthoritativeHistoryRebuild,
+): boolean {
+  const activeIds = new Set(activeTerminalArtifactIds(history));
+  const latestReevaluation = history.reevaluations.at(-1);
+  if (
+    latestReevaluation?.decision.outcome === "resume" &&
+    latestReevaluation.supersededArtifactIds.length > 0
+  ) {
+    const replacementTerminalExists = terminalArtifacts(history).some(
+      (artifact) =>
+        activeIds.has(artifact.id) &&
+        artifact.concludedAt > latestReevaluation.decision.decidedAt,
+    );
+    if (!replacementTerminalExists) {
+      return false;
+    }
+  }
+  return (
+    history.noQualifyingOpportunityReports.some((report) =>
+      activeIds.has(report.id),
+    ) ||
+    history.opportunityBriefs.some((brief) => activeIds.has(brief.id)) ||
+    history.developerSelectedOpportunityBriefs.some((brief) =>
+      activeIds.has(brief.id),
+    ) ||
+    history.inconclusiveComparisonResponses.some(
+      (response) =>
+        response.response.kind === "stop" && activeIds.has(response.reportId),
+    )
+  );
+}
+
+export function latestSupersededArtifactId(
+  history: AuthoritativeHistoryRebuild,
+): string | null {
+  const latestReevaluation = history.reevaluations.at(-1);
+  if (
+    latestReevaluation?.decision.outcome === "resume" &&
+    latestReevaluation.supersededArtifactIds.length > 0
+  ) {
+    const replacementTerminalExists = terminalArtifacts(history).some(
+      (artifact) =>
+        artifact.concludedAt > latestReevaluation.decision.decidedAt,
+    );
+    if (!replacementTerminalExists) {
+      return latestReevaluation.supersededArtifactIds.at(-1)!;
+    }
+  }
+  const activeArtifactId = activeTerminalArtifactIds(history).at(-1);
+  if (activeArtifactId !== undefined) {
+    return activeArtifactId;
+  }
+  return (
+    history.reevaluations
+      .findLast((entry) => entry.supersededArtifactIds.length > 0)
+      ?.supersededArtifactIds.at(-1) ?? null
+  );
+}
+
+function safeArtifactIdentity(id: string): string {
+  return encodeURIComponent(id).replaceAll("%", "-");
+}
+
+export function noQualifyingOpportunityArtifactPath(
+  report: NoQualifyingOpportunityReport,
+): string {
+  return report.supersedes === null
+    ? "no-qualifying-opportunity-report.md"
+    : `no-qualifying-opportunity-report-${safeArtifactIdentity(report.id)}.md`;
+}
+
+export function opportunityBriefArtifactPath(
+  brief: Pick<OpportunityBrief, "id" | "supersedes">,
+): string {
+  return brief.supersedes === null
+    ? "opportunity-brief.md"
+    : `opportunity-brief-${safeArtifactIdentity(brief.id)}.md`;
+}
+
+export function inconclusiveComparisonArtifactPath(
+  report: InconclusiveComparisonReport,
+): string {
+  return report.supersedes === null
+    ? "inconclusive-comparison-report.md"
+    : `inconclusive-comparison-report-${safeArtifactIdentity(report.id)}.md`;
+}
+
+function campaignDecisionEvidenceIds(decision: CampaignDecision): string[] {
+  if (decision.kind === "campaign-re-evaluation") {
+    return decision.triggerEntryIds;
+  }
+  if ("evidenceEntryIds" in decision) {
+    return decision.evidenceEntryIds;
+  }
+  return [
+    ...decision.supportingEvidenceEntryIds,
+    ...decision.challengingEvidenceEntryIds,
+    ...decision.evidenceGapIds,
+    ...decision.contradictionIds,
+  ];
+}
+
+export function campaignReevaluationViolation(
+  history: AuthoritativeHistoryRebuild,
+  command: ReevaluateCampaignCommand,
+): string | undefined {
+  const operation = command.payload.operation;
+  if (history.intake === undefined) {
+    return "Campaign re-evaluation requires a confirmed Campaign Intake";
+  }
+  const hasReasoningType = (type: ReasoningEntry["type"]) =>
+    operation.reasoningEntries.some((entry) => entry.type === type);
+  if (operation.kind === "intake-revision" && operation.intakeRevision === null) {
+    return "an intake-revision re-evaluation requires a Campaign Intake revision";
+  }
+  if (
+    operation.kind === "source-correction" &&
+    !operation.reasoningEntries.some(
+      (entry) => entry.type === "correction" && entry.action !== "retract",
+    )
+  ) {
+    return "a source-correction re-evaluation requires a reaffirming or superseding Correction";
+  }
+  if (
+    operation.kind === "source-redaction" &&
+    !operation.reasoningEntries.some(
+      (entry) => entry.type === "correction" && entry.action === "retract",
+    )
+  ) {
+    return "a source-redaction re-evaluation requires a retracting Correction";
+  }
+  if (
+    operation.kind === "freshness-change" &&
+    !hasReasoningType("source-freshness")
+  ) {
+    return "a freshness-change re-evaluation requires a Source Freshness entry";
+  }
+  if (operation.kind === "contradiction" && !hasReasoningType("contradiction")) {
+    return "a contradiction re-evaluation requires a Contradiction entry";
+  }
+  if (
+    operation.kind === "new-evidence" &&
+    operation.reasoningEntries.length === 0
+  ) {
+    return "a new-evidence re-evaluation requires a new Evidence Ledger entry";
+  }
+  if (operation.kind === "resume-refresh") {
+    if (operation.decision.outcome !== "resume") {
+      return "a resume-refresh re-evaluation must resume affected work";
+    }
+    const triggeredFreshness = history.sourceFreshnesses.filter(
+      (freshness) =>
+        operation.decision.triggerEntryIds.includes(freshness.id) &&
+        freshness.refreshAfter !== undefined &&
+        freshness.refreshAfter !== null &&
+        freshness.refreshAfter <= command.payload.reevaluatedAt,
+    );
+    if (triggeredFreshness.length === 0) {
+      return "a resume-refresh re-evaluation requires triggered evidence whose refresh time has arrived";
+    }
+    const previouslyInvalidatedDecisionIds =
+      invalidatedCampaignDecisionIds(history);
+    const canChangeActiveDecision = history.campaignDecisions.some((decision) => {
+      if (previouslyInvalidatedDecisionIds.has(decision.id)) {
+        return false;
+      }
+      const evidenceEntryIds = campaignDecisionEvidenceIds(decision);
+      const observationIds = supportingObservationIds(history, evidenceEntryIds);
+      return triggeredFreshness.some(
+        (freshness) =>
+          evidenceEntryIds.includes(freshness.id) ||
+          observationIds.has(freshness.observationId),
+      );
+    });
+    if (!canChangeActiveDecision) {
+      return "a resume-refresh re-evaluation requires time-sensitive evidence capable of changing an active Campaign Decision";
+    }
+  }
+  if (
+    operation.decision.outcome === "resume" &&
+    operation.reasoningEntries.length === 0 &&
+    operation.intakeRevision === null &&
+    operation.decision.affectedOpportunityIds.length === 0 &&
+    operation.decision.supersededDecisionIds.length === 0
+  ) {
+    return "resuming a Campaign requires an explicit affected record or Intake revision";
+  }
+  if (history.reevaluations.some((entry) => entry.id === operation.id)) {
+    return `Campaign re-evaluation identity ${operation.id} is already present`;
+  }
+  const revisedVersion = operation.intakeRevision?.intake.version;
+  const expectedVersion = history.intake.version + 1;
+  if (
+    operation.intakeRevision !== null &&
+    revisedVersion !== expectedVersion
+  ) {
+    return `Campaign Intake revision must be version ${expectedVersion}`;
+  }
+  const decisionVersion = revisedVersion ?? history.intake.version;
+  if (operation.decision.intakeVersion !== decisionVersion) {
+    return "the re-evaluation Campaign Decision must name the resulting Campaign Intake version";
+  }
+  if (
+    operation.decision.outcome === "resume" &&
+    operation.decision.confidence.level === "unknown"
+  ) {
+    return "resuming affected work requires a reasoned Campaign Decision";
+  }
+  const stagedHistory: AuthoritativeHistoryRebuild = {
+    ...history,
+    sourceLineages: [...history.sourceLineages],
+    sourceCredibilities: [...history.sourceCredibilities],
+    sourceFreshnesses: [...history.sourceFreshnesses],
+    evidenceGaps: [...history.evidenceGaps],
+    assumptions: [...history.assumptions],
+    inferences: [...history.inferences],
+    contradictions: [...history.contradictions],
+    corrections: [...history.corrections],
+  };
+  const invalidLink = applyReasoningEntries(
+    stagedHistory,
+    operation.reasoningEntries,
+  );
+  if (invalidLink !== undefined) {
+    return `re-evaluation reasoning uses an unknown or duplicate identity ${invalidLink}`;
+  }
+  const availableEntryIds = new Set([
+    ...stagedHistory.sources.map((entry) => entry.id),
+    ...stagedHistory.observations.map((entry) => entry.id),
+    ...stagedHistory.sourceLineages.map((entry) => entry.id),
+    ...stagedHistory.sourceCredibilities.map((entry) => entry.id),
+    ...stagedHistory.sourceFreshnesses.map((entry) => entry.id),
+    ...stagedHistory.evidenceGaps.map((entry) => entry.id),
+    ...stagedHistory.assumptions.map((entry) => entry.id),
+    ...stagedHistory.inferences.map((entry) => entry.id),
+    ...stagedHistory.contradictions.map((entry) => entry.id),
+    ...stagedHistory.corrections.map((entry) => entry.id),
+  ]);
+  const unknownTrigger = operation.decision.triggerEntryIds.find(
+    (id) => !availableEntryIds.has(id),
+  );
+  if (unknownTrigger !== undefined) {
+    return `re-evaluation trigger ${unknownTrigger} is not in the Evidence Ledger`;
+  }
+  const decisionIds = new Set(history.campaignDecisions.map((entry) => entry.id));
+  const unknownDecision = operation.decision.supersededDecisionIds.find(
+    (id) => !decisionIds.has(id),
+  );
+  if (unknownDecision !== undefined) {
+    return `re-evaluation cannot supersede unknown Campaign Decision ${unknownDecision}`;
+  }
+  const formedIds = new Set(
+    history.opportunityFormations.flatMap((formation) =>
+      formation.assessments.flatMap((assessment) =>
+        assessment.result.kind === "opportunity"
+          ? [assessment.result.opportunityId]
+          : [],
+      ),
+    ),
+  );
+  const unknownOpportunity = operation.decision.affectedOpportunityIds.find(
+    (id) => !formedIds.has(id),
+  );
+  if (unknownOpportunity !== undefined) {
+    return `re-evaluation cannot affect unknown Opportunity ${unknownOpportunity}`;
+  }
+  const invalidatedEntryIds = new Set(
+    operation.reasoningEntries.flatMap((entry) =>
+      entry.type === "correction" && entry.action !== "reaffirm"
+        ? [entry.targetEntryId]
+        : [],
+    ),
+  );
+  let foundDependentInference = true;
+  while (foundDependentInference) {
+    foundDependentInference = false;
+    for (const inference of stagedHistory.inferences) {
+      if (
+        !invalidatedEntryIds.has(inference.id) &&
+        [...inference.supportingEntryIds, ...inference.challengingEntryIds].some(
+          (id) => invalidatedEntryIds.has(id),
+        )
+      ) {
+        invalidatedEntryIds.add(inference.id);
+        foundDependentInference = true;
+      }
+    }
+  }
+  const triggerEntryIds = new Set([
+    ...operation.decision.triggerEntryIds,
+    ...invalidatedEntryIds,
+  ]);
+  const affectedOpportunityIds = new Set(
+    operation.decision.affectedOpportunityIds,
+  );
+  const decisionOpportunityIds = (decision: CampaignDecision): string[] => {
+    if (
+      decision.kind === "exclusion-gate" ||
+      decision.kind === "qualification-gate"
+    ) {
+      return [decision.opportunityId];
+    }
+    if (decision.kind === "campaign-re-evaluation") {
+      return decision.affectedOpportunityIds;
+    }
+    if (decision.kind === "breadth-gate") {
+      return (
+        history.breadthGates.find(
+          (gate) => gate.decision.id === decision.id,
+        )?.comparisonOpportunityIds ?? []
+      );
+    }
+    if (decision.kind === "opportunity-comparison") {
+      const comparison = history.opportunityComparisons.find(
+        (entry) => entry.decision.id === decision.id,
+      );
+      const inconclusive = history.inconclusiveComparisonReports.find(
+        (entry) => entry.comparison.decision.id === decision.id,
+      );
+      return (
+        comparison?.profiles ?? inconclusive?.comparison.profiles ?? []
+      ).map((profile) => profile.opportunityId);
+    }
+    if (decision.kind === "qualification-research") {
+      return (
+        history.opportunityQualificationEvaluations.find(
+          (entry) => entry.researchDecision.id === decision.id,
+        )?.assessments ?? []
+      ).map((assessment) => assessment.opportunityId);
+    }
+    if (decision.kind === "opportunity-formation") {
+      return history.opportunityFormations.flatMap((formation) =>
+        formation.assessments.flatMap((assessment) =>
+          assessment.decision.id === decision.id &&
+          assessment.result.kind === "opportunity"
+            ? [assessment.result.opportunityId]
+            : [],
+        ),
+      );
+    }
+    return [];
+  };
+  const intakeRevisionAffectsDecision = (decision: CampaignDecision) => {
+    if (operation.intakeRevision === null) {
+      return false;
+    }
+    const revisedIntake = operation.intakeRevision.intake;
+    const researchBudgetChanged =
+      JSON.stringify(revisedIntake.researchBudget) !==
+      JSON.stringify(history.intake!.researchBudget);
+    if (decision.kind === "breadth-gate") {
+      return researchBudgetChanged;
+    }
+    if (decision.kind === "qualification-research") {
+      return researchBudgetChanged;
+    }
+    if (
+      decision.kind === "opportunity-formation" ||
+      decision.kind === "campaign-re-evaluation"
+    ) {
+      return false;
+    }
+    if (
+      !decisionOpportunityIds(decision).some((id) =>
+        affectedOpportunityIds.has(id),
+      )
+    ) {
+      return false;
+    }
+    const priorProfile = history.intake!.developerProfileSnapshot;
+    const revisedProfile = revisedIntake.developerProfileSnapshot;
+    const profileChanged = (
+      field: keyof Omit<typeof priorProfile, "capturedAt">,
+    ) =>
+      JSON.stringify(priorProfile[field]) !==
+      JSON.stringify(revisedProfile[field]);
+    const commercialTargetChanged =
+      JSON.stringify(revisedIntake.commercialOutcomeTarget) !==
+      JSON.stringify(history.intake!.commercialOutcomeTarget);
+    const priorStatements = new Map(
+      history.intake!.statements.map((statement) => [statement.id, statement]),
+    );
+    const revisedStatements = new Map(
+      revisedIntake.statements.map((statement) => [statement.id, statement]),
+    );
+    const changedStatementIds = new Set(
+      [...new Set([...priorStatements.keys(), ...revisedStatements.keys()])]
+        .filter(
+          (id) =>
+            JSON.stringify(priorStatements.get(id)) !==
+            JSON.stringify(revisedStatements.get(id)),
+        ),
+    );
+    if (decision.kind === "opportunity-comparison") {
+      return (
+        commercialTargetChanged ||
+        changedStatementIds.size > 0 ||
+        profileChanged("capacity") ||
+        profileChanged("capabilities") ||
+        profileChanged("access") ||
+        profileChanged("boundaries") ||
+        profileChanged("operatingPreferences") ||
+        profileChanged("riskTolerance")
+      );
+    }
+    if (decision.kind === "exclusion-gate") {
+      const exclusionGate = history.opportunityExclusionEvaluations
+        .flatMap((evaluation) => evaluation.assessments)
+        .flatMap((assessment) => [
+          { kind: "market-safety" as const, gate: assessment.marketSafety.gate },
+          ...assessment.hardConstraints.map(({ hardConstraintId, gate }) => ({
+            kind: "hard-constraint" as const,
+            hardConstraintId,
+            gate,
+          })),
+        ])
+        .find(({ gate }) => gate.decision.id === decision.id);
+      return exclusionGate?.kind === "market-safety"
+        ? profileChanged("boundaries")
+        : exclusionGate !== undefined &&
+            (profileChanged("boundaries") ||
+              changedStatementIds.has(exclusionGate.hardConstraintId));
+    }
+    const qualificationGate = history.opportunityQualificationEvaluations
+      .flatMap((evaluation) => evaluation.assessments)
+      .flatMap((assessment) => assessment.gates)
+      .find((gate) => gate.decision.id === decision.id);
+    switch (qualificationGate?.kind) {
+      case "buyer-economics":
+      case "value-feasibility":
+      case "commercial-plausibility":
+        return commercialTargetChanged;
+      case "customer-access":
+        return profileChanged("access");
+      case "solo-feasibility":
+        return profileChanged("capacity") || profileChanged("capabilities");
+      case "legal-operational-feasibility":
+        return profileChanged("boundaries");
+      case "costly-problem":
+      case "competitive-viability":
+      case undefined:
+        return false;
+    }
+  };
+  const alreadySuperseded = new Set(
+    history.reevaluations.flatMap(
+      (entry) => entry.decision.supersededDecisionIds,
+    ),
+  );
+  const availableDecisions = history.campaignDecisions.filter(
+    (decision) => !alreadySuperseded.has(decision.id),
+  );
+  const dependentDecisionIds = new Set(
+    availableDecisions
+      .filter(
+        (decision) => {
+          const evidenceEntryIds = campaignDecisionEvidenceIds(decision);
+          const evidenceObservationIds = supportingObservationIds(
+            history,
+            evidenceEntryIds,
+          );
+          const triggeredObservationIds = stagedHistory.sourceFreshnesses
+            .filter((freshness) => triggerEntryIds.has(freshness.id))
+            .map((freshness) => freshness.observationId);
+          return (
+            evidenceEntryIds.some((entryId) => triggerEntryIds.has(entryId)) ||
+            triggeredObservationIds.some((observationId) =>
+              evidenceObservationIds.has(observationId),
+            ) ||
+            intakeRevisionAffectsDecision(decision)
+          );
+        },
+      )
+      .map((decision) => decision.id),
+  );
+  const decisionStage = (decision: CampaignDecision): number => {
+    switch (decision.kind) {
+      case "opportunity-formation": return 1;
+      case "breadth-gate": return 2;
+      case "exclusion-gate": return 3;
+      case "qualification-gate": return 4;
+      case "qualification-research": return 5;
+      case "opportunity-comparison": return 6;
+      case "campaign-re-evaluation": return 7;
+    }
+  };
+  let foundDownstreamDecision = true;
+  while (foundDownstreamDecision) {
+    foundDownstreamDecision = false;
+    for (const [index, decision] of availableDecisions.entries()) {
+      if (dependentDecisionIds.has(decision.id)) {
+        continue;
+      }
+      const opportunityIds = decisionOpportunityIds(decision);
+      const dependsOnEarlierDecision = availableDecisions
+        .slice(0, index)
+        .some(
+          (earlier) =>
+            dependentDecisionIds.has(earlier.id) &&
+            decisionStage(earlier) < decisionStage(decision) &&
+            decisionOpportunityIds(earlier).some((id) =>
+              opportunityIds.includes(id),
+            ),
+        );
+      if (dependsOnEarlierDecision) {
+        dependentDecisionIds.add(decision.id);
+        foundDownstreamDecision = true;
+      }
+    }
+  }
+  for (const decision of availableDecisions) {
+    if (decision.kind === "opportunity-formation") {
+      dependentDecisionIds.delete(decision.id);
+    }
+  }
+  if (operation.intakeRevision !== null) {
+    const revisedIntake = operation.intakeRevision.intake;
+    const priorProfile = history.intake!.developerProfileSnapshot;
+    const revisedProfile = revisedIntake.developerProfileSnapshot;
+    const substantiveIntakeChanged =
+      JSON.stringify({ ...priorProfile, capturedAt: undefined }) !==
+        JSON.stringify({ ...revisedProfile, capturedAt: undefined }) ||
+      JSON.stringify(history.intake!.commercialOutcomeTarget) !==
+        JSON.stringify(revisedIntake.commercialOutcomeTarget) ||
+      JSON.stringify(history.intake!.statements) !==
+        JSON.stringify(revisedIntake.statements) ||
+      JSON.stringify(history.intake!.researchBudget) !==
+        JSON.stringify(revisedIntake.researchBudget);
+    const expectedAffectedOpportunityIds = substantiveIntakeChanged
+      ? formedIds
+      : new Set<string>();
+    if (
+      affectedOpportunityIds.size !== expectedAffectedOpportunityIds.size ||
+      [...expectedAffectedOpportunityIds].some(
+        (id) => !affectedOpportunityIds.has(id),
+      )
+    ) {
+      return "a Campaign Intake revision must name exactly the Opportunities affected by its substantive baseline changes";
+    }
+  }
+  const submittedDecisionIds = operation.decision.supersededDecisionIds;
+  const invalidationMismatch =
+    submittedDecisionIds.length !== dependentDecisionIds.size ||
+    submittedDecisionIds.some((id) => !dependentDecisionIds.has(id));
+  return invalidationMismatch
+    ? `Campaign re-evaluation must supersede exactly the dependent Campaign Decisions (${[...dependentDecisionIds].join(", ") || "none"})`
+    : undefined;
+}
+
+export function campaignReevaluationRecords(
+  history: AuthoritativeHistoryRebuild,
+  command: ReevaluateCampaignCommand,
+  firstSequence: number,
+) {
+  const operation = command.payload.operation;
+  const intakeRevision: CampaignIntakeRevision | null =
+    operation.intakeRevision === null
+      ? null
+      : {
+          reason: operation.intakeRevision.reason,
+          previousVersion: history.intake!.version,
+          intake: {
+            campaignId: history.campaignId,
+            confirmedAt: command.payload.reevaluatedAt,
+            ...operation.intakeRevision.intake,
+          },
+        };
+  const supersededArtifactIds = (() => {
+    if (operation.decision.outcome !== "resume") {
+      return [];
+    }
+    const activeIds = new Set(activeTerminalArtifactIds(history));
+    const affectedOpportunityIds = new Set(
+      operation.decision.affectedOpportunityIds,
+    );
+    const invalidatedDecisionIds = new Set(
+      operation.decision.supersededDecisionIds,
+    );
+    const opportunityIsAffected = (opportunityId: string) =>
+      affectedOpportunityIds.has(opportunityId);
+    const decisionIsInvalidated = (decisionId: string) =>
+      invalidatedDecisionIds.has(decisionId);
+    return [
+      ...history.noQualifyingOpportunityReports
+        .filter(
+          (report) =>
+            report.rejectedOpportunities.some(
+              (opportunity) =>
+                opportunityIsAffected(opportunity.id) ||
+                opportunity.decisionIds.some(decisionIsInvalidated),
+            ) ||
+            report.unresolvedOpportunities.some(
+              (opportunity) =>
+                opportunityIsAffected(opportunity.id) ||
+                opportunity.decisionIds.some(decisionIsInvalidated),
+            ),
+        )
+        .map((report) => report.id),
+      ...history.opportunityBriefs
+        .filter(
+          (brief) =>
+            opportunityIsAffected(brief.opportunity.id) ||
+            decisionIsInvalidated(brief.comparisonContext.decisionId),
+        )
+        .map((brief) => brief.id),
+      ...history.inconclusiveComparisonReports
+        .filter(
+          (report) =>
+            decisionIsInvalidated(report.comparison.decision.id) ||
+            report.comparison.profiles.some((profile) =>
+              opportunityIsAffected(profile.opportunityId),
+            ),
+        )
+        .map((report) => report.id),
+      ...history.developerSelectedOpportunityBriefs
+        .filter(
+          (brief) =>
+            opportunityIsAffected(brief.opportunity.id) ||
+            (affectedOpportunityIds.size === 0 &&
+              decisionIsInvalidated(brief.comparisonContext.decisionId)),
+        )
+        .map((brief) => brief.id),
+    ].filter((artifactId) => activeIds.has(artifactId));
+  })();
+  const reevaluation: CampaignReevaluation = {
+    id: operation.id,
+    kind: operation.kind,
+    reason: operation.reason,
+    reasoningEntryIds: operation.reasoningEntries.map((entry) => entry.id),
+    intakeRevision,
+    decision: operation.decision,
+    invalidatedDecisionIds: operation.decision.supersededDecisionIds,
+    supersededArtifactIds,
+  };
+  return campaignRecordPair({
+    campaignId: history.campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.reevaluatedAt,
+    firstSequence,
+    operation: "reevaluate-campaign",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      reevaluationId: operation.id,
+    },
+    outcome: {
+      reevaluation,
+      reasoningEntries: operation.reasoningEntries,
+      ...(intakeRevision === null ? {} : { intake: intakeRevision.intake }),
+    },
+  });
+}
+
+export function applyCampaignReevaluation(
+  history: AuthoritativeHistoryRebuild,
+  reevaluation: CampaignReevaluation,
+  reasoningEntries: ReasoningEntry[],
+  intake: ConfirmedCampaignIntake | undefined,
+): string | undefined {
+  if (applyReasoningEntries(history, reasoningEntries) !== undefined) {
+    return "Campaign re-evaluation reasoning cannot be applied";
+  }
+  if (reevaluation.intakeRevision === null) {
+    if (intake !== undefined) {
+      return "Campaign re-evaluation cannot replace Intake without an Intake revision";
+    }
+  } else {
+    if (
+      intake === undefined ||
+      JSON.stringify(intake) !== JSON.stringify(reevaluation.intakeRevision.intake)
+    ) {
+      return "Campaign Intake revision does not match the authoritative re-evaluation";
+    }
+    history.intake = intake;
+  }
+  history.campaignDecisions.push(reevaluation.decision);
+  history.reevaluations.push(reevaluation);
+  return undefined;
+}
+
 function reportText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -2974,6 +4002,7 @@ export function renderNoQualifyingOpportunityReport(
     `- Campaign ID: ${reportText(report.campaignId)}`,
     `- Concluded at: ${report.concludedAt}`,
     `- Campaign Intake version: ${report.intakeVersion}`,
+    `- Supersedes: ${report.supersedes === null ? "none" : reportText(report.supersedes)}`,
     "",
     report.summary,
     "",
@@ -3302,12 +4331,19 @@ export const authoritativeOperationDescriptors = {
             campaignPath: "/authoritative-rebuild",
             coordinatorId: intent.coordinatorId,
             recordedAt: outcome.recordedAt,
+            ...(typeof intent.reevaluationId === "string"
+              ? { reevaluationId: intent.reevaluationId }
+              : {}),
             assessments: outcome.assessments,
           },
         }).length > 0 ||
         applyOpportunityExclusionEvaluation(
           history,
           evaluation as OpportunityExclusionEvaluation,
+          String(outcome.recordedAt),
+          typeof intent.reevaluationId === "string"
+            ? intent.reevaluationId
+            : undefined,
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -3328,12 +4364,19 @@ export const authoritativeOperationDescriptors = {
             campaignPath: "/authoritative-rebuild",
             coordinatorId: intent.coordinatorId,
             recordedAt: outcome.recordedAt,
+            ...(typeof intent.reevaluationId === "string"
+              ? { reevaluationId: intent.reevaluationId }
+              : {}),
             evaluation: outcome.evaluation,
           },
         }).length > 0 ||
         applyOpportunityQualificationEvaluation(
           history,
           outcome.evaluation as unknown as OpportunityQualificationEvaluation,
+          String(outcome.recordedAt),
+          typeof intent.reevaluationId === "string"
+            ? intent.reevaluationId
+            : undefined,
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -3464,6 +4507,78 @@ export const authoritativeOperationDescriptors = {
           history,
           responseRecord,
           outcome.briefs as OpportunityBrief[],
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "reevaluate-campaign": {
+    outcome: "campaign-reevaluated",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const reevaluation = outcome.reevaluation;
+      const reasoningEntries = outcome.reasoningEntries;
+      if (
+        !isRecord(reevaluation) ||
+        !Array.isArray(reasoningEntries) ||
+        intent.reevaluationId !== reevaluation.id
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const operation = {
+        id: reevaluation.id,
+        kind: reevaluation.kind,
+        reason: reevaluation.reason,
+        reasoningEntries,
+        intakeRevision: reevaluation.intakeRevision === null
+          ? null
+          : {
+              reason: isRecord(reevaluation.intakeRevision)
+                ? reevaluation.intakeRevision.reason
+                : undefined,
+              intake: isRecord(outcome.intake)
+                ? (() => {
+                    const {
+                      campaignId: _campaignId,
+                      confirmedAt: _confirmedAt,
+                      ...intakeValue
+                    } = outcome.intake;
+                    return intakeValue;
+                  })()
+                : outcome.intake,
+            },
+        decision: reevaluation.decision,
+      };
+      const command = {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId: String(outcome.requestId),
+        command: "reevaluateCampaign" as const,
+        payload: {
+          campaignPath: "/authoritative-rebuild",
+          coordinatorId: String(intent.coordinatorId),
+          reevaluatedAt: String(outcome.recordedAt),
+          operation,
+        },
+      };
+      const expectedOutcome = campaignReevaluationRecords(
+        history,
+        command as ReevaluateCampaignCommand,
+        outcomeSequence - 1,
+      )[1];
+      if (
+        validateReevaluateCampaignFields(command).length > 0 ||
+        campaignReevaluationViolation(history, command as ReevaluateCampaignCommand) !==
+          undefined ||
+        JSON.stringify(outcome) !== JSON.stringify(expectedOutcome) ||
+        applyCampaignReevaluation(
+          history,
+          reevaluation as unknown as CampaignReevaluation,
+          reasoningEntries as ReasoningEntry[],
+          isRecord(outcome.intake)
+            ? (outcome.intake as unknown as ConfirmedCampaignIntake)
+            : undefined,
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -3915,6 +5030,9 @@ export function opportunityExclusionGateRecords(
     intent: {
       coordinatorId: command.payload.coordinatorId,
       assessmentId: command.payload.assessments[0]!.id,
+      ...(command.payload.reevaluationId === undefined
+        ? {}
+        : { reevaluationId: command.payload.reevaluationId }),
     },
     outcome: { assessments: command.payload.assessments },
   });
@@ -3934,6 +5052,9 @@ export function opportunityQualificationGateRecords(
     intent: {
       coordinatorId: command.payload.coordinatorId,
       evaluationId: command.payload.evaluation.id,
+      ...(command.payload.reevaluationId === undefined
+        ? {}
+        : { reevaluationId: command.payload.reevaluationId }),
     },
     outcome: { evaluation: command.payload.evaluation },
   });
@@ -4164,6 +5285,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     inconclusiveComparisonReports: [],
     inconclusiveComparisonResponses: [],
     developerSelectedOpportunityBriefs: [],
+    reevaluations: [],
     campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
@@ -4266,6 +5388,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     inconclusiveComparisonReports,
     inconclusiveComparisonResponses,
     developerSelectedOpportunityBriefs,
+    reevaluations,
     campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
@@ -4323,7 +5446,9 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     campaignDecisions.length > 0
   ) {
     const correctedEntryIds = new Set(
-      corrections.map((correction) => correction.targetEntryId),
+      corrections
+        .filter((correction) => correction.action !== "reaffirm")
+        .map((correction) => correction.targetEntryId),
     );
     const invalidatedIds = invalidatedEvidenceIds({
       sources,
@@ -4668,7 +5793,10 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           : ["conclude-no-qualifying-opportunity"];
     workView.opportunities = workView.opportunities!.map((opportunity) => {
       const assessment = assessmentsByOpportunityId.get(opportunity.id);
-      if (assessment === undefined) {
+      if (
+        assessment === undefined ||
+        opportunity.disposition?.status !== "active"
+      ) {
         return opportunity;
       }
       const qualificationGates = assessment.gates.map((gate) => ({
@@ -4698,8 +5826,26 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       };
     });
   }
-  if (noQualifyingOpportunityReports.length > 0) {
-    const report = noQualifyingOpportunityReports[0]!;
+  const activeTerminalIds = new Set(
+    activeTerminalArtifactIds(authoritativeHistory),
+  );
+  const currentNoQualifyingOpportunityReport =
+    noQualifyingOpportunityReports.findLast((report) =>
+      activeTerminalIds.has(report.id),
+    );
+  const currentOpportunityBrief = opportunityBriefs.findLast((brief) =>
+    activeTerminalIds.has(brief.id),
+  );
+  const currentOpportunityComparison =
+    currentOpportunityBrief === undefined
+      ? undefined
+      : opportunityComparisons[opportunityBriefs.indexOf(currentOpportunityBrief)];
+  const currentInconclusiveComparisonReport =
+    inconclusiveComparisonReports.findLast((report) =>
+      activeTerminalIds.has(report.id),
+    );
+  if (currentNoQualifyingOpportunityReport !== undefined) {
+    const report = currentNoQualifyingOpportunityReport;
     workView.phase = "terminal";
     workView.publicResearchAvailable = false;
     workView.completedWork.push(
@@ -4714,13 +5860,13 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.terminal = {
       outcome: "no-qualifying-opportunity",
       reportId: report.id,
-      artifactPath: "no-qualifying-opportunity-report.md",
+      artifactPath: noQualifyingOpportunityArtifactPath(report),
       immutable: true,
       concludedAt: report.concludedAt,
     };
   }
-  if (opportunityBriefs.length > 0) {
-    const brief = opportunityBriefs[0]!;
+  if (currentOpportunityBrief !== undefined) {
+    const brief = currentOpportunityBrief;
     workView.phase = "terminal";
     workView.publicResearchAvailable = false;
     workView.completedWork.push(
@@ -4743,13 +5889,13 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       outcome: "leading-opportunity",
       briefId: brief.id,
       opportunityId: brief.opportunity.id,
-      artifactPath: "opportunity-brief.md",
+      artifactPath: opportunityBriefArtifactPath(brief),
       immutable: true,
       concludedAt: brief.concludedAt,
     };
   }
-  if (inconclusiveComparisonReports.length > 0) {
-    const report = inconclusiveComparisonReports.at(-1)!;
+  if (currentInconclusiveComparisonReport !== undefined) {
+    const report = currentInconclusiveComparisonReport;
     workView.phase = "inconclusive-comparison";
     workView.publicResearchAvailable = false;
     workView.completedWork.push(
@@ -4762,12 +5908,14 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     ];
     workView.inconclusiveComparison = {
       reportId: report.id,
-      artifactPath: "inconclusive-comparison-report.md",
+      artifactPath: inconclusiveComparisonArtifactPath(report),
       immutable: true,
       concludedAt: report.concludedAt,
       availableActions: report.availableActions,
     };
-    const response = inconclusiveComparisonResponses.at(-1);
+    const response = inconclusiveComparisonResponses.findLast(
+      (entry) => entry.reportId === report.id,
+    );
     if (response?.response.kind === "stop") {
       workView.phase = "terminal";
       workView.completedWork.push(
@@ -4781,7 +5929,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       workView.terminal = {
         outcome: "inconclusive-comparison",
         reportId: report.id,
-        artifactPath: "inconclusive-comparison-report.md",
+        artifactPath: inconclusiveComparisonArtifactPath(report),
         action: "stopped",
         immutable: true,
         concludedAt: response.respondedAt,
@@ -4888,6 +6036,148 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     )
   ) {
     workView.nextPermittedActions = ["record-public-research-observation"];
+  }
+  const latestReevaluation = reevaluations.at(-1);
+  if (latestReevaluation !== undefined) {
+    const currentDecisionIds = new Set([
+      breadthGates.at(-1)?.decision.id,
+      ...(
+        opportunityExclusionEvaluations.at(-1)?.assessments ?? []
+      ).flatMap((assessment) =>
+        exclusionGatesFor(assessment).map((gate) => gate.decision.id),
+      ),
+      opportunityQualificationEvaluations.at(-1)?.researchDecision.id,
+      ...(
+        opportunityQualificationEvaluations.at(-1)?.assessments ?? []
+      ).flatMap((assessment) =>
+        assessment.gates.map((gate) => gate.decision.id),
+      ),
+      opportunityComparisons.at(-1)?.decision.id,
+      inconclusiveComparisonReports.at(-1)?.comparison.decision.id,
+    ].filter((id): id is string => id !== undefined));
+    const awaitsReplacementDecision =
+      latestReevaluation.invalidatedDecisionIds.length === 0
+        ? campaignDecisions.at(-1)?.id === latestReevaluation.decision.id
+        : latestReevaluation.invalidatedDecisionIds.some((id) =>
+            currentDecisionIds.has(id),
+          );
+    workView.completedWork.push(
+      `Campaign re-evaluation ${latestReevaluation.id} recorded`,
+    );
+    workView.reevaluation = {
+      id: latestReevaluation.id,
+      kind: latestReevaluation.kind,
+      intakeVersion: latestReevaluation.decision.intakeVersion,
+      affectedOpportunityIds:
+        latestReevaluation.decision.affectedOpportunityIds,
+      invalidatedDecisionIds: latestReevaluation.invalidatedDecisionIds,
+      supersededArtifactIds: latestReevaluation.supersededArtifactIds,
+    };
+    if (
+      latestReevaluation.decision.outcome === "resume" &&
+      (activeTerminalIds.size === 0 ||
+        latestReevaluation.supersededArtifactIds.length > 0) &&
+      awaitsReplacementDecision
+    ) {
+      if (
+        latestReevaluation.supersededArtifactIds.length > 0
+      ) {
+        delete workView.terminal;
+        delete workView.inconclusiveComparison;
+      }
+      workView.phase = workView.opportunities?.length
+        ? "opportunity-deepening"
+        : "campaign-intake-confirmed";
+      workView.publicResearchAvailable = true;
+      workView.nextPermittedActions = [
+        "re-evaluate-affected-work",
+        "reserve-public-research",
+        "record-evidence-reasoning",
+      ];
+      workView.opportunities = workView.opportunities?.map((opportunity) =>
+        latestReevaluation.decision.affectedOpportunityIds.includes(
+          opportunity.id,
+        )
+          ? {
+              ...opportunity,
+              disposition: {
+                status:
+                  opportunity.disposition?.status === "rejected"
+                    ? ("active" as const)
+                    : ("unresolved" as const),
+                decisionIds: [latestReevaluation.decision.id],
+              },
+              eligibility: "pending-qualification" as const,
+              terminalRole: null,
+            }
+          : opportunity,
+      );
+    }
+  }
+  const supersededDecisionIds = new Set(
+    reevaluations.flatMap((entry) => entry.invalidatedDecisionIds),
+  );
+  const unavailableFreshnessIds = invalidatedEvidenceIds({
+    sources,
+    observations,
+    sourceLineages,
+    sourceCredibilities,
+    sourceFreshnesses,
+    evidenceGaps,
+    assumptions,
+    inferences,
+    contradictions,
+    corrections,
+  });
+  const activeDecisions = campaignDecisions.filter(
+    (decision) => !supersededDecisionIds.has(decision.id),
+  );
+  const staleDecisionLinks = sourceFreshnesses.flatMap((freshness) => {
+    if (
+      freshness.refreshAfter === undefined ||
+      freshness.refreshAfter === null ||
+      freshness.refreshAfter > workViewAsOf ||
+      unavailableFreshnessIds.has(freshness.id)
+    ) {
+      return [];
+    }
+    const affectedDecisionIds = activeDecisions
+      .filter((decision) => {
+        const evidenceIds = campaignDecisionEvidenceIds(decision);
+        return (
+          evidenceIds.includes(freshness.id) ||
+          supportingObservationIds(authoritativeHistory, evidenceIds).has(
+            freshness.observationId,
+          )
+        );
+      })
+      .map((decision) => decision.id);
+    return affectedDecisionIds.length === 0
+      ? []
+      : [{ freshness, affectedDecisionIds }];
+  });
+  if (staleDecisionLinks.length > 0 && workView.phase !== "terminal") {
+    workView.evidenceRefresh = {
+      freshnessIds: staleDecisionLinks.map(({ freshness }) => freshness.id),
+      observationIds: [
+        ...new Set(
+          staleDecisionLinks.map(({ freshness }) => freshness.observationId),
+        ),
+      ],
+      affectedDecisionIds: [
+        ...new Set(
+          staleDecisionLinks.flatMap(({ affectedDecisionIds }) =>
+            affectedDecisionIds,
+          ),
+        ),
+      ],
+    };
+    workView.nextPermittedActions = [
+      "refresh-time-sensitive-evidence",
+      ...workView.nextPermittedActions.filter(
+        (action) => action !== "refresh-time-sensitive-evidence",
+      ),
+    ];
   }
   const latestIntent = records.findLast(
     (record) =>
@@ -5028,27 +6318,31 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       : { pendingDecision, researchApprovalInformation }),
     ...(researchApprovals.length === 0 ? {} : { researchApprovals }),
     ...(researchExpenditures.length === 0 ? {} : { researchExpenditures }),
-    ...(noQualifyingOpportunityReports.length === 0
+    ...(currentNoQualifyingOpportunityReport === undefined
       ? {}
       : {
-          noQualifyingOpportunityReport:
-            noQualifyingOpportunityReports[0],
+          noQualifyingOpportunityReport: currentNoQualifyingOpportunityReport,
         }),
-    ...(opportunityBriefs.length === 0
+    ...(currentOpportunityBrief === undefined
       ? {}
       : {
-          opportunityComparison: opportunityComparisons[0],
-          opportunityBrief: opportunityBriefs[0],
+          opportunityComparison: currentOpportunityComparison,
+          opportunityBrief: currentOpportunityBrief,
         }),
-    ...(inconclusiveComparisonReports.length === 0
+    ...(currentInconclusiveComparisonReport === undefined
       ? {}
       : {
-          inconclusiveComparisonReport:
-            inconclusiveComparisonReports.at(-1),
+          inconclusiveComparisonReport: currentInconclusiveComparisonReport,
         }),
     ...(developerSelectedOpportunityBriefs.length === 0
       ? {}
       : { opportunityBriefs: developerSelectedOpportunityBriefs }),
+    ...(latestReevaluation === undefined
+      ? {}
+      : {
+          reevaluation: latestReevaluation,
+          intakeRevision: latestReevaluation.intakeRevision,
+        }),
   };
 }
 
@@ -5147,59 +6441,80 @@ export async function loadCampaign(campaignPath: string) {
       throw new Error("Evidence Ledger does not match authoritative history");
     }
   }
-  const noQualifyingOpportunityReportPath = path.join(
-    rebuiltCampaign.campaign.path,
-    "no-qualifying-opportunity-report.md",
-  );
-  if (rebuiltCampaign.noQualifyingOpportunityReport === undefined) {
-    if (await pathExists(noQualifyingOpportunityReportPath)) {
-      throw new Error(
-        "No Qualifying Opportunity Report has no authoritative terminal record",
-      );
-    }
-  } else if (
-    (await readFile(noQualifyingOpportunityReportPath, "utf8")) !==
-    renderNoQualifyingOpportunityReport(
-      rebuiltCampaign.noQualifyingOpportunityReport,
-    )
+  if (
+    rebuiltCampaign.authoritativeHistory.noQualifyingOpportunityReports.length ===
+      0 &&
+    (await pathExists(
+      path.join(
+        rebuiltCampaign.campaign.path,
+        "no-qualifying-opportunity-report.md",
+      ),
+    ))
   ) {
     throw new Error(
-      "No Qualifying Opportunity Report does not match authoritative history",
+      "No Qualifying Opportunity Report has no authoritative terminal record",
     );
   }
-  const opportunityBriefPath = path.join(
-    rebuiltCampaign.campaign.path,
-    "opportunity-brief.md",
-  );
-  if (rebuiltCampaign.opportunityBrief === undefined) {
-    if (await pathExists(opportunityBriefPath)) {
-      throw new Error("Opportunity Brief has no authoritative terminal record");
-    }
-  } else if (
-    (await readFile(opportunityBriefPath, "utf8")) !==
-    renderOpportunityBrief(rebuiltCampaign.opportunityBrief)
-  ) {
-    throw new Error("Opportunity Brief does not match authoritative history");
-  }
-  const inconclusiveComparisonReportPath = path.join(
-    rebuiltCampaign.campaign.path,
-    "inconclusive-comparison-report.md",
-  );
-  if (rebuiltCampaign.inconclusiveComparisonReport === undefined) {
-    if (await pathExists(inconclusiveComparisonReportPath)) {
+  for (const report of rebuiltCampaign.authoritativeHistory
+    .noQualifyingOpportunityReports) {
+    const reportPath = path.join(
+      rebuiltCampaign.campaign.path,
+      noQualifyingOpportunityArtifactPath(report),
+    );
+    if (
+      (await readFile(reportPath, "utf8")) !==
+      renderNoQualifyingOpportunityReport(report)
+    ) {
       throw new Error(
-        "Inconclusive Comparison Report has no authoritative record",
+        "No Qualifying Opportunity Report does not match authoritative history",
       );
     }
-  } else if (
-    (await readFile(inconclusiveComparisonReportPath, "utf8")) !==
-    renderInconclusiveComparisonReport(
-      rebuiltCampaign.inconclusiveComparisonReport,
-    )
+  }
+  if (
+    rebuiltCampaign.authoritativeHistory.opportunityBriefs.length === 0 &&
+    (await pathExists(
+      path.join(rebuiltCampaign.campaign.path, "opportunity-brief.md"),
+    ))
+  ) {
+    throw new Error("Opportunity Brief has no authoritative terminal record");
+  }
+  for (const brief of rebuiltCampaign.authoritativeHistory.opportunityBriefs) {
+    const briefPath = path.join(
+      rebuiltCampaign.campaign.path,
+      opportunityBriefArtifactPath(brief),
+    );
+    if ((await readFile(briefPath, "utf8")) !== renderOpportunityBrief(brief)) {
+      throw new Error("Opportunity Brief does not match authoritative history");
+    }
+  }
+  if (
+    rebuiltCampaign.authoritativeHistory.inconclusiveComparisonReports.length ===
+      0 &&
+    (await pathExists(
+      path.join(
+        rebuiltCampaign.campaign.path,
+        "inconclusive-comparison-report.md",
+      ),
+    ))
   ) {
     throw new Error(
-      "Inconclusive Comparison Report does not match authoritative history",
+      "Inconclusive Comparison Report has no authoritative record",
     );
+  }
+  for (const report of rebuiltCampaign.authoritativeHistory
+    .inconclusiveComparisonReports) {
+    const reportPath = path.join(
+      rebuiltCampaign.campaign.path,
+      inconclusiveComparisonArtifactPath(report),
+    );
+    if (
+      (await readFile(reportPath, "utf8")) !==
+      renderInconclusiveComparisonReport(report)
+    ) {
+      throw new Error(
+        "Inconclusive Comparison Report does not match authoritative history",
+      );
+    }
   }
   for (const brief of rebuiltCampaign.opportunityBriefs ?? []) {
     const briefPath = path.join(
@@ -5263,6 +6578,12 @@ export async function loadCampaign(campaignPath: string) {
     ...(rebuiltCampaign.opportunityBriefs === undefined
       ? {}
       : { opportunityBriefs: rebuiltCampaign.opportunityBriefs }),
+    ...(rebuiltCampaign.reevaluation === undefined
+      ? {}
+      : {
+          reevaluation: rebuiltCampaign.reevaluation,
+          intakeRevision: rebuiltCampaign.intakeRevision,
+        }),
   };
 }
 
@@ -5302,26 +6623,24 @@ export async function persistDerivedCampaignState(
       rebuiltCampaign.evidenceLedger,
     );
   }
-  if (rebuiltCampaign.noQualifyingOpportunityReport !== undefined) {
+  for (const report of rebuiltCampaign.authoritativeHistory
+    .noQualifyingOpportunityReports) {
     await replacePrivateText(
-      path.join(campaignPath, "no-qualifying-opportunity-report.md"),
-      renderNoQualifyingOpportunityReport(
-        rebuiltCampaign.noQualifyingOpportunityReport,
-      ),
+      path.join(campaignPath, noQualifyingOpportunityArtifactPath(report)),
+      renderNoQualifyingOpportunityReport(report),
     );
   }
-  if (rebuiltCampaign.opportunityBrief !== undefined) {
+  for (const brief of rebuiltCampaign.authoritativeHistory.opportunityBriefs) {
     await replacePrivateText(
-      path.join(campaignPath, "opportunity-brief.md"),
-      renderOpportunityBrief(rebuiltCampaign.opportunityBrief),
+      path.join(campaignPath, opportunityBriefArtifactPath(brief)),
+      renderOpportunityBrief(brief),
     );
   }
-  if (rebuiltCampaign.inconclusiveComparisonReport !== undefined) {
+  for (const report of rebuiltCampaign.authoritativeHistory
+    .inconclusiveComparisonReports) {
     await replacePrivateText(
-      path.join(campaignPath, "inconclusive-comparison-report.md"),
-      renderInconclusiveComparisonReport(
-        rebuiltCampaign.inconclusiveComparisonReport,
-      ),
+      path.join(campaignPath, inconclusiveComparisonArtifactPath(report)),
+      renderInconclusiveComparisonReport(report),
     );
   }
   for (const brief of rebuiltCampaign.opportunityBriefs ?? []) {

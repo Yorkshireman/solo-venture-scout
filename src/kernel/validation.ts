@@ -517,7 +517,8 @@ export function validatePublicResearchCommandBase(
     | "requestedAt"
     | "respondedAt"
     | "incurredAt"
-    | "concludedAt",
+    | "concludedAt"
+    | "reevaluatedAt",
 ): string[] {
   const details: string[] = [];
   for (const field of ["campaignPath", "coordinatorId"] as const) {
@@ -941,19 +942,21 @@ export function validateSourceCredibility(value: unknown, field: string): string
 }
 
 export function validateSourceFreshness(value: unknown, field: string): string[] {
+  const allowedFields = [
+    "type",
+    "id",
+    "sourceId",
+    "observationId",
+    "intendedUse",
+    "assessment",
+    "timeSensitivity",
+    "rationale",
+    "limitations",
+  ];
   if (
     !isRecord(value) ||
-    !hasOnlyFields(value, [
-      "type",
-      "id",
-      "sourceId",
-      "observationId",
-      "intendedUse",
-      "assessment",
-      "timeSensitivity",
-      "rationale",
-      "limitations",
-    ]) ||
+    (!hasOnlyFields(value, allowedFields) &&
+      !hasOnlyFields(value, [...allowedFields, "refreshAfter"])) ||
     value.type !== "source-freshness"
   ) {
     return [`${field} must be a complete contextual Source Freshness entry.`];
@@ -968,6 +971,13 @@ export function validateSourceFreshness(value: unknown, field: string): string[]
   ]);
   if (!["unknown", "low", "medium", "high"].includes(String(value.assessment))) {
     details.push(`${field}.assessment must be unknown, low, medium, or high.`);
+  }
+  if (
+    value.refreshAfter !== undefined &&
+    value.refreshAfter !== null &&
+    !isIsoInstant(value.refreshAfter)
+  ) {
+    details.push(`${field}.refreshAfter must be an ISO 8601 UTC instant or null.`);
   }
   details.push(...validateAssessmentLimitations(value.limitations, field));
   return details;
@@ -1159,8 +1169,8 @@ export function validateCorrection(value: unknown, field: string): string[] {
     "targetEntryId",
     "rationale",
   ]);
-  if (!(["supersede", "retract"] as unknown[]).includes(value.action)) {
-    details.push(`${field}.action must be supersede or retract.`);
+  if (!(["reaffirm", "supersede", "retract"] as unknown[]).includes(value.action)) {
+    details.push(`${field}.action must be reaffirm, supersede, or retract.`);
   }
   if (
     value.action === "supersede" &&
@@ -1172,8 +1182,11 @@ export function validateCorrection(value: unknown, field: string): string[] {
       `${field}.replacementEntryId must identify a different replacement when superseding.`,
     );
   }
-  if (value.action === "retract" && value.replacementEntryId !== null) {
-    details.push(`${field}.replacementEntryId must be null when retracting.`);
+  if (
+    (value.action === "reaffirm" || value.action === "retract") &&
+    value.replacementEntryId !== null
+  ) {
+    details.push(`${field}.replacementEntryId must be null when reaffirming or retracting.`);
   }
   details.push(
     ...validatePersistableText(
@@ -1910,6 +1923,7 @@ export function validateGateDecision(
   field: string,
   expectedKind: "exclusion-gate" | "qualification-gate",
   label: "Exclusion Gate" | "Qualification Gate",
+  allowPriorDecision = false,
 ): string[] {
   if (
     !isRecord(value) ||
@@ -1963,7 +1977,13 @@ export function validateGateDecision(
     ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
     ...validateAssessmentLimitations(value.limitations, field),
   );
-  if (!isIsoInstant(value.decidedAt) || value.decidedAt !== recordedAt) {
+  if (
+    !isIsoInstant(value.decidedAt) ||
+    (!allowPriorDecision && value.decidedAt !== recordedAt) ||
+    (allowPriorDecision &&
+      isIsoInstant(recordedAt) &&
+      value.decidedAt > recordedAt)
+  ) {
     details.push(`${field}.decidedAt must equal the operation's recordedAt instant.`);
   }
   const terminal = value.outcome === "passed" || value.outcome === "failed";
@@ -1988,6 +2008,7 @@ export function validateOpportunityGateDecision(
   value: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecision = false,
 ): string[] {
   return validateGateDecision(
     value,
@@ -1995,6 +2016,7 @@ export function validateOpportunityGateDecision(
     field,
     "exclusion-gate",
     "Exclusion Gate",
+    allowPriorDecision,
   );
 }
 
@@ -2003,6 +2025,7 @@ export function validateExclusionGate(
   opportunityId: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecision = false,
 ): string[] {
   if (
     !isRecord(value) ||
@@ -2015,7 +2038,12 @@ export function validateExclusionGate(
     details.push(`${field}.state must be passed, failed, or unresolved.`);
   }
   details.push(
-    ...validateOpportunityGateDecision(value.decision, recordedAt, `${field}.decision`),
+    ...validateOpportunityGateDecision(
+      value.decision,
+      recordedAt,
+      `${field}.decision`,
+      allowPriorDecision,
+    ),
   );
   if (
     isRecord(value.decision) &&
@@ -2031,6 +2059,7 @@ export function validateOpportunityExclusionAssessment(
   value: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecisions = false,
 ): string[] {
   if (
     !isRecord(value) ||
@@ -2064,6 +2093,7 @@ export function validateOpportunityExclusionAssessment(
         value.opportunityId,
         recordedAt,
         `${field}.marketSafety.gate`,
+        allowPriorDecisions,
       ),
     );
     if (
@@ -2116,6 +2146,7 @@ export function validateOpportunityExclusionAssessment(
           value.opportunityId,
           recordedAt,
           `${constraintField}.gate`,
+          allowPriorDecisions,
         ),
       );
     }
@@ -2130,6 +2161,14 @@ export function validateRecordOpportunityExclusionGatesFields(
     return ["payload must be an object."];
   }
   const details = validatePublicResearchCommandBase(command.payload, "recordedAt");
+  const allowPriorDecisions = command.payload.reevaluationId !== undefined;
+  if (
+    allowPriorDecisions &&
+    (typeof command.payload.reevaluationId !== "string" ||
+      command.payload.reevaluationId.trim() === "")
+  ) {
+    details.push("payload.reevaluationId must be a stable non-empty identity.");
+  }
   if (!Array.isArray(command.payload.assessments) || command.payload.assessments.length === 0) {
     details.push("payload.assessments must contain every formed Opportunity.");
   } else {
@@ -2139,6 +2178,7 @@ export function validateRecordOpportunityExclusionGatesFields(
           assessment,
           command.payload.recordedAt,
           `payload.assessments[${index}]`,
+          allowPriorDecisions,
         ),
       );
     }
@@ -2247,6 +2287,7 @@ export function validateQualificationGateDecision(
   value: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecision = false,
 ): string[] {
   return validateGateDecision(
     value,
@@ -2254,6 +2295,7 @@ export function validateQualificationGateDecision(
     field,
     "qualification-gate",
     "Qualification Gate",
+    allowPriorDecision,
   );
 }
 
@@ -2262,6 +2304,7 @@ export function validateQualificationGate(
   opportunityId: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecision = false,
 ): string[] {
   if (!isRecord(value)) {
     return [`${field} must be a complete Qualification Gate.`];
@@ -2294,6 +2337,7 @@ export function validateQualificationGate(
       value.decision,
       recordedAt,
       `${field}.decision`,
+      allowPriorDecision,
     ),
   );
   if (
@@ -2454,6 +2498,7 @@ export function validateOpportunityQualificationAssessment(
   value: unknown,
   recordedAt: unknown,
   field: string,
+  allowPriorDecisions = false,
 ): string[] {
   if (
     !isRecord(value) ||
@@ -2472,6 +2517,7 @@ export function validateOpportunityQualificationAssessment(
           value.opportunityId,
           recordedAt,
           `${field}.gates[${index}]`,
+          allowPriorDecisions,
         ),
       );
     }
@@ -2486,6 +2532,14 @@ export function validateRecordOpportunityQualificationGatesFields(
     return ["payload must be an object."];
   }
   const details = validatePublicResearchCommandBase(command.payload, "recordedAt");
+  const allowPriorDecisions = command.payload.reevaluationId !== undefined;
+  if (
+    allowPriorDecisions &&
+    (typeof command.payload.reevaluationId !== "string" ||
+      command.payload.reevaluationId.trim() === "")
+  ) {
+    details.push("payload.reevaluationId must be a stable non-empty identity.");
+  }
   if (
     !isRecord(command.payload.evaluation) ||
     !hasOnlyFields(command.payload.evaluation, [
@@ -2510,6 +2564,7 @@ export function validateRecordOpportunityQualificationGatesFields(
           assessment,
           command.payload.recordedAt,
           `payload.evaluation.assessments[${index}]`,
+          allowPriorDecisions,
         ),
       );
     }
@@ -3835,5 +3890,164 @@ export function validateRespondInconclusiveComparisonFields(
   details.push(
     ...validateReasoningTextFields(response, "payload.response", ["rationale"]),
   );
+  return details;
+}
+
+export function validateReevaluateCampaignFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "reevaluatedAt",
+  );
+  if (
+    !hasOnlyFields(command.payload, [
+      "campaignPath",
+      "coordinatorId",
+      "reevaluatedAt",
+      "operation",
+    ]) ||
+    !isRecord(command.payload.operation)
+  ) {
+    details.push("payload must contain one complete re-evaluation operation.");
+    return details;
+  }
+  const operation = command.payload.operation;
+  if (
+    !hasOnlyFields(operation, [
+      "id",
+      "kind",
+      "reason",
+      "reasoningEntries",
+      "intakeRevision",
+      "decision",
+    ])
+  ) {
+    details.push("payload.operation must contain the complete explicit re-evaluation operation.");
+    return details;
+  }
+  details.push(
+    ...validateReasoningTextFields(operation, "payload.operation", ["id", "reason"]),
+    ...validatePersistableText(operation.reason, "payload.operation.reason"),
+  );
+  if (
+    ![
+      "developer-challenge",
+      "intake-revision",
+      "source-correction",
+      "source-redaction",
+      "freshness-change",
+      "contradiction",
+      "new-evidence",
+      "resume-refresh",
+    ].includes(String(operation.kind))
+  ) {
+    details.push("payload.operation.kind is not a supported re-evaluation trigger.");
+  }
+  if (!Array.isArray(operation.reasoningEntries)) {
+    details.push("payload.operation.reasoningEntries must be an array.");
+  } else {
+    operation.reasoningEntries.forEach((entry, index) => {
+      details.push(
+        ...validateReasoningEntry(
+          entry,
+          `payload.operation.reasoningEntries[${index}]`,
+        ),
+      );
+    });
+  }
+  if (operation.intakeRevision !== null) {
+    if (
+      !isRecord(operation.intakeRevision) ||
+      !hasOnlyFields(operation.intakeRevision, ["reason", "intake"])
+    ) {
+      details.push("payload.operation.intakeRevision must contain a reason and complete confirmed Campaign Intake.");
+    } else {
+      details.push(
+        ...validateReasoningTextFields(
+          operation.intakeRevision,
+          "payload.operation.intakeRevision",
+          ["reason"],
+        ),
+        ...validatePersistableText(
+          operation.intakeRevision.reason,
+          "payload.operation.intakeRevision.reason",
+        ),
+        ...validateCampaignIntake(
+          isRecord(operation.intakeRevision.intake)
+            ? { ...operation.intakeRevision.intake, version: 1 }
+            : operation.intakeRevision.intake,
+          command.payload.reevaluatedAt,
+        ),
+      );
+    }
+  }
+  const decision = operation.decision;
+  if (
+    !isRecord(decision) ||
+    !hasOnlyFields(decision, [
+      "type",
+      "id",
+      "kind",
+      "outcome",
+      "intakeVersion",
+      "applicableRule",
+      "triggerEntryIds",
+      "affectedOpportunityIds",
+      "supersededDecisionIds",
+      "rationale",
+      "confidence",
+      "limitations",
+      "decidedAt",
+    ]) ||
+    decision.type !== "campaign-decision" ||
+    decision.kind !== "campaign-re-evaluation" ||
+    !["resume", "reaffirm"].includes(String(decision.outcome))
+  ) {
+    details.push("payload.operation.decision must be a complete campaign re-evaluation Campaign Decision.");
+    return details;
+  }
+  details.push(
+    ...validateReasoningTextFields(decision, "payload.operation.decision", [
+      "id",
+      "applicableRule",
+      "rationale",
+    ]),
+    ...validateEntryIdList(
+      decision.triggerEntryIds,
+      "payload.operation.decision.triggerEntryIds",
+      true,
+    ),
+    ...validateEntryIdList(
+      decision.affectedOpportunityIds,
+      "payload.operation.decision.affectedOpportunityIds",
+      true,
+    ),
+    ...validateEntryIdList(
+      decision.supersededDecisionIds,
+      "payload.operation.decision.supersededDecisionIds",
+      true,
+    ),
+    ...validateEvidenceConfidence(
+      decision.confidence,
+      "payload.operation.decision.confidence",
+    ),
+    ...validateAssessmentLimitations(
+      decision.limitations,
+      "payload.operation.decision",
+    ),
+  );
+  if (!Number.isSafeInteger(decision.intakeVersion) || Number(decision.intakeVersion) <= 0) {
+    details.push("payload.operation.decision.intakeVersion must be a positive safe integer.");
+  }
+  if (
+    !isIsoInstant(decision.decidedAt) ||
+    decision.decidedAt !== command.payload.reevaluatedAt
+  ) {
+    details.push("payload.operation.decision.decidedAt must equal payload.reevaluatedAt.");
+  }
   return details;
 }

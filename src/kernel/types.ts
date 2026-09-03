@@ -231,6 +231,7 @@ export type SourceFreshness = {
   timeSensitivity: string;
   rationale: string;
   limitations: string[];
+  refreshAfter?: string | null;
 };
 
 export type EvidenceGap = {
@@ -278,7 +279,7 @@ export type Correction = {
   type: "correction";
   id: string;
   targetEntryId: string;
-  action: "supersede" | "retract";
+  action: "reaffirm" | "supersede" | "retract";
   replacementEntryId: string | null;
   rationale: string;
 };
@@ -508,12 +509,80 @@ export type InconclusiveComparisonCampaignDecision = Omit<
   leaderOpportunityId: null;
 };
 
+export type ReevaluationCampaignDecision = {
+  type: "campaign-decision";
+  id: string;
+  kind: "campaign-re-evaluation";
+  outcome: "resume" | "reaffirm";
+  intakeVersion: number;
+  applicableRule: string;
+  triggerEntryIds: string[];
+  affectedOpportunityIds: string[];
+  supersededDecisionIds: string[];
+  rationale: string;
+  confidence: EvidenceConfidence;
+  limitations: string[];
+  decidedAt: string;
+};
+
 export type CampaignDecision =
   | FormationCampaignDecision
   | OpportunityGateDecision
   | QualificationCampaignDecision
   | ComparisonCampaignDecision
-  | InconclusiveComparisonCampaignDecision;
+  | InconclusiveComparisonCampaignDecision
+  | ReevaluationCampaignDecision;
+
+export type CampaignReevaluationKind =
+  | "developer-challenge"
+  | "intake-revision"
+  | "source-correction"
+  | "source-redaction"
+  | "freshness-change"
+  | "contradiction"
+  | "new-evidence"
+  | "resume-refresh";
+
+export type CampaignIntakeRevision = {
+  reason: string;
+  previousVersion: number;
+  intake: ConfirmedCampaignIntake;
+};
+
+export type CampaignReevaluation = {
+  id: string;
+  kind: CampaignReevaluationKind;
+  reason: string;
+  reasoningEntryIds: string[];
+  intakeRevision: CampaignIntakeRevision | null;
+  decision: ReevaluationCampaignDecision;
+  invalidatedDecisionIds: string[];
+  supersededArtifactIds: string[];
+};
+
+export type ReevaluationOperationInput = {
+  id: string;
+  kind: CampaignReevaluationKind;
+  reason: string;
+  reasoningEntries: ReasoningEntry[];
+  intakeRevision: null | {
+    reason: string;
+    intake: CampaignIntake;
+  };
+  decision: ReevaluationCampaignDecision;
+};
+
+export type ReevaluateCampaignCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "reevaluateCampaign";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    reevaluatedAt: string;
+    operation: ReevaluationOperationInput;
+  };
+};
 
 export type ExclusionGate = {
   id: string;
@@ -553,6 +622,7 @@ export type RecordOpportunityExclusionGatesCommand = {
     campaignPath: string;
     coordinatorId: string;
     recordedAt: string;
+    reevaluationId?: string;
     assessments: OpportunityExclusionAssessment[];
   };
 };
@@ -624,6 +694,7 @@ export type RecordOpportunityQualificationGatesCommand = {
     campaignPath: string;
     coordinatorId: string;
     recordedAt: string;
+    reevaluationId?: string;
     evaluation: OpportunityQualificationEvaluation;
   };
 };
@@ -642,6 +713,7 @@ export type NoQualifyingOpportunityReport = {
   campaignId: string;
   concludedAt: string;
   intakeVersion: number;
+  supersedes: string | null;
   outcome: "no-qualifying-opportunity";
   summary: string;
   rejectedOpportunities: Array<{
@@ -854,7 +926,7 @@ export type OpportunityBrief = {
   campaignId: string;
   concludedAt: string;
   intakeVersion: number;
-  supersedes: null;
+  supersedes: string | null;
   selectionProvenance?: {
     kind: "developer-selection";
     reportId: string;
@@ -1478,7 +1550,7 @@ export type WorkView = {
     | {
         outcome: "no-qualifying-opportunity";
         reportId: string;
-        artifactPath: "no-qualifying-opportunity-report.md";
+        artifactPath: string;
         immutable: true;
         concludedAt: string;
       }
@@ -1486,14 +1558,14 @@ export type WorkView = {
         outcome: "leading-opportunity";
         briefId: string;
         opportunityId: string;
-        artifactPath: "opportunity-brief.md";
+        artifactPath: string;
         immutable: true;
         concludedAt: string;
       }
     | {
         outcome: "inconclusive-comparison";
         reportId: string;
-        artifactPath: "inconclusive-comparison-report.md";
+        artifactPath: string;
         action: "stopped";
         immutable: true;
         concludedAt: string;
@@ -1508,7 +1580,7 @@ export type WorkView = {
       };
   inconclusiveComparison?: {
     reportId: string;
-    artifactPath: "inconclusive-comparison-report.md";
+    artifactPath: string;
     immutable: true;
     concludedAt: string;
     availableActions: ["stop", "extend", "select"];
@@ -1518,6 +1590,19 @@ export type WorkView = {
     intakeVersion: number;
     targetedEvidenceGapIds: string[];
     affectedOpportunityIds: string[];
+  };
+  reevaluation?: {
+    id: string;
+    kind: CampaignReevaluationKind;
+    intakeVersion: number;
+    affectedOpportunityIds: string[];
+    invalidatedDecisionIds: string[];
+    supersededArtifactIds: string[];
+  };
+  evidenceRefresh?: {
+    freshnessIds: string[];
+    observationIds: string[];
+    affectedDecisionIds: string[];
   };
 };
 
@@ -1543,6 +1628,7 @@ export type AuthoritativeOperation =
   | "conclude-leading-opportunity"
   | "conclude-inconclusive-comparison"
   | "respond-inconclusive-comparison"
+  | "reevaluate-campaign"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"

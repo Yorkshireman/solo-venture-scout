@@ -48,6 +48,7 @@ export type OpportunityBriefBuildInput = {
     entryIds: string[];
   }>;
   wayfinderHandoff: OpportunityBrief["wayfinderHandoff"];
+  supersedes?: string | null;
 };
 
 export type LeadingOpportunityServices = {
@@ -72,6 +73,18 @@ export type LeadingOpportunityServices = {
   researchBudgetViewForHistory: (
     history: AuthoritativeHistoryRebuild,
   ) => ResearchBudgetView;
+  hasActiveTerminalOutcome: (
+    history: AuthoritativeHistoryRebuild,
+  ) => boolean;
+  latestSupersededArtifactId: (
+    history: AuthoritativeHistoryRebuild,
+  ) => string | null;
+  invalidatedTerminalPrerequisiteDecisionId: (
+    history: AuthoritativeHistoryRebuild,
+  ) => string | undefined;
+  opportunityBriefArtifactPath: (
+    brief: Pick<OpportunityBrief, "id" | "supersedes">,
+  ) => string;
 };
 
 export function createLeadingOpportunityModule({
@@ -81,6 +94,10 @@ export function createLeadingOpportunityModule({
   noQualifyingOpportunityDisposition,
   supportingObservationIds,
   researchBudgetViewForHistory,
+  hasActiveTerminalOutcome,
+  latestSupersededArtifactId,
+  invalidatedTerminalPrerequisiteDecisionId,
+  opportunityBriefArtifactPath,
 }: LeadingOpportunityServices) {
   function eligibleOpportunityIds(
     history: AuthoritativeHistoryRebuild,
@@ -189,11 +206,11 @@ export function createLeadingOpportunityModule({
     ) {
       return "Opportunity comparison requires a passed Breadth Gate and completed Qualification Gates";
     }
-    if (
-      history.noQualifyingOpportunityReports.length > 0 ||
-      history.opportunityBriefs.length > 0
-    ) {
+    if (hasActiveTerminalOutcome(history)) {
       return "the Scouting Campaign already has an immutable terminal artifact";
+    }
+    if (invalidatedTerminalPrerequisiteDecisionId(history) !== undefined) {
+      return "Opportunity comparison requires new Campaign Decisions for re-evaluated gates";
     }
     if (history.reservations.size !== history.settledReservationIds.size) {
       return "Opportunity comparison requires every reserved Source examination to be settled";
@@ -809,7 +826,11 @@ export function createLeadingOpportunityModule({
       campaignId: history.campaignId,
       concludedAt: input.concludedAt,
       intakeVersion: history.intake!.version,
-      supersedes: null,
+      supersedes:
+        input.supersedes ??
+        (input.role === "developer-selected-opportunity"
+          ? null
+          : latestSupersededArtifactId(history)),
       ...(input.selectionProvenance === undefined
         ? {}
         : { selectionProvenance: input.selectionProvenance }),
@@ -877,12 +898,14 @@ export function createLeadingOpportunityModule({
   ): OpportunityBrief {
     const { comparison, brief } = command.payload;
     const leading = comparison.leadingAssessment;
+    const supersedes = latestSupersededArtifactId(history);
     return buildOpportunityBrief(history, {
       comparison,
       brief,
       opportunityId: leading.opportunityId,
       concludedAt: command.payload.concludedAt,
       role: "scout-recommended-leading-opportunity",
+      supersedes,
       selection: {
         rationale: comparison.decision.rationale,
         decisionId: comparison.decision.id,
@@ -908,7 +931,7 @@ export function createLeadingOpportunityModule({
       wayfinderHandoff: {
         optional: true,
         invoked: false,
-        briefPath: "opportunity-brief.md",
+        briefPath: opportunityBriefArtifactPath({ id: brief.id, supersedes }),
         instruction:
           "If you choose, invoke Wayfinder separately using this immutable Opportunity Brief as input; challenge the provisional Value Hypothesis and keep product-planning decisions outside this Campaign.",
       },
@@ -971,7 +994,7 @@ export function renderOpportunityBrief(brief: OpportunityBrief): string {
     `**Campaign:** ${briefText(brief.campaignId)}`,
     `**Campaign Intake version:** ${brief.intakeVersion}`,
     `**Created:** ${brief.concludedAt}`,
-    "**Supersedes:** none",
+    `**Supersedes:** ${brief.supersedes === null ? "none" : briefText(brief.supersedes)}`,
     "",
     "## Eligibility",
     "",

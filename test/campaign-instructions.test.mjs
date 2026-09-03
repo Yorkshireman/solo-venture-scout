@@ -374,3 +374,48 @@ test("packaged Scout pauses safely at restricted and paid research boundaries", 
     assert.match(reference, new RegExp(`"command": "${command}"`));
   }
 });
+
+test("packaged Scout records challenges, targeted re-evaluation, and terminal supersession explicitly", async () => {
+  const { outputRoot } = await buildPackagedScout(
+    "solo-venture-scout-reevaluation-guide-",
+  );
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(
+    instructions,
+    /natural-language challenge.+explicit.+correction|re-evaluation/is,
+  );
+  assert.match(
+    instructions,
+    /Campaign Intake revision.+reason.+new confirmed\s+version.+only dependent decisions/is,
+  );
+  assert.match(
+    instructions,
+    /reaffirm.+supersede.+retract.+stable links/is,
+  );
+  assert.match(
+    instructions,
+    /Rejected Opportunities.+active.+Eligible Opportunities.+lose\s+eligibility/is,
+  );
+  assert.match(
+    instructions,
+    /terminal artifacts.+immutable.+explicit\s+supersession/is,
+  );
+  assert.match(
+    instructions,
+    /continued campaign.+identity.+evidence.+lineage.+independent objective.+new\s+campaign/is,
+  );
+  assert.match(
+    instructions,
+    /Resume.+only.+time-sensitive evidence.+active\s+decision/is,
+  );
+  assert.match(reference, /"command": "reevaluateCampaign"/);
+  assert.match(reference, /"kind": "campaign-re-evaluation"/);
+  assert.match(reference, /"supersededDecisionIds"/);
+  assert.match(reference, /"refreshAfter"/);
+});

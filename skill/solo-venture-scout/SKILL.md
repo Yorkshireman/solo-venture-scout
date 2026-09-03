@@ -427,6 +427,44 @@ when exactly one direct Scouting Campaign is present. Report the validated Work 
 lease, phase or pause, and next permitted actions. Do not acquire a lease or repair
 state during inspection.
 
+## Re-evaluate challenges and revisions
+
+Treat every natural-language challenge to evidence, reasoning, an assumption, or an
+outcome as a request for an explicit correction or re-evaluation. Never silently edit
+Campaign files or reinterpret the historical record. Restate the challenge, identify
+its stable Evidence Ledger and Campaign Decision links, show the proposed effect, and
+run `reevaluateCampaign` from
+[references/campaigns.md](references/campaigns.md) only after the developer confirms
+any revised Campaign Intake.
+
+A Campaign Intake revision must record its reason, produce a new confirmed version,
+preserve every earlier version, and invalidate only dependent decisions. Name those decisions in
+`supersededDecisionIds` and only affected Opportunities in
+`affectedOpportunityIds`; unrelated gates, comparisons, and evidence stay current.
+Use append-only Corrections to reaffirm, supersede, or retract affected records through
+stable links. Record source corrections, redactions, Source Freshness changes,
+Contradictions, and new evidence explicitly, then reassess transitively dependent
+Inferences.
+
+Rejected Opportunities can become active and Eligible Opportunities can lose
+eligibility when their current decision is superseded. Unresolved work resumes only
+through the new campaign re-evaluation Campaign Decision. Prior terminal artifacts
+remain immutable; the re-evaluation records their explicit supersession and later
+terminal results must link back to the superseded artifact rather than overwrite it.
+When replacing gate decisions, pass the re-evaluation identity to the existing gate
+command and submit only affected Opportunity assessments; retain unchanged gate
+decisions in the rebuilt current snapshot.
+
+A continued campaign retains its Scouting Campaign identity and complete evidence
+lineage. If the developer deliberately chooses an independent objective, create a new
+campaign with a new identity instead of using re-evaluation to broaden the old one.
+
+On Resume, use `evidenceRefresh` from the rebuilt Work View. Refresh only listed
+time-sensitive evidence capable of changing an active decision, and do not repeat
+unrelated completed research. A Source Freshness assessment can provide an explicit
+`refreshAfter` instant; expiry alone schedules review and does not silently retract the
+evidence or decide the outcome.
+
 ## Resume a Scouting Campaign
 
 Resume from developer-supplied filesystem state, never from conversation memory or

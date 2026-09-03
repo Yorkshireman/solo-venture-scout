@@ -29,6 +29,9 @@ export type InconclusiveComparisonServices = {
     history: AuthoritativeHistoryRebuild,
     input: OpportunityBriefBuildInput,
   ) => OpportunityBrief;
+  latestSupersededArtifactId: (
+    history: AuthoritativeHistoryRebuild,
+  ) => string | null;
 };
 
 export function createInconclusiveComparisonModule({
@@ -36,6 +39,7 @@ export function createInconclusiveComparisonModule({
   availableAffirmativeEvidenceIds,
   unresolvedOpportunityIds,
   buildOpportunityBrief,
+  latestSupersededArtifactId,
 }: InconclusiveComparisonServices) {
   function evidenceViolation(
     history: AuthoritativeHistoryRebuild,
@@ -219,7 +223,7 @@ export function createInconclusiveComparisonModule({
       campaignId: history.campaignId,
       concludedAt: command.payload.concludedAt,
       intakeVersion: history.intake!.version,
-      supersedes: history.inconclusiveComparisonReports.at(-1)?.id ?? null,
+      supersedes: latestSupersededArtifactId(history),
       comparison: command.payload.comparison,
       availableActions: ["stop", "extend", "select"],
       audit: {
@@ -309,6 +313,8 @@ export function renderInconclusiveComparisonReport(
   );
   return [
     "# Inconclusive Comparison Report",
+    "",
+    `**Supersedes:** ${report.supersedes === null ? "none" : reportText(report.supersedes)}`,
     "",
     "## Unscored side-by-side comparison",
     "",

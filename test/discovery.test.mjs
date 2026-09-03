@@ -4962,6 +4962,54 @@ test("a robust comparison produces one immutable Leading Opportunity Brief", asy
   assert.equal(postTerminalResearch.code, 3);
   assert.equal(postTerminalResearch.response.error.code, "SVS-CAMPAIGN-TERMINAL");
   assert.equal(await readFile(path.join(campaignPath, "opportunity-brief.md"), "utf8"), artifact);
+
+  const challenged = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "reevaluate-leading-opportunity-1",
+    command: "reevaluateCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      reevaluatedAt: "2026-09-01T10:32:00.000Z",
+      operation: {
+        id: "reevaluation-leading-opportunity-1",
+        kind: "developer-challenge",
+        reason: "New evidence challenges the comparison advantage of the Leading Opportunity.",
+        reasoningEntries: [],
+        intakeRevision: null,
+        decision: {
+          type: "campaign-decision",
+          id: "decision-reevaluate-leading-opportunity-1",
+          kind: "campaign-re-evaluation",
+          outcome: "resume",
+          intakeVersion: 1,
+          applicableRule: "An Eligible Opportunity loses eligibility while a decision-changing challenge is unresolved.",
+          triggerEntryIds: ["inference-adversarial-leader-survives"],
+          affectedOpportunityIds: [command.payload.comparison.decision.leaderOpportunityId],
+          supersededDecisionIds: [command.payload.comparison.decision.id],
+          rationale: "Re-open only the challenged Opportunity comparison and its terminal handoff.",
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The new evidence still requires adjudication."],
+          },
+          limitations: ["Unrelated eligibility decisions remain current."],
+          decidedAt: "2026-09-01T10:32:00.000Z",
+        },
+      },
+    },
+  });
+  assert.equal(challenged.code, 0, `${challenged.stderr}\n${JSON.stringify(challenged.response)}`);
+  const formerLeader = challenged.response.result.workView.opportunities.find(
+    (/** @type {any} */ opportunity) =>
+      opportunity.id === command.payload.comparison.decision.leaderOpportunityId,
+  );
+  assert.equal(formerLeader.disposition.status, "unresolved");
+  assert.equal(formerLeader.eligibility, "pending-qualification");
+  assert.equal(formerLeader.terminalRole, null);
+  assert.deepEqual(challenged.response.result.supersededArtifactIds, [
+    command.payload.brief.id,
+  ]);
+  assert.equal(await readFile(path.join(campaignPath, "opportunity-brief.md"), "utf8"), artifact);
 });
 
 test("no eligible Opportunity is a successful immutable terminal outcome", async () => {
@@ -4984,6 +5032,31 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
     assert.equal(response.code, 0, response.stderr);
   }
 
+  const capacityEvidence = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-solo-capacity-inference-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:59:00.000Z",
+      entries: [{
+        type: "inference",
+        id: "inference-dispatch-solo-capacity",
+        text: "The current operating burden exceeds the developer's solo capacity.",
+        scope: "opportunity-dispatch-reconciliation",
+        reasoning: "The bounded workflow evidence implies more ongoing work than the confirmed capacity permits.",
+        supportingEntryIds: ["inference-dispatch-market-classification"],
+        challengingEntryIds: [],
+        confidence: {
+          level: "medium",
+          limitingFactors: ["Automation could change the operating burden."],
+        },
+      }],
+    },
+  });
+  assert.equal(capacityEvidence.code, 0, capacityEvidence.stderr);
+
   const qualification = opportunityQualificationGatesCommand(campaignPath);
   qualification.requestId = "record-terminal-qualification-gates";
   qualification.payload.evaluation.id = "qualification-evaluation-terminal";
@@ -4993,7 +5066,7 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
   rejectedGate.state = "failed";
   rejectedGate.decision.outcome = "failed";
   rejectedGate.decision.supportingEvidenceEntryIds = [
-    "inference-dispatch-market-classification",
+    "inference-dispatch-solo-capacity",
   ];
   rejectedGate.decision.evidenceGapIds = [];
   rejectedGate.decision.rationale =
@@ -5208,6 +5281,166 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
   assert.equal(postTerminalResume.code, 3);
   assert.equal(postTerminalResume.response.error.code, "SVS-CAMPAIGN-TERMINAL");
   assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const reopened = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "reevaluate-no-qualifier-capacity-1",
+    command: "reevaluateCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      reevaluatedAt: "2026-09-01T10:08:00.000Z",
+      operation: {
+        id: "reevaluation-no-qualifier-capacity-1",
+        kind: "developer-challenge",
+        reason: "The developer can now automate the operating work that caused rejection.",
+        reasoningEntries: [],
+        intakeRevision: null,
+        decision: {
+          type: "campaign-decision",
+          id: "decision-reevaluate-no-qualifier-capacity-1",
+          kind: "campaign-re-evaluation",
+          outcome: "resume",
+          intakeVersion: 1,
+          applicableRule: "A rejected Opportunity may resume only through a new Campaign Decision.",
+          triggerEntryIds: ["inference-dispatch-solo-capacity"],
+          affectedOpportunityIds: ["opportunity-dispatch-reconciliation"],
+          supersededDecisionIds: [
+            rejectedGate.decision.id,
+            qualification.payload.evaluation.researchDecision.id,
+          ],
+          rationale: "Re-evaluate only the Solo Developer feasibility gate for the affected Opportunity.",
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The claimed automation still requires evidence."],
+          },
+          limitations: ["All unrelated Opportunity decisions remain unchanged."],
+          decidedAt: "2026-09-01T10:08:00.000Z",
+        },
+      },
+    },
+  });
+  assert.equal(reopened.code, 0, `${reopened.stderr}\n${JSON.stringify(reopened.response)}`);
+  assert.deepEqual(reopened.response.result.invalidatedDecisionIds, [
+    rejectedGate.decision.id,
+    qualification.payload.evaluation.researchDecision.id,
+  ]);
+  assert.deepEqual(reopened.response.result.supersededArtifactIds, [
+    "no-qualifying-opportunity-report-1",
+  ]);
+  assert.equal(reopened.response.result.workView.phase, "opportunity-deepening");
+  assert.equal(reopened.response.result.workView.terminal, undefined);
+  assert.deepEqual(
+    reopened.response.result.workView.opportunities.map(
+      (/** @type {any} */ opportunity) => ({
+        id: opportunity.id,
+        disposition: opportunity.disposition.status,
+      }),
+    ),
+    [
+      { id: "opportunity-dispatch-reconciliation", disposition: "active" },
+      { id: "opportunity-specialist-tender-review", disposition: "unresolved" },
+    ],
+  );
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const prematureConclusion = structuredClone(conclusion);
+  prematureConclusion.requestId = "conclude-before-new-capacity-decision-1";
+  prematureConclusion.payload.reportId =
+    "no-qualifying-opportunity-before-new-capacity-decision-1";
+  prematureConclusion.payload.concludedAt = "2026-09-01T10:08:30.000Z";
+  const premature = await runKernel(kernelPath, prematureConclusion);
+  assert.equal(premature.code, 3);
+  assert.equal(
+    premature.response.error.code,
+    "SVS-NO-QUALIFYING-OPPORTUNITY-NOT-AVAILABLE",
+  );
+  assert.match(premature.response.error.message, /new Campaign Decisions/);
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const resumedWork = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-reopened-capacity-gap-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:09:00.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-reopened-solo-feasibility",
+          question: "Does the proposed automation make solo operation feasible?",
+          affectedDecisionIds: ["decision-reevaluate-no-qualifier-capacity-1"],
+          resolutionCriteria: "Current evidence establishes the bounded operating input.",
+          resolutionMethod: "Run only targeted read-only research for solo feasibility.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(
+    resumedWork.code,
+    0,
+    `${resumedWork.stderr}\n${JSON.stringify(resumedWork.response)}`,
+  );
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const revisedQualification = structuredClone(qualification);
+  revisedQualification.requestId = "record-reassessed-solo-feasibility-1";
+  revisedQualification.payload.recordedAt = "2026-09-01T10:10:00.000Z";
+  revisedQualification.payload.reevaluationId =
+    "reevaluation-no-qualifier-capacity-1";
+  revisedQualification.payload.evaluation.id =
+    "qualification-evaluation-reassessed-solo-feasibility";
+  revisedQualification.payload.evaluation.assessments = [
+    revisedQualification.payload.evaluation.assessments[0],
+  ];
+  const revisedSoloGate =
+    revisedQualification.payload.evaluation.assessments[0].gates.find(
+      (/** @type {any} */ gate) => gate.kind === "solo-feasibility",
+    );
+  revisedSoloGate.id = "gate-solo-feasibility-reassessed";
+  revisedSoloGate.decision.id = "decision-solo-feasibility-reassessed";
+  revisedSoloGate.decision.decidedAt = "2026-09-01T10:10:00.000Z";
+  revisedSoloGate.decision.rationale =
+    "The targeted reassessment still finds the operating burden infeasible for one developer.";
+  revisedQualification.payload.evaluation.researchDecision.id =
+    "decision-reassessed-qualification-research-stop";
+  revisedQualification.payload.evaluation.researchDecision.decidedAt =
+    "2026-09-01T10:10:00.000Z";
+  const reassessed = await runKernel(kernelPath, revisedQualification);
+  assert.equal(
+    reassessed.code,
+    0,
+    `${reassessed.stderr}\n${JSON.stringify(reassessed.response)}`,
+  );
+
+  const laterConclusion = structuredClone(conclusion);
+  laterConclusion.requestId = "conclude-reassessed-no-qualifier-1";
+  laterConclusion.payload.reportId =
+    "no-qualifying-opportunity-report-reassessed";
+  laterConclusion.payload.concludedAt = "2026-09-01T10:11:00.000Z";
+  const reconcluded = await runKernel(kernelPath, laterConclusion);
+  assert.equal(
+    reconcluded.code,
+    0,
+    `${reconcluded.stderr}\n${JSON.stringify(reconcluded.response)}`,
+  );
+  assert.equal(
+    reconcluded.response.result.report.supersedes,
+    "no-qualifying-opportunity-report-1",
+  );
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+  const laterArtifactPath = path.join(
+    campaignPath,
+    "no-qualifying-opportunity-report-no-qualifying-opportunity-report-reassessed.md",
+  );
+  assert.match(
+    await readFile(laterArtifactPath, "utf8"),
+    /Supersedes: no-qualifying-opportunity-report-1/,
+  );
 });
 
 test("no surviving Opportunity still reaches the no-qualifier terminal outcome", async () => {

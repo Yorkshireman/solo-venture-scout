@@ -28,6 +28,7 @@ import type {
   RecordResearchApprovalInformationCommand,
   RespondResearchApprovalCommand,
   RecordResearchExpenditureCommand,
+  ReevaluateCampaignCommand,
 } from "./kernel/types.js";
 import {
   validateConfirmCampaignIntakeFields,
@@ -51,6 +52,7 @@ import {
   validateRequestResearchApprovalFields,
   validateReservePublicResearchFields,
   validateRespondResearchApprovalFields,
+  validateReevaluateCampaignFields,
   validateResumeCampaignFields,
   isRecord,
 } from "./kernel/validation.js";
@@ -71,6 +73,7 @@ import {
   recordResearchApprovalInformation,
   recordResearchExpenditure,
   requestResearchApproval,
+  reevaluateCampaign,
   reservePublicResearch,
   respondResearchApproval,
   resumeCampaign,
@@ -163,6 +166,7 @@ export async function executeCommand(
       "concludeLeadingOpportunity",
       "concludeInconclusiveComparison",
       "respondInconclusiveComparison",
+      "reevaluateCampaign",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -607,6 +611,32 @@ export async function executeCommand(
     }
     return respondInconclusiveComparison(
       command as unknown as RespondInconclusiveComparisonCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "reevaluateCampaign") {
+    const invalidFields = validateReevaluateCampaignFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-CAMPAIGN-REEVALUATION-INVALID",
+          message: "Campaign re-evaluation input is invalid.",
+          action:
+            "Record one explicit challenge or revision with stable links and a complete Campaign Decision.",
+          details: invalidFields,
+        },
+      };
+    }
+    return reevaluateCampaign(
+      command as unknown as ReevaluateCampaignCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

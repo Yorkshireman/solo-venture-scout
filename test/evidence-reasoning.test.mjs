@@ -396,6 +396,30 @@ test("Corrections supersede and retract reasoning without deleting its historica
   });
   assert.equal(initial.code, 0, initial.stderr);
 
+  const reaffirmingCorrection = {
+    type: "correction",
+    id: "correction-reaffirm-admin-cost",
+    targetEntryId: "inference-admin-cost-original",
+    action: "reaffirm",
+    replacementEntryId: null,
+    rationale: "The initial reading remains usable while its population scope is checked.",
+  };
+  const reaffirmed = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "reaffirm-original-inference-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:22:00.000Z",
+      entries: [reaffirmingCorrection],
+    },
+  });
+  assert.equal(reaffirmed.code, 0, reaffirmed.stderr);
+  assert.deepEqual(reaffirmed.response.result.workView.reasoning.activeInferenceIds, [
+    "inference-admin-cost-original",
+  ]);
+
   const replacementInference = {
     ...originalInference,
     id: "inference-admin-cost-narrowed",
@@ -469,6 +493,7 @@ test("Corrections supersede and retract reasoning without deleting its historica
     [
       "inference-admin-cost-original",
       "inference-admin-cost-narrowed",
+      "correction-reaffirm-admin-cost",
       "correction-narrow-admin-cost",
       "correction-retract-admin-cost",
     ],
@@ -479,6 +504,7 @@ test("Corrections supersede and retract reasoning without deleting its historica
   assert.deepEqual(inspected.response.result.entries, [
     originalInference,
     replacementInference,
+    reaffirmingCorrection,
     supersedingCorrection,
     retractingCorrection,
   ]);
@@ -494,6 +520,7 @@ test("Corrections supersede and retract reasoning without deleting its historica
     openEvidenceGapIds: [],
     unresolvedContradictionIds: [],
     correctionIds: [
+      "correction-reaffirm-admin-cost",
       "correction-narrow-admin-cost",
       "correction-retract-admin-cost",
     ],

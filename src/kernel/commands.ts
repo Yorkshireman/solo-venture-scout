@@ -18,6 +18,7 @@ import type {
   ConcludeLeadingOpportunityCommand,
   ConcludeInconclusiveComparisonCommand,
   RespondInconclusiveComparisonCommand,
+  ReevaluateCampaignCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -81,6 +82,13 @@ import {
   writePrivateJson,
   elevatedRiskApprovalRequestViolation,
   adversarialResearchViolation,
+  campaignReevaluationRecords,
+  campaignReevaluationViolation,
+  activeTerminalArtifactIds,
+  hasActiveTerminalOutcome,
+  noQualifyingOpportunityArtifactPath,
+  opportunityBriefArtifactPath,
+  inconclusiveComparisonArtifactPath,
 } from "./authority.js";
 import type { CoordinatorOperationLock } from "./authority.js";
 
@@ -99,6 +107,7 @@ export type CoordinatorCommand =
   | ConcludeLeadingOpportunityCommand
   | ConcludeInconclusiveComparisonCommand
   | RespondInconclusiveComparisonCommand
+  | ReevaluateCampaignCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -227,15 +236,12 @@ export async function runCoordinatorOperation<
       );
     }
 
+    const activeArtifactIds = new Set(
+      activeTerminalArtifactIds(rebuiltCampaign.authoritativeHistory),
+    );
     if (
-      rebuiltCampaign.authoritativeHistory.noQualifyingOpportunityReports.length >
-        0 ||
-      rebuiltCampaign.authoritativeHistory.opportunityBriefs.length > 0 ||
-      rebuiltCampaign.authoritativeHistory.inconclusiveComparisonResponses.some(
-        (response) => response.response.kind === "stop",
-      ) ||
-      rebuiltCampaign.authoritativeHistory.developerSelectedOpportunityBriefs
-        .length > 0
+      command.command !== "reevaluateCampaign" &&
+      hasActiveTerminalOutcome(rebuiltCampaign.authoritativeHistory)
     ) {
       return coordinatorOperationFailure(command, {
         code: "SVS-CAMPAIGN-TERMINAL",
@@ -247,10 +253,13 @@ export async function runCoordinatorOperation<
     }
 
     const activeInconclusiveReport = rebuiltCampaign.authoritativeHistory
-      .inconclusiveComparisonReports.at(-1);
+      .inconclusiveComparisonReports.findLast((report) =>
+        activeArtifactIds.has(report.id),
+      );
     if (
       activeInconclusiveReport !== undefined &&
       command.command !== "respondInconclusiveComparison" &&
+      command.command !== "reevaluateCampaign" &&
       !rebuiltCampaign.authoritativeHistory.inconclusiveComparisonResponses.some(
         (response) => response.reportId === activeInconclusiveReport.id,
       )
@@ -337,6 +346,95 @@ export async function runCoordinatorOperation<
       await releaseCoordinatorOperationLock(coordinatorLock);
     }
   }
+}
+
+export async function reevaluateCampaign(
+  command: ReevaluateCampaignCommand,
+  currentTime: string,
+) {
+  const result = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    campaign: campaign.campaign,
+    intake: campaign.intake,
+    reevaluation: campaign.reevaluation,
+    intakeRevision: campaign.intakeRevision,
+    invalidatedDecisionIds:
+      campaign.reevaluation?.invalidatedDecisionIds ?? [],
+    supersededArtifactIds:
+      campaign.reevaluation?.supersededArtifactIds ?? [],
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not re-evaluate the Campaign concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Campaign re-evaluation request identity was already used with different input.",
+      action:
+        "Reuse the original re-evaluation payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Campaign re-evaluation could not be recorded against valid authoritative history.",
+      action:
+        "Preserve Campaign contents and inspect the current Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["reevaluate-campaign"].outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.reevaluation) &&
+          record.reevaluation.id === command.payload.operation.id,
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      const violation = campaignReevaluationViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-CAMPAIGN-REEVALUATION-INVARIANT-VIOLATION",
+            message: `Campaign re-evaluation violates an invariant: ${violation}.`,
+            action:
+              "Record the challenge explicitly, preserve stable links, and supersede only affected decisions.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Campaign re-evaluation requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before re-evaluating it.",
+        };
+      },
+    },
+    records({ rebuiltCampaign }) {
+      return campaignReevaluationRecords(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
 }
 
 export async function resumeCampaign(command: ResumeCampaignCommand, currentTime: string) {
@@ -1919,6 +2017,8 @@ export async function recordOpportunityExclusionGates(
       const violation = opportunityExclusionEvaluationViolation(
         rebuiltCampaign.authoritativeHistory,
         evaluation,
+        command.payload.recordedAt,
+        command.payload.reevaluationId,
       );
       return violation === undefined
         ? undefined
@@ -2017,6 +2117,8 @@ export async function recordOpportunityQualificationGates(
       const violation = opportunityQualificationEvaluationViolation(
         rebuiltCampaign.authoritativeHistory,
         command.payload.evaluation,
+        command.payload.recordedAt,
+        command.payload.reevaluationId,
       );
       return violation === undefined
         ? undefined
@@ -2051,7 +2153,9 @@ export async function concludeNoQualifyingOpportunity(
     artifact: {
       path: path.join(
         campaign.campaign.path,
-        "no-qualifying-opportunity-report.md",
+        noQualifyingOpportunityArtifactPath(
+          campaign.noQualifyingOpportunityReport!,
+        ),
       ),
       format: "markdown" as const,
       immutable: true as const,
@@ -2148,7 +2252,10 @@ export async function concludeLeadingOpportunity(
     comparison: campaign.opportunityComparison,
     brief: campaign.opportunityBrief,
     artifact: {
-      path: path.join(campaign.campaign.path, "opportunity-brief.md"),
+      path: path.join(
+        campaign.campaign.path,
+        opportunityBriefArtifactPath(campaign.opportunityBrief!),
+      ),
       format: "markdown" as const,
       immutable: true as const,
     },
@@ -2245,7 +2352,12 @@ export async function concludeInconclusiveComparison(
     outcome: "inconclusive-comparison" as const,
     report: campaign.inconclusiveComparisonReport,
     artifact: {
-      path: path.join(campaign.campaign.path, "inconclusive-comparison-report.md"),
+      path: path.join(
+        campaign.campaign.path,
+        inconclusiveComparisonArtifactPath(
+          campaign.inconclusiveComparisonReport!,
+        ),
+      ),
       format: "markdown" as const,
       immutable: true as const,
     },

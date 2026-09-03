@@ -188,6 +188,10 @@ _Avoid_: Certainty score, source confidence
 An auditable conclusion that changes Opportunity formation, rejection, comparison, or terminal handoff. It records its Campaign Intake version, applicable rule, linked Evidence Ledger entries, rationale, confidence, limitations, and time.
 _Avoid_: Bare decision, result
 
+**Campaign Re-evaluation**:
+An explicit, append-only reassessment triggered by a challenge, revised Campaign Intake, or changed evidence that supersedes only dependent Campaign Decisions while preserving the Scouting Campaign's identity and history.
+_Avoid_: Silent edit, campaign restart
+
 **Opportunity Disposition**:
 The versioned current decision status of an Opportunity within a Scouting Campaign: active, rejected, or unresolved when the campaign ends. New evidence or Campaign Intake revisions may supersede the current disposition through an explicit Campaign Decision, while history is retained; Leading Opportunity is a terminal role, not a disposition.
 _Avoid_: Candidate lifecycle, research stage
