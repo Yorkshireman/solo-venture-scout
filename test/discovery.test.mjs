@@ -250,6 +250,53 @@ async function createDiscoveryCampaign(
     });
     assert.equal(recorded.code, 0, recorded.stderr);
   }
+
+  if (includeFormationEvidence) {
+    const classified = await runKernel(kernelPath, {
+      envelopeVersion: "0.1.0",
+      requestId: "record-opportunity-market-classification-inferences",
+      command: "recordEvidenceReasoning",
+      payload: {
+        campaignPath,
+        coordinatorId: "coordinator-primary",
+        recordedAt: "2026-09-01T09:36:00.000Z",
+        entries: [
+          {
+            type: "inference",
+            id: "inference-dispatch-market-classification",
+            text:
+              observationTextOverrides["observation-shallow-control-1"] ??
+              "The dispatch Opportunity's intended activity is an ordinary operational workflow.",
+            scope: "opportunity-dispatch-reconciliation",
+            reasoning:
+              "The cited shallow classification evidence describes the intended activity for this Opportunity.",
+            supportingEntryIds: ["observation-shallow-control-1"],
+            challengingEntryIds: [],
+            confidence: {
+              level: "medium",
+              limitingFactors: ["The classification evidence is bounded."],
+            },
+          },
+          {
+            type: "inference",
+            id: "inference-tender-market-classification",
+            text:
+              "The tender-review Opportunity's intended activity is an ordinary operational workflow.",
+            scope: "opportunity-specialist-tender-review",
+            reasoning:
+              "The cited shallow classification evidence describes the intended activity for this Opportunity.",
+            supportingEntryIds: ["observation-shallow-control-2"],
+            challengingEntryIds: [],
+            confidence: {
+              level: "medium",
+              limitingFactors: ["The classification evidence is bounded."],
+            },
+          },
+        ],
+      },
+    });
+    assert.equal(classified.code, 0, classified.stderr);
+  }
 }
 
 /**
@@ -955,7 +1002,7 @@ function passBreadthGateCommand(campaignPath) {
 function opportunityExclusionGatesCommand(campaignPath, options = {}) {
   const {
     dispatchClassification = "ordinary",
-    dispatchEvidenceEntryIds = ["observation-coordination-workaround"],
+    dispatchEvidenceEntryIds = ["inference-dispatch-market-classification"],
   } = options;
   const recordedAt = "2026-09-01T09:55:00.000Z";
   /**
@@ -1032,7 +1079,7 @@ function opportunityExclusionGatesCommand(campaignPath, options = {}) {
           marketSafety: marketSafety({
             opportunityId: "opportunity-specialist-tender-review",
             classification: "ordinary",
-            evidenceEntryIds: ["observation-procurement-escalation"],
+            evidenceEntryIds: ["inference-tender-market-classification"],
           }),
           hardConstraints: [],
         },
@@ -1422,6 +1469,26 @@ test("affirmative direct-service evidence rejects an Excluded Market with tracea
     /links unavailable affirmative evidence gap-rental-handoff-loss/,
   );
 
+  const rawObservationRejection = opportunityExclusionGatesCommand(campaignPath, {
+    dispatchClassification: "excluded-market",
+    dispatchEvidenceEntryIds: ["observation-shallow-control-1"],
+  });
+  rawObservationRejection.requestId =
+    "reject-raw-observation-without-opportunity-inference";
+  const rawObservationResult = await runKernel(
+    kernelPath,
+    rawObservationRejection,
+  );
+  assert.equal(rawObservationResult.code, 3);
+  assert.equal(
+    rawObservationResult.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(
+    rawObservationResult.response.error.message,
+    /must cite Opportunity-scoped Inferences/,
+  );
+
   const hypotheticalMisuse = opportunityExclusionGatesCommand(campaignPath, {
     dispatchClassification: "excluded-market",
     dispatchEvidenceEntryIds: ["observation-shallow-control-1"],
@@ -1444,7 +1511,7 @@ test("affirmative direct-service evidence rejects an Excluded Market with tracea
 
   const command = opportunityExclusionGatesCommand(campaignPath, {
     dispatchClassification: "excluded-market",
-    dispatchEvidenceEntryIds: ["observation-shallow-control-1"],
+    dispatchEvidenceEntryIds: ["inference-dispatch-market-classification"],
   });
   const recorded = await runKernel(kernelPath, command);
 
@@ -1504,6 +1571,69 @@ test("affirmative direct-service evidence rejects an Excluded Market with tracea
   );
 });
 
+test("an Exclusion Gate cannot omit an unresolved Contradiction involving its evidence", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-gate-contradiction-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "gate-contradiction-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const contradiction = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-dispatch-market-contradiction",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:54:00.000Z",
+      entries: [
+        {
+          type: "contradiction",
+          id: "contradiction-dispatch-market-classification",
+          entryIds: [
+            "inference-dispatch-market-classification",
+            "observation-regulatory-rework",
+          ],
+          disputedProposition:
+            "The dispatch Opportunity's intended activity is an ordinary operational workflow.",
+          disputedScope: "opportunity-dispatch-reconciliation",
+          attemptedReconciliation:
+            "The available shallow evidence does not yet reconcile the regulatory challenge.",
+          resolutionStatus: "unresolved",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(contradiction.code, 0, contradiction.stderr);
+
+  const omitted = opportunityExclusionGatesCommand(campaignPath);
+  omitted.requestId = "record-gates-omitting-known-contradiction";
+  const result = await runKernel(kernelPath, omitted);
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(
+    result.response.error.message,
+    /must record every unresolved Contradiction involving its evidence/,
+  );
+});
+
 test("Hard Constraint violations reject while missing exclusion evidence remains unresolved", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-hard-constraints-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
@@ -1519,6 +1649,12 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
       },
     ],
     true,
+    {
+      "observation-shallow-control-1":
+        "The dispatch software is sold through mandatory negotiated enterprise contracts.",
+      "observation-shallow-control-2":
+        "The tender-review service is purchased through a self-service monthly subscription.",
+    },
   );
   for (const command of [
     discoveryTrancheCommand(campaignPath),
@@ -1555,6 +1691,50 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
     },
   });
   assert.equal(gapResult.code, 0, gapResult.stderr);
+
+  const constraintInferences = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-hard-constraint-inferences",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:53:00.000Z",
+      entries: [
+        {
+          type: "inference",
+          id: "inference-dispatch-requires-enterprise-sales",
+          text:
+            "The dispatch Opportunity requires enterprise sales and violates the confirmed Hard Constraint.",
+          scope: "opportunity-dispatch-reconciliation",
+          reasoning:
+            "The cited route-to-market evidence requires a negotiated enterprise contract.",
+          supportingEntryIds: ["observation-shallow-control-1"],
+          challengingEntryIds: [],
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The route-to-market evidence is bounded."],
+          },
+        },
+        {
+          type: "inference",
+          id: "inference-tender-avoids-enterprise-sales",
+          text:
+            "The tender-review Opportunity has a self-service route and does not violate the confirmed Hard Constraint.",
+          scope: "opportunity-specialist-tender-review",
+          reasoning:
+            "The cited route-to-market evidence describes self-service purchasing.",
+          supportingEntryIds: ["observation-shallow-control-2"],
+          challengingEntryIds: [],
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The route-to-market evidence is bounded."],
+          },
+        },
+      ],
+    },
+  });
+  assert.equal(constraintInferences.code, 0, constraintInferences.stderr);
 
   const command = opportunityExclusionGatesCommand(campaignPath);
   /**
@@ -1596,7 +1776,7 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
     hardConstraintGate(
       "opportunity-dispatch-reconciliation",
       "failed",
-      "observation-dispatch-time-loss",
+      "inference-dispatch-requires-enterprise-sales",
     ),
   ];
   command.payload.assessments[0].marketSafety.classification = "elevated-risk";
@@ -1604,7 +1784,7 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
     hardConstraintGate(
       "opportunity-specialist-tender-review",
       "passed",
-      "observation-supplier-review-spend",
+      "inference-tender-avoids-enterprise-sales",
     ),
   ];
   const unresolvedMarket = command.payload.assessments[1].marketSafety;
@@ -1650,7 +1830,7 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
   omittedGapMarket.gate.state = "passed";
   omittedGapMarket.gate.decision.outcome = "passed";
   omittedGapMarket.gate.decision.supportingEvidenceEntryIds = [
-    "observation-procurement-escalation",
+    "inference-tender-market-classification",
   ];
   omittedGapMarket.gate.decision.evidenceGapIds = [];
   omittedGapMarket.gate.decision.rationale =

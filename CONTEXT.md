@@ -156,6 +156,10 @@ _Avoid_: Operating cost, implicit spend
 A market whose intended activity falls outside Solo Venture Scout's non-overridable safety boundary and cannot produce an eligible Opportunity.
 _Avoid_: Elevated-risk market, user exclusion
 
+**Market Safety Classification**:
+The classification of an Opportunity's intended activity as ordinary, an Elevated-Risk Market, an Excluded Market, or unresolved when the available evidence cannot establish one of those states.
+_Avoid_: Market eligibility, user risk rating
+
 **Elevated-Risk Market**:
 A market that may remain eligible but requires Opportunity-specific Research Approval because of material legal, regulatory, safety, or exploitation risk.
 _Avoid_: Excluded market, ordinary market

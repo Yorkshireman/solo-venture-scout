@@ -892,6 +892,11 @@ relationship uses classification and gate state `unresolved`, plus an explicit o
 Evidence Gap when support is absent. Any terminal gate state is invalid while a linked
 Evidence Gap or Contradiction remains decision-changing.
 
+Each supporting evidence identity must name an available Inference whose `scope` is
+the assessed `opportunityId`; raw Observations and Inferences scoped to another
+Opportunity cannot affirm a gate decision. The decision must enumerate every
+unresolved Contradiction involving any supporting or challenging evidence it cites.
+
 The Work View retains each gate separately, derives Opportunity Disposition, keeps
 eligibility and `terminalRole` distinct, and preserves every Campaign Decision in the
 Evidence Ledger. A failed gate rejects the Opportunity. An unresolved gate makes it

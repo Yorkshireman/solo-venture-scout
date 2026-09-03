@@ -391,6 +391,18 @@ export function hasElevatedRiskResearchApproval(
   );
 }
 
+export function isElevatedRiskApprovalUnavailable(
+  classification: OpportunityExclusionAssessment["marketSafety"]["classification"],
+  approvals: ResearchApproval[],
+  opportunityId: string,
+  availableAt: string,
+): boolean {
+  return (
+    classification === "elevated-risk" &&
+    !hasElevatedRiskResearchApproval(approvals, opportunityId, availableAt)
+  );
+}
+
 export type OpportunityGateView = NonNullable<
   NonNullable<WorkView["opportunities"]>[number]["exclusionGates"]
 >[number];
@@ -444,9 +456,12 @@ export function workViewAtInspectionTime(
     ) {
       return opportunity;
     }
-    const elevatedRiskApprovalUnavailable =
-      opportunity.marketSafety.classification === "elevated-risk" &&
-      !hasElevatedRiskResearchApproval(approvals, opportunity.id, inspectedAt);
+    const elevatedRiskApprovalUnavailable = isElevatedRiskApprovalUnavailable(
+      opportunity.marketSafety.classification,
+      approvals,
+      opportunity.id,
+      inspectedAt,
+    );
     renewalAvailable ||=
       elevatedRiskApprovalUnavailable &&
       opportunity.exclusionGates.every((gate) => gate.state !== "failed");
@@ -1250,6 +1265,11 @@ export function opportunityExclusionEvaluationViolation(
   );
   const hardConstraintIds = [...hardConstraintsById.keys()];
   const availableEvidenceIds = availableAffirmativeEvidenceIds(history);
+  const availableInferencesById = new Map(
+    history.inferences
+      .filter((inference) => availableEvidenceIds.has(inference.id))
+      .map((inference) => [inference.id, inference] as const),
+  );
   const existingDecisionIds = new Set(
     history.campaignDecisions.map((decision) => decision.id),
   );
@@ -1304,6 +1324,15 @@ export function opportunityExclusionEvaluationViolation(
       if (unavailableEvidenceId !== undefined) {
         return `Campaign Decision ${decision.id} links unavailable affirmative evidence ${unavailableEvidenceId}`;
       }
+      const unscopedSupportingEvidenceId =
+        decision.supportingEvidenceEntryIds.find(
+          (entryId) =>
+            availableInferencesById.get(entryId)?.scope !==
+            decision.opportunityId,
+        );
+      if (unscopedSupportingEvidenceId !== undefined) {
+        return `Campaign Decision ${decision.id} must cite Opportunity-scoped Inferences as supporting evidence; ${unscopedSupportingEvidenceId} is not an Inference scoped to ${decision.opportunityId}`;
+      }
       const unavailableGapId = decision.evidenceGapIds.find(
         (gapId) =>
           !history.evidenceGaps.some(
@@ -1337,6 +1366,29 @@ export function opportunityExclusionEvaluationViolation(
       );
       if (unavailableContradictionId !== undefined) {
         return `Campaign Decision ${decision.id} links unavailable unresolved Contradiction ${unavailableContradictionId}`;
+      }
+      const decisionEvidenceIds = new Set([
+        ...decision.supportingEvidenceEntryIds,
+        ...decision.challengingEvidenceEntryIds,
+      ]);
+      const involvedUnresolvedContradictionIds = history.contradictions
+        .filter(
+          (contradiction) =>
+            contradiction.resolutionStatus !== "resolved" &&
+            contradiction.entryIds.some((entryId) =>
+              decisionEvidenceIds.has(entryId),
+            ),
+        )
+        .map((contradiction) => contradiction.id);
+      if (
+        involvedUnresolvedContradictionIds.length !==
+          decision.contradictionIds.length ||
+        involvedUnresolvedContradictionIds.some(
+          (contradictionId) =>
+            !decision.contradictionIds.includes(contradictionId),
+        )
+      ) {
+        return `Campaign Decision ${decision.id} must record every unresolved Contradiction involving its evidence`;
       }
       if (
         gate.state === "unresolved" &&
@@ -2639,14 +2691,14 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     if (
       evaluation.assessments.some(
         (assessment) =>
-          assessment.marketSafety.classification === "elevated-risk" &&
-          exclusionGatesFor(assessment).every(
-            (gate) => gate.state !== "failed",
-          ) &&
-          !hasElevatedRiskResearchApproval(
+          isElevatedRiskApprovalUnavailable(
+            assessment.marketSafety.classification,
             researchApprovals,
             assessment.opportunityId,
             workViewAsOf,
+          ) &&
+          exclusionGatesFor(assessment).every(
+            (gate) => gate.state !== "failed",
           ),
       )
     ) {
@@ -2674,13 +2726,12 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           decisionId: constraint.gate.decision.id,
         })),
       ];
-      const elevatedRiskApprovalUnavailable =
-        assessment.marketSafety.classification === "elevated-risk" &&
-        !hasElevatedRiskResearchApproval(
-          researchApprovals,
-          assessment.opportunityId,
-          workViewAsOf,
-        );
+      const elevatedRiskApprovalUnavailable = isElevatedRiskApprovalUnavailable(
+        assessment.marketSafety.classification,
+        researchApprovals,
+        assessment.opportunityId,
+        workViewAsOf,
+      );
       const disposition = opportunityDispositionFor(
         gates,
         elevatedRiskApprovalUnavailable,

@@ -244,6 +244,9 @@ Campaign Intake version and applicable rule, supporting and challenging Evidence
 Ledger entries, Evidence Gaps, Contradictions, rationale, Evidence Confidence,
 limitations, and decision time. Use a terminal passed or failed state only at medium
 or high confidence with no decision-changing unresolved gap or Contradiction.
+Supporting evidence must be an Inference scoped to the Opportunity and derived from
+the relevant Observations; do not cite a raw or unrelated Observation as affirmative
+support. Record every unresolved Contradiction involving cited evidence.
 
 An Elevated-Risk Market may receive shallow classification research, but it requires
 Opportunity-specific Research Approval before deep research or recommendation. Use an
