@@ -40,6 +40,11 @@ import type {
   OpportunityExclusionAssessment,
   OpportunityExclusionEvaluation,
   RecordOpportunityExclusionGatesCommand,
+  OpportunityQualificationEvaluation,
+  RecordOpportunityQualificationGatesCommand,
+  NoQualifyingOpportunityReport,
+  NoQualifyingOpportunityContinuationCondition,
+  ConcludeNoQualifyingOpportunityCommand,
   OpportunityFormation,
   RecordOpportunityFormationCommand,
   BreadthGate,
@@ -63,7 +68,9 @@ import type {
   CoordinatorLease,
   AuthoritativeOperation,
   CampaignOperation,
+  QualificationGate,
 } from "./types.js";
+import { qualificationGateKinds } from "./types.js";
 import {
   hasOnlyFields,
   isIsoInstant,
@@ -77,6 +84,8 @@ import {
   validatePublicSource,
   validateReasoningEntry,
   validateRecordOpportunityExclusionGatesFields,
+  validateRecordOpportunityQualificationGatesFields,
+  validateConcludeNoQualifyingOpportunityFields,
   validateRecordOpportunityFormationFields,
   validateResearchApprovalRequest,
 } from "./validation.js";
@@ -98,18 +107,44 @@ export async function writePrivateJson(targetPath: string, value: unknown): Prom
   await chmod(targetPath, 0o600);
 }
 
-export async function replacePrivateJson(targetPath: string, value: unknown): Promise<void> {
+export async function writePrivateText(
+  targetPath: string,
+  value: string,
+): Promise<void> {
+  await writeFile(targetPath, value, { mode: 0o600 });
+  await chmod(targetPath, 0o600);
+}
+
+async function replacePrivate(
+  targetPath: string,
+  writeTemporaryFile: (temporaryPath: string) => Promise<void>,
+): Promise<void> {
   const temporaryDirectory = await mkdtemp(
     path.join(path.dirname(targetPath), ".svs-write-"),
   );
   await chmod(temporaryDirectory, 0o700);
   try {
     const temporaryPath = path.join(temporaryDirectory, path.basename(targetPath));
-    await writePrivateJson(temporaryPath, value);
+    await writeTemporaryFile(temporaryPath);
     await rename(temporaryPath, targetPath);
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+export async function replacePrivateJson(targetPath: string, value: unknown): Promise<void> {
+  await replacePrivate(targetPath, (temporaryPath) =>
+    writePrivateJson(temporaryPath, value),
+  );
+}
+
+export async function replacePrivateText(
+  targetPath: string,
+  value: string,
+): Promise<void> {
+  await replacePrivate(targetPath, (temporaryPath) =>
+    writePrivateText(temporaryPath, value),
+  );
 }
 
 export type CoordinatorOperationLock = {
@@ -214,6 +249,8 @@ export type AuthoritativeHistoryRebuild = {
   opportunityFormations: OpportunityFormation[];
   breadthGates: BreadthGate[];
   opportunityExclusionEvaluations: OpportunityExclusionEvaluation[];
+  opportunityQualificationEvaluations: OpportunityQualificationEvaluation[];
+  noQualifyingOpportunityReports: NoQualifyingOpportunityReport[];
   campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
@@ -283,6 +320,46 @@ export function publicResearchAllocationViolation(
     Math.ceil(totalPostGateSourceUnits * maximumShare)
     ? "imbalanced"
     : undefined;
+}
+
+export type ResearchDecisionValueViolation = "required" | "scope" | "stopped";
+
+export function researchDecisionValueViolation(
+  history: AuthoritativeHistoryRebuild,
+  reservation: PublicResearchReservation,
+): ResearchDecisionValueViolation | undefined {
+  const evaluation = history.opportunityQualificationEvaluations.at(-1);
+  if (evaluation === undefined || reservation.researchClass === undefined) {
+    return undefined;
+  }
+  if (evaluation.researchDecision.outcome === "stop") {
+    return "stopped";
+  }
+  if (reservation.decisionValuePriorityId === undefined) {
+    return "required";
+  }
+  const priority = evaluation.researchDecision.decisionValuePriorities.find(
+    (candidate) => candidate.id === reservation.decisionValuePriorityId,
+  );
+  if (priority === undefined) {
+    return "scope";
+  }
+  if (
+    priority.target.kind !== "gate" ||
+    reservation.purpose !== priority.permittedAction.purpose ||
+    reservation.retrievalRoute !== priority.permittedAction.retrievalRoute ||
+    reservation.researchClass !== priority.permittedAction.researchClass ||
+    reservation.opportunityId !== priority.permittedAction.opportunityId
+  ) {
+    return "scope";
+  }
+  const assessment = evaluation.assessments.find((candidate) =>
+    candidate.gates.some((gate) => gate.id === priority.target.id),
+  );
+  if (assessment?.opportunityId !== reservation.opportunityId) {
+    return "scope";
+  }
+  return undefined;
 }
 
 export function exclusionGatesFor(assessment: OpportunityExclusionAssessment) {
@@ -407,33 +484,65 @@ export type OpportunityGateView = NonNullable<
   NonNullable<WorkView["opportunities"]>[number]["exclusionGates"]
 >[number];
 
+export type QualificationGateView = NonNullable<
+  NonNullable<WorkView["opportunities"]>[number]["qualificationGates"]
+>[number];
+
+export type GateDispositionView = {
+  state: "passed" | "failed" | "unresolved";
+  decisionId: string;
+};
+
+export function gateDispositionFor(
+  gates: GateDispositionView[],
+  additionalUnresolvedDecisionId?: string,
+) {
+  const failedGates = gates.filter((gate) => gate.state === "failed");
+  const unresolvedGates = gates.filter((gate) => gate.state === "unresolved");
+  return failedGates.length > 0
+    ? {
+        status: "rejected" as const,
+        decisionIds: failedGates.map((gate) => gate.decisionId),
+      }
+    : unresolvedGates.length > 0 ||
+        additionalUnresolvedDecisionId !== undefined
+      ? {
+          status: "unresolved" as const,
+          decisionIds:
+            unresolvedGates.length > 0
+              ? unresolvedGates.map((gate) => gate.decisionId)
+              : [additionalUnresolvedDecisionId!],
+        }
+      : {
+          status: "active" as const,
+          decisionIds: gates.map((gate) => gate.decisionId),
+        };
+}
+
+export function qualificationDispositionFor(
+  gates: QualificationGateView[],
+  elevatedRiskDecisionId?: string,
+) {
+  const disposition = gateDispositionFor(gates, elevatedRiskDecisionId);
+  return {
+    disposition,
+    eligibility:
+      disposition.status === "active"
+        ? ("eligible" as const)
+        : ("ineligible" as const),
+  };
+}
+
 export function opportunityDispositionFor(
   gates: OpportunityGateView[],
   elevatedRiskApprovalUnavailable: boolean,
 ) {
-  const failedGates = gates.filter((gate) => gate.state === "failed");
-  const unresolvedGates = gates.filter((gate) => gate.state === "unresolved");
-  const disposition =
-    failedGates.length > 0
-      ? {
-          status: "rejected" as const,
-          decisionIds: failedGates.map((gate) => gate.decisionId),
-        }
-      : unresolvedGates.length > 0 || elevatedRiskApprovalUnavailable
-        ? {
-            status: "unresolved" as const,
-            decisionIds:
-              unresolvedGates.length > 0
-                ? unresolvedGates.map((gate) => gate.decisionId)
-                : [
-                    gates.find((gate) => gate.kind === "market-safety")!
-                      .decisionId,
-                  ],
-          }
-        : {
-            status: "active" as const,
-            decisionIds: gates.map((gate) => gate.decisionId),
-          };
+  const disposition = gateDispositionFor(
+    gates,
+    elevatedRiskApprovalUnavailable
+      ? gates.find((gate) => gate.kind === "market-safety")!.decisionId
+      : undefined,
+  );
   return {
     disposition,
     eligibility:
@@ -465,11 +574,28 @@ export function workViewAtInspectionTime(
     renewalAvailable ||=
       elevatedRiskApprovalUnavailable &&
       opportunity.exclusionGates.every((gate) => gate.state !== "failed");
+    const exclusionDisposition = opportunityDispositionFor(
+      opportunity.exclusionGates,
+      elevatedRiskApprovalUnavailable,
+    );
+    if (
+      opportunity.exclusionGates.some((gate) => gate.state !== "passed") ||
+      opportunity.qualificationGates === undefined
+    ) {
+      return {
+        ...opportunity,
+        ...exclusionDisposition,
+      };
+    }
     return {
       ...opportunity,
-      ...opportunityDispositionFor(
-        opportunity.exclusionGates,
-        elevatedRiskApprovalUnavailable,
+      ...qualificationDispositionFor(
+        opportunity.qualificationGates,
+        elevatedRiskApprovalUnavailable
+          ? opportunity.exclusionGates.find(
+              (gate) => gate.kind === "market-safety",
+            )?.decisionId
+          : undefined,
       ),
     };
   });
@@ -1370,6 +1496,10 @@ export function opportunityExclusionEvaluationViolation(
       const decisionEvidenceIds = new Set([
         ...decision.supportingEvidenceEntryIds,
         ...decision.challengingEvidenceEntryIds,
+        ...supportingObservationIds(history, [
+          ...decision.supportingEvidenceEntryIds,
+          ...decision.challengingEvidenceEntryIds,
+        ]),
       ]);
       const involvedUnresolvedContradictionIds = history.contradictions
         .filter(
@@ -1418,6 +1548,901 @@ export function applyOpportunityExclusionEvaluation(
   }
   history.opportunityExclusionEvaluations.push(evaluation);
   return undefined;
+}
+
+const behaviorEvidenceQualificationGateKinds = new Set<QualificationGate["kind"]>([
+  "costly-problem",
+  "buyer-economics",
+  "customer-access",
+  "competitive-viability",
+  "commercial-plausibility",
+]);
+
+const timeSensitiveQualificationGateKinds = new Set<QualificationGate["kind"]>([
+  "costly-problem",
+  "buyer-economics",
+  "customer-access",
+  "competitive-viability",
+  "legal-operational-feasibility",
+  "commercial-plausibility",
+]);
+
+export function supportingObservationIds(
+  history: AuthoritativeHistoryRebuild,
+  entryIds: string[],
+): Set<string> {
+  const observationIds = new Set(
+    history.observations.map((observation) => observation.id),
+  );
+  const inferencesById = new Map(
+    history.inferences.map((inference) => [inference.id, inference] as const),
+  );
+  const result = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (entryId: string) => {
+    if (visited.has(entryId)) {
+      return;
+    }
+    visited.add(entryId);
+    if (observationIds.has(entryId)) {
+      result.add(entryId);
+      return;
+    }
+    const inference = inferencesById.get(entryId);
+    if (inference !== undefined) {
+      for (const supportingEntryId of inference.supportingEntryIds) {
+        visit(supportingEntryId);
+      }
+    }
+  };
+  for (const entryId of entryIds) {
+    visit(entryId);
+  }
+  return result;
+}
+
+export function qualificationEvidenceViolation(
+  history: AuthoritativeHistoryRebuild,
+  gate: QualificationGate,
+): string | undefined {
+  if (gate.state === "unresolved") {
+    return undefined;
+  }
+  const supportingObservationIdSet = supportingObservationIds(
+    history,
+    gate.decision.supportingEvidenceEntryIds,
+  );
+  const invalidatedIds = invalidatedEvidenceIds(history);
+  if (behaviorEvidenceQualificationGateKinds.has(gate.kind)) {
+    if (gate.evidenceBasis.behavioralEvidenceEntryIds.length === 0) {
+      return `Qualification Gate ${gate.id} requires explicit behavioral evidence`;
+    }
+    const behavioralObservationIds = supportingObservationIds(
+      history,
+      gate.evidenceBasis.behavioralEvidenceEntryIds,
+    );
+    const behavioralSourceIds = new Set(
+      history.observations
+        .filter((observation) => behavioralObservationIds.has(observation.id))
+        .map((observation) => observation.sourceId),
+    );
+    const lineages = gate.evidenceBasis.independentSourceLineages;
+    if (lineages.length < 2) {
+      return `Qualification Gate ${gate.id} requires independent behavior evidence from at least two Source Lineages`;
+    }
+    const declaredSourceIds = lineages.flatMap((lineage) => lineage.sourceIds);
+    if (
+      new Set(declaredSourceIds).size !== declaredSourceIds.length ||
+      declaredSourceIds.some((sourceId) => !behavioralSourceIds.has(sourceId))
+    ) {
+      return `Qualification Gate ${gate.id} Source Lineages must be distinct and traceable to its behavioral evidence`;
+    }
+    const lineageIndexBySourceId = new Map<string, number>();
+    lineages.forEach((lineage, index) => {
+      for (const sourceId of lineage.sourceIds) {
+        lineageIndexBySourceId.set(sourceId, index);
+      }
+    });
+    const dependentAcrossLineages = history.sourceLineages
+      .filter((lineage) => !invalidatedIds.has(lineage.id))
+      .some((lineage) => {
+      const declaredLineageIndexes = new Set(
+        lineage.sourceIds
+          .map((sourceId) => lineageIndexBySourceId.get(sourceId))
+          .filter((index): index is number => index !== undefined),
+      );
+      return declaredLineageIndexes.size > 1;
+      });
+    if (dependentAcrossLineages) {
+      return `Qualification Gate ${gate.id} cannot count dependent Sources as independent behavior evidence`;
+    }
+  }
+  if (timeSensitiveQualificationGateKinds.has(gate.kind)) {
+    if (gate.evidenceBasis.sourceFreshnessIds.length === 0) {
+      return `Qualification Gate ${gate.id} requires current evidence for its time-sensitive claim`;
+    }
+    const currentAssessments = gate.evidenceBasis.sourceFreshnessIds.map(
+      (entryId) =>
+        history.sourceFreshnesses.find(
+          (freshness) =>
+            freshness.id === entryId && !invalidatedIds.has(freshness.id),
+        ),
+    );
+    if (
+      currentAssessments.some(
+        (freshness) =>
+          freshness === undefined ||
+          !["medium", "high"].includes(freshness.assessment) ||
+          !supportingObservationIdSet.has(freshness.observationId),
+      )
+    ) {
+      return `Qualification Gate ${gate.id} current evidence must cite medium- or high-freshness assessments for its supporting Observations`;
+    }
+    const assessedObservationIds = new Set(
+      currentAssessments.map((freshness) => freshness!.observationId),
+    );
+    if (
+      [...supportingObservationIdSet].some(
+        (observationId) => !assessedObservationIds.has(observationId),
+      )
+    ) {
+      return `Qualification Gate ${gate.id} must assess the freshness of every supporting Observation for its time-sensitive claim`;
+    }
+  }
+  if (gate.kind === "commercial-plausibility") {
+    if (gate.commercialRanges === null || gate.commercialRanges === undefined) {
+      return `Qualification Gate ${gate.id} requires traceable commercial ranges`;
+    }
+    const untracedRange = Object.entries(gate.commercialRanges).find(
+      ([, range]) =>
+        range.evidenceEntryIds.some(
+          (entryId) =>
+            !gate.decision.supportingEvidenceEntryIds.includes(entryId),
+        ),
+    );
+    if (untracedRange !== undefined) {
+      return `Qualification Gate ${gate.id} commercial range ${untracedRange[0]} must trace to supporting evidence`;
+    }
+  }
+  return undefined;
+}
+
+export function opportunityQualificationEvaluationViolation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityQualificationEvaluation,
+): string | undefined {
+  if (
+    history.intake === undefined ||
+    history.opportunityExclusionEvaluations.length === 0
+  ) {
+    return "Qualification Gates require recorded Opportunity Exclusion Gates";
+  }
+  if (history.reservations.size !== history.settledReservationIds.size) {
+    return "Qualification Gates require every reserved Source examination to be settled";
+  }
+  const exclusionEvaluation = history.opportunityExclusionEvaluations.at(-1)!;
+  const survivingOpportunityIds = new Set(
+    exclusionEvaluation.assessments
+      .filter((assessment) =>
+        exclusionGatesFor(assessment).every((gate) => gate.state === "passed"),
+      )
+      .map((assessment) => assessment.opportunityId),
+  );
+  const assessedOpportunityIds = evaluation.assessments.map(
+    (assessment) => assessment.opportunityId,
+  );
+  if (
+    new Set(assessedOpportunityIds).size !== assessedOpportunityIds.length ||
+    assessedOpportunityIds.length !== survivingOpportunityIds.size ||
+    assessedOpportunityIds.some(
+      (opportunityId) => !survivingOpportunityIds.has(opportunityId),
+    )
+  ) {
+    return "every surviving Opportunity must receive exactly one qualification assessment";
+  }
+  const existingEvaluationIds = new Set(
+    history.opportunityQualificationEvaluations.map((candidate) => candidate.id),
+  );
+  if (existingEvaluationIds.has(evaluation.id)) {
+    return `Opportunity qualification evaluation identity ${evaluation.id} is already present`;
+  }
+  const assessmentIds = new Set<string>();
+  const gateIds = new Set<string>();
+  const availableEvidenceIds = availableAffirmativeEvidenceIds(history);
+  const availableInferencesById = new Map(
+    history.inferences
+      .filter((inference) => availableEvidenceIds.has(inference.id))
+      .map((inference) => [inference.id, inference] as const),
+  );
+  const decisionIds = new Set(
+    history.campaignDecisions.map((decision) => decision.id),
+  );
+  for (const assessment of evaluation.assessments) {
+    if (assessmentIds.has(assessment.id)) {
+      return `Opportunity qualification assessment identity ${assessment.id} is duplicated`;
+    }
+    assessmentIds.add(assessment.id);
+    const kinds = assessment.gates.map((gate) => gate.kind);
+    if (
+      new Set(kinds).size !== kinds.length ||
+      kinds.length !== qualificationGateKinds.length ||
+      qualificationGateKinds.some((kind) => !kinds.includes(kind))
+    ) {
+      return `Opportunity ${assessment.opportunityId} must assess every Qualification Gate exactly once`;
+    }
+    for (const gate of assessment.gates) {
+      const decision = gate.decision;
+      if (gateIds.has(gate.id)) {
+        return `Qualification Gate identity ${gate.id} is duplicated`;
+      }
+      gateIds.add(gate.id);
+      if (decisionIds.has(decision.id)) {
+        return `Campaign Decision identity ${decision.id} is already present`;
+      }
+      decisionIds.add(decision.id);
+      if (decision.intakeVersion !== history.intake.version) {
+        return `Campaign Decision ${decision.id} does not use the current Campaign Intake version`;
+      }
+      const unavailableEvidenceId = [
+        ...decision.supportingEvidenceEntryIds,
+        ...decision.challengingEvidenceEntryIds,
+      ].find((entryId) => !availableEvidenceIds.has(entryId));
+      if (unavailableEvidenceId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable affirmative evidence ${unavailableEvidenceId}`;
+      }
+      const unscopedSupportingEvidenceId =
+        decision.supportingEvidenceEntryIds.find(
+          (entryId) =>
+            availableInferencesById.get(entryId)?.scope !==
+            decision.opportunityId,
+        );
+      if (unscopedSupportingEvidenceId !== undefined) {
+        return `Campaign Decision ${decision.id} must cite Opportunity-scoped Inferences as supporting evidence; ${unscopedSupportingEvidenceId} is not an Inference scoped to ${decision.opportunityId}`;
+      }
+      const unavailableBehaviorEvidenceId =
+        gate.evidenceBasis.behavioralEvidenceEntryIds.find(
+          (entryId) => !decision.supportingEvidenceEntryIds.includes(entryId),
+        );
+      if (unavailableBehaviorEvidenceId !== undefined) {
+        return `Qualification Gate ${gate.id} behavioral evidence ${unavailableBehaviorEvidenceId} must be cited as supporting evidence`;
+      }
+      const evidenceViolation = qualificationEvidenceViolation(history, gate);
+      if (evidenceViolation !== undefined) {
+        return evidenceViolation;
+      }
+      const unavailableGapId = decision.evidenceGapIds.find(
+        (gapId) =>
+          !history.evidenceGaps.some(
+            (gap) => gap.id === gapId && gap.status === "open",
+          ),
+      );
+      if (unavailableGapId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable open Evidence Gap ${unavailableGapId}`;
+      }
+      const affectedOpenGapIds = history.evidenceGaps
+        .filter(
+          (gap) =>
+            gap.status === "open" && gap.affectedDecisionIds.includes(decision.id),
+        )
+        .map((gap) => gap.id);
+      if (
+        affectedOpenGapIds.length !== decision.evidenceGapIds.length ||
+        affectedOpenGapIds.some(
+          (gapId) => !decision.evidenceGapIds.includes(gapId),
+        )
+      ) {
+        return `Campaign Decision ${decision.id} must record every open Evidence Gap that affects it`;
+      }
+      const unavailableContradictionId = decision.contradictionIds.find(
+        (contradictionId) =>
+          !history.contradictions.some(
+            (contradiction) =>
+              contradiction.id === contradictionId &&
+              contradiction.resolutionStatus !== "resolved",
+          ),
+      );
+      if (unavailableContradictionId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable unresolved Contradiction ${unavailableContradictionId}`;
+      }
+      const decisionEvidenceIds = new Set([
+        ...decision.supportingEvidenceEntryIds,
+        ...decision.challengingEvidenceEntryIds,
+        ...supportingObservationIds(history, [
+          ...decision.supportingEvidenceEntryIds,
+          ...decision.challengingEvidenceEntryIds,
+        ]),
+      ]);
+      const involvedUnresolvedContradictionIds = history.contradictions
+        .filter(
+          (contradiction) =>
+            contradiction.resolutionStatus !== "resolved" &&
+            contradiction.entryIds.some((entryId) =>
+              decisionEvidenceIds.has(entryId),
+            ),
+        )
+        .map((contradiction) => contradiction.id);
+      if (
+        involvedUnresolvedContradictionIds.length !==
+          decision.contradictionIds.length ||
+        involvedUnresolvedContradictionIds.some(
+          (contradictionId) =>
+            !decision.contradictionIds.includes(contradictionId),
+        )
+      ) {
+        return `Campaign Decision ${decision.id} must record every unresolved Contradiction involving its evidence`;
+      }
+      if (
+        gate.state === "unresolved" &&
+        decision.supportingEvidenceEntryIds.length === 0 &&
+        decision.evidenceGapIds.length === 0
+      ) {
+        return `unresolved Qualification Gate ${gate.id} requires an explicit Evidence Gap when evidence is missing`;
+      }
+    }
+  }
+  const researchDecision = evaluation.researchDecision;
+  if (decisionIds.has(researchDecision.id)) {
+    return `Campaign Decision identity ${researchDecision.id} is already present`;
+  }
+  if (researchDecision.intakeVersion !== history.intake.version) {
+    return `Campaign Decision ${researchDecision.id} does not use the current Campaign Intake version`;
+  }
+  const availableDecisionEvidenceIds = new Set([
+    ...availableAffirmativeEvidenceIds(history),
+    ...history.evidenceGaps
+      .filter((gap) => gap.status === "open")
+      .map((gap) => gap.id),
+  ]);
+  const unavailableResearchEvidence = researchDecision.evidenceEntryIds.find(
+    (entryId) => !availableDecisionEvidenceIds.has(entryId),
+  );
+  if (unavailableResearchEvidence !== undefined) {
+    return `Qualification-related Campaign Decision ${researchDecision.id} links unavailable evidence ${unavailableResearchEvidence}`;
+  }
+  const ordinarySourceCap =
+    history.intake.researchBudget.sourceCap -
+    history.intake.researchBudget.adversarialSourceReserve;
+  const remainingOrdinarySourceUnits =
+    ordinarySourceCap -
+    [...history.reservations.values()].reduce(
+      (total, reservation) => total + reservation.sourceUnits,
+      0,
+    );
+  if (
+    researchDecision.outcome === "continue" &&
+    remainingOrdinarySourceUnits <= 0
+  ) {
+    return "Campaign Research for Qualification Gates cannot continue after the ordinary Research Budget is exhausted";
+  }
+  if (
+    researchDecision.stopReason === "ordinary-budget-exhausted" &&
+    remainingOrdinarySourceUnits !== 0
+  ) {
+    return "Campaign Research for Qualification Gates cannot claim ordinary budget exhaustion while capacity remains";
+  }
+  const unresolvedGateIds = new Set(
+    evaluation.assessments.flatMap((assessment) =>
+      assessment.gates
+        .filter((gate) => gate.state === "unresolved")
+        .map((gate) => gate.id),
+    ),
+  );
+  if (
+    researchDecision.outcome === "continue" &&
+    unresolvedGateIds.size === 0
+  ) {
+    return "Campaign Research can continue only to resolve an unresolved Qualification Gate";
+  }
+  const priorityIds = researchDecision.decisionValuePriorities.map(
+    (priority) => priority.id,
+  );
+  if (new Set(priorityIds).size !== priorityIds.length) {
+    return "Qualification-related Campaign Decision Value priority identities must be unique";
+  }
+  const unavailablePriority = researchDecision.decisionValuePriorities.find(
+    (priority) =>
+      priority.target.kind !== "gate" ||
+      !unresolvedGateIds.has(priority.target.id) ||
+      evaluation.assessments.find((assessment) =>
+        assessment.gates.some((gate) => gate.id === priority.target.id),
+      )?.opportunityId !== priority.permittedAction.opportunityId,
+  );
+  if (unavailablePriority !== undefined) {
+    return `Decision Value priority ${unavailablePriority.id} does not target an unresolved Qualification Gate`;
+  }
+  const exclusionAssessmentsByOpportunityId = new Map(
+    exclusionEvaluation.assessments.map((assessment) => [
+      assessment.opportunityId,
+      assessment,
+    ]),
+  );
+  const everyGateTerminal = evaluation.assessments.every((assessment) =>
+    assessment.gates.every((gate) => gate.state !== "unresolved"),
+  );
+  const hasEligibleOpportunity = evaluation.assessments.some((assessment) => {
+    const exclusion = exclusionAssessmentsByOpportunityId.get(
+      assessment.opportunityId,
+    )!;
+    return (
+      assessment.gates.every((gate) => gate.state === "passed") &&
+      !isElevatedRiskApprovalUnavailable(
+        exclusion.marketSafety.classification,
+        history.researchApprovals,
+        assessment.opportunityId,
+        researchDecision.decidedAt,
+      )
+    );
+  });
+  if (
+    researchDecision.stopReason === "qualification-complete" &&
+    (!everyGateTerminal || !hasEligibleOpportunity)
+  ) {
+    return "Campaign Research for Qualification Gates is complete only when all gates are terminal and an Opportunity is eligible";
+  }
+  return undefined;
+}
+
+export function applyOpportunityQualificationEvaluation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityQualificationEvaluation,
+): string | undefined {
+  const violation = opportunityQualificationEvaluationViolation(
+    history,
+    evaluation,
+  );
+  if (violation !== undefined) {
+    return violation;
+  }
+  for (const assessment of evaluation.assessments) {
+    history.campaignDecisions.push(
+      ...assessment.gates.map((gate) => gate.decision),
+    );
+  }
+  history.campaignDecisions.push(evaluation.researchDecision);
+  history.opportunityQualificationEvaluations.push(evaluation);
+  return undefined;
+}
+
+export function researchBudgetViewForHistory(
+  history: AuthoritativeHistoryRebuild,
+): ResearchBudgetView {
+  const intake = history.intake!;
+  const ordinarySourceCap =
+    intake.researchBudget.sourceCap -
+    intake.researchBudget.adversarialSourceReserve;
+  const reservedSourceUnits = [...history.reservations.values()].reduce(
+    (total, reservation) =>
+      total +
+      (history.settledReservationIds.has(reservation.id)
+        ? 0
+        : reservation.sourceUnits),
+    0,
+  );
+  const settledSourceUnits = [...history.reservations.values()].reduce(
+    (total, reservation) =>
+      total +
+      (history.settledReservationIds.has(reservation.id)
+        ? reservation.sourceUnits
+        : 0),
+    0,
+  );
+  const usedSourceUnits = [...history.reservations.values()].reduce(
+    (total, reservation) => total + reservation.sourceUnits,
+    0,
+  );
+  const recordedPaidSpend = history.researchExpenditures.reduce(
+    (total, expenditure) => total + expenditure.amount,
+    0,
+  );
+  return {
+    sourceCap: intake.researchBudget.sourceCap,
+    adversarialSourceReserve: intake.researchBudget.adversarialSourceReserve,
+    ordinarySourceCap,
+    reservedSourceUnits,
+    settledSourceUnits,
+    remainingOrdinarySourceUnits: ordinarySourceCap - usedSourceUnits,
+    paidSpendCap: intake.researchBudget.paidSpendCap,
+    recordedPaidSpend: {
+      amount: recordedPaidSpend,
+      currency: intake.researchBudget.paidSpendCap.currency,
+    },
+    remainingPaidSpend: {
+      amount: intake.researchBudget.paidSpendCap.amount - recordedPaidSpend,
+      currency: intake.researchBudget.paidSpendCap.currency,
+    },
+  };
+}
+
+export function noQualifyingOpportunityDisposition(
+  history: AuthoritativeHistoryRebuild,
+  opportunityId: string,
+  concludedAt: string,
+) {
+  const exclusion = history.opportunityExclusionEvaluations
+    .at(-1)!
+    .assessments.find((assessment) => assessment.opportunityId === opportunityId)!;
+  const qualification = history.opportunityQualificationEvaluations
+    .at(-1)
+    ?.assessments.find((assessment) => assessment.opportunityId === opportunityId);
+  const exclusionGates = exclusionGatesFor(exclusion);
+  const qualificationGates = qualification?.gates ?? [];
+  const allGates = [...exclusionGates, ...qualificationGates];
+  const failedGates = allGates.filter((gate) => gate.state === "failed");
+  const unresolvedGates = allGates.filter(
+    (gate) => gate.state === "unresolved",
+  );
+  const elevatedRiskApprovalUnavailable = isElevatedRiskApprovalUnavailable(
+    exclusion.marketSafety.classification,
+    history.researchApprovals,
+    opportunityId,
+    concludedAt,
+  );
+  const eligible =
+    failedGates.length === 0 &&
+    unresolvedGates.length === 0 &&
+    qualification !== undefined &&
+    qualification.gates.length === qualificationGateKinds.length &&
+    !elevatedRiskApprovalUnavailable;
+  const status =
+    failedGates.length > 0
+      ? ("rejected" as const)
+      : eligible
+        ? ("eligible" as const)
+        : ("unresolved" as const);
+  const relevantGates =
+    status === "rejected"
+      ? failedGates
+      : status === "unresolved"
+        ? unresolvedGates
+        : allGates;
+  const decisionIds = relevantGates.map((gate) => gate.decision.id);
+  if (
+    status === "unresolved" &&
+    elevatedRiskApprovalUnavailable &&
+    !decisionIds.includes(exclusion.marketSafety.gate.decision.id)
+  ) {
+    decisionIds.push(exclusion.marketSafety.gate.decision.id);
+  }
+  const reasons = relevantGates.map((gate) => gate.decision.rationale);
+  if (status === "unresolved" && elevatedRiskApprovalUnavailable) {
+    reasons.push(
+      "Deep research or recommendation for this Elevated-Risk Market lacks current Opportunity-specific Research Approval.",
+    );
+  }
+  return {
+    status,
+    decisionIds,
+    evidenceGapIds: relevantGates.flatMap(
+      (gate) => gate.decision.evidenceGapIds,
+    ),
+    reasons,
+  };
+}
+
+export function buildNoQualifyingOpportunityReport(
+  history: AuthoritativeHistoryRebuild,
+  reportId: string,
+  concludedAt: string,
+  continuationConditions: NoQualifyingOpportunityContinuationCondition[],
+): NoQualifyingOpportunityReport {
+  const opportunities = formedOpportunities(history);
+  const dispositions = opportunities.map((opportunity) => ({
+    opportunity,
+    disposition: noQualifyingOpportunityDisposition(
+      history,
+      opportunity.id,
+      concludedAt,
+    ),
+  }));
+  const rejectedOpportunities = dispositions
+    .filter(({ disposition }) => disposition.status === "rejected")
+    .map(({ opportunity, disposition }) => ({
+      id: opportunity.id,
+      customer: opportunity.customer,
+      situation: opportunity.situation,
+      decisionIds: disposition.decisionIds,
+      reasons: disposition.reasons,
+    }));
+  const unresolvedOpportunities = dispositions
+    .filter(({ disposition }) => disposition.status === "unresolved")
+    .map(({ opportunity, disposition }) => ({
+      id: opportunity.id,
+      customer: opportunity.customer,
+      situation: opportunity.situation,
+      decisionIds: disposition.decisionIds,
+      evidenceGapIds: disposition.evidenceGapIds,
+      reasons: disposition.reasons,
+    }));
+  const qualificationEvaluation =
+    history.opportunityQualificationEvaluations.at(-1)!;
+  const exclusionEvaluation = history.opportunityExclusionEvaluations.at(-1)!;
+  const breadthGate = history.breadthGates.at(-1)!;
+  const sweeps = history.discoveryTranches.flatMap((tranche) => tranche.sweeps);
+  const limitations = [
+    ...history.opportunityFormations.flatMap((formation) =>
+      formation.assessments.flatMap(
+        (assessment) => assessment.decision.limitations,
+      ),
+    ),
+    ...breadthGate.decision.limitations,
+    ...exclusionEvaluation.assessments.flatMap((assessment) =>
+      exclusionGatesFor(assessment).flatMap(
+        (gate) => gate.decision.limitations,
+      ),
+    ),
+    ...qualificationEvaluation.assessments.flatMap((assessment) =>
+      assessment.gates.flatMap((gate) => gate.decision.limitations),
+    ),
+    ...qualificationEvaluation.researchDecision.limitations,
+  ].filter((limitation, index, all) => all.indexOf(limitation) === index);
+  return {
+    reportVersion: contracts.renderTemplates,
+    id: reportId,
+    kind: "no-qualifying-opportunity-report",
+    campaignId: history.campaignId,
+    concludedAt,
+    intakeVersion: history.intake!.version,
+    outcome: "no-qualifying-opportunity",
+    summary: `No Opportunity became eligible: ${rejectedOpportunities.length} rejected and ${unresolvedOpportunities.length} unresolved. This is a valid campaign outcome, not an error.`,
+    rejectedOpportunities,
+    unresolvedOpportunities,
+    coverage: {
+      discoveryTranches: history.discoveryTranches.length,
+      discoverySweeps: sweeps.length,
+      sourceFamilies: [
+        ...new Set(sweeps.map((sweep) => sweep.sourceFamily.id)),
+      ],
+      formedOpportunities: opportunities.length,
+      breadthGate: { id: breadthGate.id, status: "passed" },
+    },
+    researchBudget: researchBudgetViewForHistory(history),
+    limitations,
+    continuationConditions,
+    audit: {
+      authoritativeRecordsPath: "records.jsonl",
+      evidenceLedgerPath: "evidence-ledger.json",
+      qualificationEvaluationId: qualificationEvaluation.id,
+      researchDecisionId: qualificationEvaluation.researchDecision.id,
+    },
+    completeness: {
+      allSurvivingOpportunitiesEvaluated: true,
+      noEligibleOpportunities: true,
+      researchExhausted: true,
+    },
+  };
+}
+
+export function noQualifyingOpportunityViolation(
+  history: AuthoritativeHistoryRebuild,
+  reportId: string,
+  concludedAt: string,
+  continuationConditions: NoQualifyingOpportunityContinuationCondition[],
+): string | undefined {
+  if (
+    history.intake === undefined ||
+    history.breadthGates.length === 0 ||
+    history.opportunityExclusionEvaluations.length === 0 ||
+    history.opportunityQualificationEvaluations.length === 0
+  ) {
+    return "No Qualifying Opportunity requires completed Opportunity gates";
+  }
+  if (history.noQualifyingOpportunityReports.length > 0) {
+    return "the Scouting Campaign already has a terminal report";
+  }
+  if (history.reservations.size !== history.settledReservationIds.size) {
+    return "No Qualifying Opportunity requires every reserved Source examination to be settled";
+  }
+  if (
+    activeResearchApprovalDecision({
+      researchApprovalDecisions: history.researchApprovalDecisions,
+      researchApprovalResponses: history.researchApprovalResponses,
+    }) !== undefined
+  ) {
+    return "No Qualifying Opportunity cannot conclude with a pending Research Approval decision";
+  }
+  const evaluation = history.opportunityQualificationEvaluations.at(-1)!;
+  if (
+    evaluation.researchDecision.outcome !== "stop" ||
+    evaluation.researchDecision.stopReason === "qualification-complete"
+  ) {
+    return "No Qualifying Opportunity requires exhausted permitted research";
+  }
+  const budget = researchBudgetViewForHistory(history);
+  if (
+    evaluation.researchDecision.stopReason === "ordinary-budget-exhausted" &&
+    budget.remainingOrdinarySourceUnits !== 0
+  ) {
+    return "ordinary Research Budget exhaustion must match recorded budget use";
+  }
+  const dispositions = formedOpportunities(history).map((opportunity) => ({
+    opportunity,
+    disposition: noQualifyingOpportunityDisposition(
+      history,
+      opportunity.id,
+      concludedAt,
+    ),
+  }));
+  if (
+    dispositions.some(
+      ({ disposition }) => disposition.status === "eligible",
+    )
+  ) {
+    return "No Qualifying Opportunity cannot conclude while an Opportunity is eligible";
+  }
+  const unresolvedOpportunityIds = new Set(
+    dispositions
+      .filter(({ disposition }) => disposition.status === "unresolved")
+      .map(({ opportunity }) => opportunity.id),
+  );
+  const conditionIds = continuationConditions.map((condition) => condition.id);
+  if (new Set(conditionIds).size !== conditionIds.length) {
+    return "continuation condition identities must be unique";
+  }
+  const coveredOpportunityIds = new Set(
+    continuationConditions.map((condition) => condition.opportunityId),
+  );
+  if (
+    coveredOpportunityIds.size !== unresolvedOpportunityIds.size ||
+    [...unresolvedOpportunityIds].some(
+      (opportunityId) => !coveredOpportunityIds.has(opportunityId),
+    ) ||
+    [...coveredOpportunityIds].some(
+      (opportunityId) => !unresolvedOpportunityIds.has(opportunityId),
+    )
+  ) {
+    return "continuation conditions must cover every unresolved Opportunity and no rejected Opportunity";
+  }
+  for (const condition of continuationConditions) {
+    const disposition = noQualifyingOpportunityDisposition(
+      history,
+      condition.opportunityId,
+      concludedAt,
+    );
+    const unavailableGapId = condition.evidenceGapIds.find(
+      (gapId) =>
+        !disposition.evidenceGapIds.includes(gapId) ||
+        !history.evidenceGaps.some(
+          (gap) => gap.id === gapId && gap.status === "open",
+        ),
+    );
+    if (unavailableGapId !== undefined) {
+      return `continuation condition ${condition.id} links unavailable Opportunity Evidence Gap ${unavailableGapId}`;
+    }
+  }
+  if (reportId.trim() === "") {
+    return "No Qualifying Opportunity Report identity is required";
+  }
+  return undefined;
+}
+
+export function applyNoQualifyingOpportunityReport(
+  history: AuthoritativeHistoryRebuild,
+  report: NoQualifyingOpportunityReport,
+): string | undefined {
+  const violation = noQualifyingOpportunityViolation(
+    history,
+    report.id,
+    report.concludedAt,
+    report.continuationConditions,
+  );
+  if (violation !== undefined) {
+    return violation;
+  }
+  const expected = buildNoQualifyingOpportunityReport(
+    history,
+    report.id,
+    report.concludedAt,
+    report.continuationConditions,
+  );
+  if (JSON.stringify(report) !== JSON.stringify(expected)) {
+    return "No Qualifying Opportunity Report does not match authoritative Campaign history";
+  }
+  history.noQualifyingOpportunityReports.push(report);
+  return undefined;
+}
+
+function reportText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function renderNoQualifyingOpportunityReport(
+  report: NoQualifyingOpportunityReport,
+): string {
+  const opportunitySection = (
+    title: string,
+    opportunities: Array<{
+      id: string;
+      customer: string;
+      situation: string;
+      decisionIds: string[];
+      reasons: string[];
+      evidenceGapIds?: string[];
+    }>,
+  ) => [
+    `## ${title}`,
+    "",
+    ...(opportunities.length === 0
+      ? ["None.", ""]
+      : opportunities.flatMap((opportunity) => [
+          `### ${reportText(opportunity.id)}`,
+          "",
+          `- Customer: ${reportText(opportunity.customer)}`,
+          `- Situation: ${reportText(opportunity.situation)}`,
+          `- Decision IDs: ${opportunity.decisionIds.map(reportText).join(", ")}`,
+          ...(opportunity.evidenceGapIds === undefined
+            ? []
+            : [
+                `- Evidence Gap IDs: ${opportunity.evidenceGapIds.map(reportText).join(", ") || "none"}`,
+              ]),
+          ...opportunity.reasons.map(
+            (reason) => `- Reason: ${reportText(reason)}`,
+          ),
+          "",
+        ])),
+  ];
+  return [
+    "# No Qualifying Opportunity Report",
+    "",
+    `**Outcome:** No Qualifying Opportunity (valid terminal outcome, not an error)`,
+    "",
+    `- Report ID: ${reportText(report.id)}`,
+    `- Campaign ID: ${reportText(report.campaignId)}`,
+    `- Concluded at: ${report.concludedAt}`,
+    `- Campaign Intake version: ${report.intakeVersion}`,
+    "",
+    report.summary,
+    "",
+    ...opportunitySection("Affirmatively rejected Opportunities", report.rejectedOpportunities),
+    ...opportunitySection("Unresolved Opportunities", report.unresolvedOpportunities),
+    "## Coverage and Breadth Gate",
+    "",
+    `- Discovery Tranches: ${report.coverage.discoveryTranches}`,
+    `- Discovery Sweeps: ${report.coverage.discoverySweeps}`,
+    `- Source Families: ${report.coverage.sourceFamilies.join(", ")}`,
+    `- Formed Opportunities: ${report.coverage.formedOpportunities}`,
+    `- Breadth Gate: ${report.coverage.breadthGate.id} (${report.coverage.breadthGate.status})`,
+    "",
+    "## Research Budget use",
+    "",
+    `- Source cap: ${report.researchBudget.sourceCap}`,
+    `- Ordinary Source cap: ${report.researchBudget.ordinarySourceCap}`,
+    `- Settled Source units: ${report.researchBudget.settledSourceUnits}`,
+    `- Reserved unsettled Source units: ${report.researchBudget.reservedSourceUnits}`,
+    `- Remaining ordinary Source units: ${report.researchBudget.remainingOrdinarySourceUnits}`,
+    `- Adversarial Source reserve: ${report.researchBudget.adversarialSourceReserve}`,
+    ...(report.researchBudget.paidSpendCap === undefined ||
+    report.researchBudget.recordedPaidSpend === undefined ||
+    report.researchBudget.remainingPaidSpend === undefined
+      ? []
+      : [
+          `- Paid spend cap: ${report.researchBudget.paidSpendCap.amount} ${report.researchBudget.paidSpendCap.currency}`,
+          `- Recorded paid spend: ${report.researchBudget.recordedPaidSpend.amount} ${report.researchBudget.recordedPaidSpend.currency}`,
+          `- Remaining paid spend: ${report.researchBudget.remainingPaidSpend.amount} ${report.researchBudget.remainingPaidSpend.currency}`,
+        ]),
+    "",
+    "## Limitations",
+    "",
+    ...(report.limitations.length === 0
+      ? ["None recorded."]
+      : report.limitations.map((limitation) => `- ${reportText(limitation)}`)),
+    "",
+    "## Continuation conditions",
+    "",
+    ...(report.continuationConditions.length === 0
+      ? ["None: every Opportunity was affirmatively rejected."]
+      : report.continuationConditions.map(
+          (condition) =>
+            `- ${reportText(condition.opportunityId)}: ${reportText(condition.condition)} (Evidence Gaps: ${condition.evidenceGapIds.map(reportText).join(", ")})`,
+        )),
+    "",
+    "## Audit pointers",
+    "",
+    `- Authoritative history: ${report.audit.authoritativeRecordsPath}`,
+    `- Evidence Ledger: ${report.audit.evidenceLedgerPath}`,
+    `- Qualification evaluation: ${report.audit.qualificationEvaluationId}`,
+    `- Qualification-related Campaign Decision: ${report.audit.researchDecisionId}`,
+    "",
+  ].join("\n");
 }
 
 export const authoritativeOperationDescriptors = {
@@ -1661,6 +2686,62 @@ export const authoritativeOperationDescriptors = {
         applyOpportunityExclusionEvaluation(
           history,
           evaluation as OpportunityExclusionEvaluation,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "record-opportunity-qualification-gates": {
+    outcome: "opportunity-qualification-gates-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        !isRecord(outcome.evaluation) ||
+        intent.evaluationId !== outcome.evaluation.id ||
+        validateRecordOpportunityQualificationGatesFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            recordedAt: outcome.recordedAt,
+            evaluation: outcome.evaluation,
+          },
+        }).length > 0 ||
+        applyOpportunityQualificationEvaluation(
+          history,
+          outcome.evaluation as unknown as OpportunityQualificationEvaluation,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "conclude-no-qualifying-opportunity": {
+    outcome: "no-qualifying-opportunity-concluded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (
+        history.intake === undefined ||
+        !isRecord(outcome.report) ||
+        intent.reportId !== outcome.report.id ||
+        !Array.isArray(intent.continuationConditions) ||
+        validateConcludeNoQualifyingOpportunityFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            concludedAt: outcome.recordedAt,
+            reportId: intent.reportId,
+            continuationConditions: intent.continuationConditions,
+          },
+        }).length > 0 ||
+        JSON.stringify(intent.continuationConditions) !==
+          JSON.stringify(outcome.report.continuationConditions) ||
+        applyNoQualifyingOpportunityReport(
+          history,
+          outcome.report as unknown as NoQualifyingOpportunityReport,
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -2113,6 +3194,51 @@ export function opportunityExclusionGateRecords(
   });
 }
 
+export function opportunityQualificationGateRecords(
+  campaignId: string,
+  command: RecordOpportunityQualificationGatesCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-opportunity-qualification-gates",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      evaluationId: command.payload.evaluation.id,
+    },
+    outcome: { evaluation: command.payload.evaluation },
+  });
+}
+
+export function noQualifyingOpportunityRecords(
+  history: AuthoritativeHistoryRebuild,
+  command: ConcludeNoQualifyingOpportunityCommand,
+  firstSequence: number,
+) {
+  const report = buildNoQualifyingOpportunityReport(
+    history,
+    command.payload.reportId,
+    command.payload.concludedAt,
+    command.payload.continuationConditions,
+  );
+  return campaignRecordPair({
+    campaignId: history.campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.concludedAt,
+    firstSequence,
+    operation: "conclude-no-qualifying-opportunity",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      reportId: command.payload.reportId,
+      continuationConditions: command.payload.continuationConditions,
+    },
+    outcome: { report },
+  });
+}
+
 export function researchApprovalRequestRecords(
   campaignId: string,
   command: RequestResearchApprovalCommand,
@@ -2237,6 +3363,7 @@ export type CampaignManifest = {
     campaignIntake?: "campaign-intake.json";
     researchBudget?: "research-budget.json";
     evidenceLedger?: "evidence-ledger.json";
+    noQualifyingOpportunityReport?: "no-qualifying-opportunity-report.md";
   };
 };
 
@@ -2257,7 +3384,10 @@ export function parseCampaignManifest(value: unknown): CampaignManifest | undefi
     (value.projections.researchBudget !== undefined &&
       value.projections.researchBudget !== "research-budget.json") ||
     (value.projections.evidenceLedger !== undefined &&
-      value.projections.evidenceLedger !== "evidence-ledger.json")
+      value.projections.evidenceLedger !== "evidence-ledger.json") ||
+    (value.projections.noQualifyingOpportunityReport !== undefined &&
+      value.projections.noQualifyingOpportunityReport !==
+        "no-qualifying-opportunity-report.md")
   ) {
     return undefined;
   }
@@ -2297,6 +3427,8 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     opportunityFormations: [],
     breadthGates: [],
     opportunityExclusionEvaluations: [],
+    opportunityQualificationEvaluations: [],
+    noQualifyingOpportunityReports: [],
     campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
@@ -2382,6 +3514,8 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     opportunityFormations,
     breadthGates,
     opportunityExclusionEvaluations,
+    opportunityQualificationEvaluations,
+    noQualifyingOpportunityReports,
     campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
@@ -2751,6 +3885,90 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       };
     });
   }
+  if (opportunityQualificationEvaluations.length > 0) {
+    const evaluation = opportunityQualificationEvaluations.at(-1)!;
+    const assessmentsByOpportunityId = new Map(
+      evaluation.assessments.map((assessment) => [
+        assessment.opportunityId,
+        assessment,
+      ]),
+    );
+    workView.completedWork.push(
+      `${evaluation.assessments.length} Opportunity qualification assessment${evaluation.assessments.length === 1 ? "" : "s"} recorded`,
+    );
+    workView.qualificationResearch = {
+      state: evaluation.researchDecision.outcome,
+      decisionValuePriorities:
+        evaluation.researchDecision.decisionValuePriorities,
+      stopReason: evaluation.researchDecision.stopReason,
+      decisionId: evaluation.researchDecision.id,
+    };
+    if (evaluation.researchDecision.outcome === "stop") {
+      workView.publicResearchAvailable = false;
+    }
+    workView.nextPermittedActions =
+      evaluation.researchDecision.outcome === "continue"
+        ? [
+            "reserve-public-research",
+            "record-evidence-reasoning",
+            "evaluate-qualification-gates",
+          ]
+        : evaluation.researchDecision.stopReason === "qualification-complete"
+          ? ["compare-eligible-opportunities"]
+          : ["conclude-no-qualifying-opportunity"];
+    workView.opportunities = workView.opportunities!.map((opportunity) => {
+      const assessment = assessmentsByOpportunityId.get(opportunity.id);
+      if (assessment === undefined) {
+        return opportunity;
+      }
+      const qualificationGates = assessment.gates.map((gate) => ({
+        id: gate.id,
+        kind: gate.kind,
+        state: gate.state,
+        applicableRule: gate.decision.applicableRule,
+        decisionId: gate.decision.id,
+      }));
+      return {
+        ...opportunity,
+        qualificationGates,
+        ...qualificationDispositionFor(
+          qualificationGates,
+          opportunity.marketSafety?.classification === "elevated-risk" &&
+            isElevatedRiskApprovalUnavailable(
+              opportunity.marketSafety.classification,
+              researchApprovals,
+              opportunity.id,
+              workViewAsOf,
+            )
+            ? opportunity.exclusionGates?.find(
+                (gate) => gate.kind === "market-safety",
+              )?.decisionId
+            : undefined,
+        ),
+      };
+    });
+  }
+  if (noQualifyingOpportunityReports.length > 0) {
+    const report = noQualifyingOpportunityReports[0]!;
+    workView.phase = "terminal";
+    workView.publicResearchAvailable = false;
+    workView.completedWork.push(
+      `No Qualifying Opportunity Report ${report.id} produced`,
+    );
+    workView.nextPermittedActions = [
+      "inspect-no-qualifying-opportunity-report",
+      "explain-no-qualifying-opportunity",
+      "start-separate-campaign",
+      "finish",
+    ];
+    workView.terminal = {
+      outcome: "no-qualifying-opportunity",
+      reportId: report.id,
+      artifactPath: "no-qualifying-opportunity-report.md",
+      immutable: true,
+      concludedAt: report.concludedAt,
+    };
+  }
   const pendingDecision = activeResearchApprovalDecision({
     researchApprovalDecisions,
     researchApprovalResponses,
@@ -2924,6 +4142,12 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       : { pendingDecision, researchApprovalInformation }),
     ...(researchApprovals.length === 0 ? {} : { researchApprovals }),
     ...(researchExpenditures.length === 0 ? {} : { researchExpenditures }),
+    ...(noQualifyingOpportunityReports.length === 0
+      ? {}
+      : {
+          noQualifyingOpportunityReport:
+            noQualifyingOpportunityReports[0],
+        }),
   };
 }
 
@@ -3022,6 +4246,26 @@ export async function loadCampaign(campaignPath: string) {
       throw new Error("Evidence Ledger does not match authoritative history");
     }
   }
+  const noQualifyingOpportunityReportPath = path.join(
+    rebuiltCampaign.campaign.path,
+    "no-qualifying-opportunity-report.md",
+  );
+  if (rebuiltCampaign.noQualifyingOpportunityReport === undefined) {
+    if (await pathExists(noQualifyingOpportunityReportPath)) {
+      throw new Error(
+        "No Qualifying Opportunity Report has no authoritative terminal record",
+      );
+    }
+  } else if (
+    (await readFile(noQualifyingOpportunityReportPath, "utf8")) !==
+    renderNoQualifyingOpportunityReport(
+      rebuiltCampaign.noQualifyingOpportunityReport,
+    )
+  ) {
+    throw new Error(
+      "No Qualifying Opportunity Report does not match authoritative history",
+    );
+  }
 
   return {
     campaign: rebuiltCampaign.campaign,
@@ -3050,6 +4294,12 @@ export async function loadCampaign(campaignPath: string) {
     ...(rebuiltCampaign.researchExpenditures === undefined
       ? {}
       : { researchExpenditures: rebuiltCampaign.researchExpenditures }),
+    ...(rebuiltCampaign.noQualifyingOpportunityReport === undefined
+      ? {}
+      : {
+          noQualifyingOpportunityReport:
+            rebuiltCampaign.noQualifyingOpportunityReport,
+        }),
   };
 }
 
@@ -3087,6 +4337,14 @@ export async function persistDerivedCampaignState(
     await replacePrivateJson(
       path.join(campaignPath, "evidence-ledger.json"),
       rebuiltCampaign.evidenceLedger,
+    );
+  }
+  if (rebuiltCampaign.noQualifyingOpportunityReport !== undefined) {
+    await replacePrivateText(
+      path.join(campaignPath, "no-qualifying-opportunity-report.md"),
+      renderNoQualifyingOpportunityReport(
+        rebuiltCampaign.noQualifyingOpportunityReport,
+      ),
     );
   }
 }

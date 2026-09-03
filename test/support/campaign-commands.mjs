@@ -15,6 +15,7 @@
  *       researchClass?: "deepening" | "open-world-discovery";
  *       opportunityId?: string;
  *       approvalId?: string;
+ *       decisionValuePriorityId?: string;
  *     };
  *   };
  * }} PublicResearchReservationCommand

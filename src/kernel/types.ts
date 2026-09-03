@@ -150,6 +150,7 @@ export type PublicResearchReservation = {
   researchClass?: "deepening" | "open-world-discovery";
   opportunityId?: string;
   approvalId?: string;
+  decisionValuePriorityId?: string;
 };
 
 export type ReservePublicResearchCommand = {
@@ -448,7 +449,7 @@ export type FormationCampaignDecision = {
 export type OpportunityGateDecision = {
   type: "campaign-decision";
   id: string;
-  kind: "exclusion-gate";
+  kind: "exclusion-gate" | "qualification-gate";
   outcome: "passed" | "failed" | "unresolved";
   opportunityId: string;
   intakeVersion: number;
@@ -463,7 +464,30 @@ export type OpportunityGateDecision = {
   decidedAt: string;
 };
 
-export type CampaignDecision = FormationCampaignDecision | OpportunityGateDecision;
+export type QualificationCampaignDecision = {
+  type: "campaign-decision";
+  id: string;
+  kind: "qualification-research";
+  outcome: "continue" | "stop";
+  intakeVersion: number;
+  applicableRule: string;
+  evidenceEntryIds: string[];
+  decisionValuePriorities: QualificationDecisionValuePriority[];
+  stopReason:
+    | null
+    | "ordinary-budget-exhausted"
+    | "no-permitted-positive-decision-value"
+    | "qualification-complete";
+  rationale: string;
+  confidence: EvidenceConfidence;
+  limitations: string[];
+  decidedAt: string;
+};
+
+export type CampaignDecision =
+  | FormationCampaignDecision
+  | OpportunityGateDecision
+  | QualificationCampaignDecision;
 
 export type ExclusionGate = {
   id: string;
@@ -504,6 +528,144 @@ export type RecordOpportunityExclusionGatesCommand = {
     coordinatorId: string;
     recordedAt: string;
     assessments: OpportunityExclusionAssessment[];
+  };
+};
+
+export const qualificationGateKinds = [
+  "costly-problem",
+  "buyer-economics",
+  "customer-access",
+  "value-feasibility",
+  "solo-feasibility",
+  "competitive-viability",
+  "legal-operational-feasibility",
+  "commercial-plausibility",
+] as const;
+
+export type QualificationGateKind = (typeof qualificationGateKinds)[number];
+
+export type QualificationEvidenceBasis = {
+  behavioralEvidenceEntryIds: string[];
+  independentSourceLineages: Array<{
+    sourceIds: string[];
+    rationale: string;
+  }>;
+  sourceFreshnessIds: string[];
+};
+
+export type TraceableCommercialRange = {
+  low: number;
+  high: number;
+  unit: string;
+  evidenceEntryIds: string[];
+};
+
+export type CommercialPlausibilityRanges = {
+  price: TraceableCommercialRange;
+  customerVolume: TraceableCommercialRange;
+  costs: TraceableCommercialRange;
+  acquisition: TraceableCommercialRange;
+  capacity: TraceableCommercialRange;
+  timing: TraceableCommercialRange;
+};
+
+export type QualificationGate = {
+  id: string;
+  kind: QualificationGateKind;
+  state: "passed" | "failed" | "unresolved";
+  evidenceBasis: QualificationEvidenceBasis;
+  commercialRanges?: CommercialPlausibilityRanges | null;
+  decision: OpportunityGateDecision;
+};
+
+export type OpportunityQualificationAssessment = {
+  id: string;
+  opportunityId: string;
+  gates: QualificationGate[];
+};
+
+export type OpportunityQualificationEvaluation = {
+  id: string;
+  assessments: OpportunityQualificationAssessment[];
+  researchDecision: QualificationCampaignDecision;
+};
+
+export type RecordOpportunityQualificationGatesCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordOpportunityQualificationGates";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    evaluation: OpportunityQualificationEvaluation;
+  };
+};
+
+export type NoQualifyingOpportunityContinuationCondition = {
+  id: string;
+  opportunityId: string;
+  condition: string;
+  evidenceGapIds: string[];
+};
+
+export type NoQualifyingOpportunityReport = {
+  reportVersion: string;
+  id: string;
+  kind: "no-qualifying-opportunity-report";
+  campaignId: string;
+  concludedAt: string;
+  intakeVersion: number;
+  outcome: "no-qualifying-opportunity";
+  summary: string;
+  rejectedOpportunities: Array<{
+    id: string;
+    customer: string;
+    situation: string;
+    decisionIds: string[];
+    reasons: string[];
+  }>;
+  unresolvedOpportunities: Array<{
+    id: string;
+    customer: string;
+    situation: string;
+    decisionIds: string[];
+    evidenceGapIds: string[];
+    reasons: string[];
+  }>;
+  coverage: {
+    discoveryTranches: number;
+    discoverySweeps: number;
+    sourceFamilies: string[];
+    formedOpportunities: number;
+    breadthGate: { id: string; status: "passed" };
+  };
+  researchBudget: ResearchBudgetView;
+  limitations: string[];
+  continuationConditions: NoQualifyingOpportunityContinuationCondition[];
+  audit: {
+    authoritativeRecordsPath: "records.jsonl";
+    evidenceLedgerPath: "evidence-ledger.json";
+    qualificationEvaluationId: string;
+    researchDecisionId: string;
+  };
+  completeness: {
+    allSurvivingOpportunitiesEvaluated: true;
+    noEligibleOpportunities: true;
+    researchExhausted: true;
+  };
+};
+
+export type ConcludeNoQualifyingOpportunityCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "concludeNoQualifyingOpportunity";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    concludedAt: string;
+    reportId: string;
+    continuationConditions: NoQualifyingOpportunityContinuationCondition[];
   };
 };
 
@@ -564,6 +726,22 @@ export type DecisionValuePriority = {
     id: string;
   };
   rationale: string;
+};
+
+export type QualificationDecisionValuePriority = Omit<
+  DecisionValuePriority,
+  "target"
+> & {
+  target: {
+    kind: "gate";
+    id: string;
+  };
+  permittedAction: {
+    purpose: string;
+    retrievalRoute: string;
+    researchClass: "deepening";
+    opportunityId: string;
+  };
 };
 
 export type BreadthGate = {
@@ -779,7 +957,8 @@ export type WorkView = {
     | "public-research-active"
     | "discovery-active"
     | "opportunity-formation"
-    | "opportunity-deepening";
+    | "opportunity-deepening"
+    | "terminal";
   pause:
     | null
     | {
@@ -876,11 +1055,18 @@ export type WorkView = {
       applicableRule: string;
       decisionId: string;
     }>;
+    qualificationGates?: Array<{
+      id: string;
+      kind: QualificationGateKind;
+      state: QualificationGate["state"];
+      applicableRule: string;
+      decisionId: string;
+    }>;
     disposition?: {
       status: "active" | "rejected" | "unresolved";
       decisionIds: string[];
     };
-    eligibility?: "ineligible" | "pending-qualification";
+    eligibility?: "ineligible" | "pending-qualification" | "eligible";
     terminalRole?: null;
   }>;
   researchAllocation?:
@@ -909,6 +1095,19 @@ export type WorkView = {
     decisionValuePriorities: DecisionValuePriority[];
     decisionId: string;
   };
+  qualificationResearch?: {
+    state: QualificationCampaignDecision["outcome"];
+    decisionValuePriorities: QualificationDecisionValuePriority[];
+    stopReason: QualificationCampaignDecision["stopReason"];
+    decisionId: string;
+  };
+  terminal?: {
+    outcome: "no-qualifying-opportunity";
+    reportId: string;
+    artifactPath: "no-qualifying-opportunity-report.md";
+    immutable: true;
+    concludedAt: string;
+  };
 };
 
 export type CoordinatorLease = {
@@ -928,6 +1127,8 @@ export type AuthoritativeOperation =
   | "record-opportunity-formation"
   | "pass-breadth-gate"
   | "record-opportunity-exclusion-gates"
+  | "record-opportunity-qualification-gates"
+  | "conclude-no-qualifying-opportunity"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"

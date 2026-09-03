@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1086,6 +1086,221 @@ function opportunityExclusionGatesCommand(campaignPath, options = {}) {
       ],
     },
   };
+}
+
+const qualificationGateKinds = [
+  "costly-problem",
+  "buyer-economics",
+  "customer-access",
+  "value-feasibility",
+  "solo-feasibility",
+  "competitive-viability",
+  "legal-operational-feasibility",
+  "commercial-plausibility",
+];
+
+/**
+ * @param {string} campaignPath
+ * @returns {any}
+ */
+function opportunityQualificationGatesCommand(campaignPath) {
+  const recordedAt = "2026-09-01T10:00:00.000Z";
+  const assessments = [
+    "opportunity-dispatch-reconciliation",
+    "opportunity-specialist-tender-review",
+  ].map((opportunityId) => ({
+    id: `assessment-qualification-${opportunityId}`,
+    opportunityId,
+    gates: qualificationGateKinds.map((kind) => {
+      const decisionId = `decision-qualification-${kind}-${opportunityId}`;
+      return {
+        id: `gate-qualification-${kind}-${opportunityId}`,
+        kind,
+        state: "unresolved",
+        evidenceBasis: {
+          behavioralEvidenceEntryIds: [],
+          independentSourceLineages: [],
+          sourceFreshnessIds: [],
+        },
+        ...(kind === "commercial-plausibility"
+          ? { commercialRanges: null }
+          : {}),
+        decision: {
+          type: "campaign-decision",
+          id: decisionId,
+          kind: "qualification-gate",
+          outcome: "unresolved",
+          opportunityId,
+          intakeVersion: 1,
+          applicableRule: `Require affirmative evidence for ${kind}.`,
+          supportingEvidenceEntryIds: [],
+          challengingEvidenceEntryIds: [],
+          evidenceGapIds: [`gap-qualification-${kind}-${opportunityId}`],
+          contradictionIds: [],
+          rationale: `The ${kind} requirement remains unsupported.`,
+          confidence: {
+            level: "low",
+            limitingFactors: ["Affirmative evidence is missing."],
+          },
+          limitations: ["The open Evidence Gap may change this gate."],
+          decidedAt: recordedAt,
+        },
+      };
+    }),
+  }));
+  return {
+    envelopeVersion: "0.1.0",
+    requestId: "record-opportunity-qualification-gates-1",
+    command: "recordOpportunityQualificationGates",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt,
+      evaluation: {
+        id: "qualification-evaluation-1",
+        assessments,
+        researchDecision: {
+          type: "campaign-decision",
+          id: "decision-continue-qualification-research-1",
+          kind: "qualification-research",
+          outcome: "continue",
+          intakeVersion: 1,
+          applicableRule:
+            "Continue only while budget remains and a permitted action has positive Decision Value.",
+          evidenceEntryIds: [
+            `gap-qualification-buyer-economics-opportunity-dispatch-reconciliation`,
+          ],
+          decisionValuePriorities: [
+            {
+              id: "priority-qualification-buyer-economics",
+              researchQuestion:
+                "Can independent buyer behavior establish viable buyer economics?",
+              target: {
+                kind: "gate",
+                id: "gate-qualification-buyer-economics-opportunity-dispatch-reconciliation",
+              },
+              permittedAction: {
+                purpose: "Research buyer economics",
+                retrievalRoute: "public-web-search",
+                researchClass: "deepening",
+                opportunityId: "opportunity-dispatch-reconciliation",
+              },
+              rationale:
+                "The answer can resolve an Opportunity's buyer-economics gate.",
+            },
+          ],
+          stopReason: null,
+          rationale:
+            "Ordinary research capacity remains and one permitted question can change eligibility.",
+          confidence: {
+            level: "medium",
+            limitingFactors: ["Only the highest-value next question is prioritized."],
+          },
+          limitations: ["Research must remain within the recorded budget."],
+          decidedAt: recordedAt,
+        },
+      },
+    },
+  };
+}
+
+/** @param {string} campaignPath */
+function passingOpportunityQualificationGatesCommand(campaignPath) {
+  const command = opportunityQualificationGatesCommand(campaignPath);
+  command.requestId = "record-passing-opportunity-qualification-gates-1";
+  command.payload.evaluation.id = "qualification-evaluation-passing-1";
+  const marketAndCommercialKinds = new Set([
+    "costly-problem",
+    "buyer-economics",
+    "customer-access",
+    "competitive-viability",
+    "commercial-plausibility",
+  ]);
+  const timeSensitiveKinds = new Set([
+    "costly-problem",
+    "buyer-economics",
+    "customer-access",
+    "competitive-viability",
+    "legal-operational-feasibility",
+    "commercial-plausibility",
+  ]);
+  for (const assessment of command.payload.evaluation.assessments) {
+    const dispatch = assessment.opportunityId.includes("dispatch");
+    const inferenceId = dispatch
+      ? "inference-dispatch-qualification-evidence"
+      : "inference-tender-qualification-evidence";
+    const sourceIds = dispatch
+      ? ["source-occupation-map", "source-dispatch-study"]
+      : ["source-procurement-map", "source-supplier-study"];
+    const freshnessIds = dispatch
+      ? ["freshness-dispatch-occupation", "freshness-dispatch-study"]
+      : ["freshness-tender-procurement", "freshness-tender-study"];
+    for (const gate of assessment.gates) {
+      gate.state = "passed";
+      gate.decision.outcome = "passed";
+      gate.decision.supportingEvidenceEntryIds = [inferenceId];
+      gate.decision.evidenceGapIds = [];
+      gate.decision.rationale =
+        `Affirmative evidence establishes ${gate.kind} for this Opportunity.`;
+      gate.decision.confidence = {
+        level: "medium",
+        limitingFactors: ["The evidence supports a bounded range."],
+      };
+      gate.evidenceBasis = {
+        behavioralEvidenceEntryIds: marketAndCommercialKinds.has(gate.kind)
+          ? [inferenceId]
+          : [],
+        independentSourceLineages: marketAndCommercialKinds.has(gate.kind)
+          ? sourceIds.map((sourceId) => ({
+              sourceIds: [sourceId],
+              rationale: "This Source has a distinct origin in the public sample.",
+            }))
+          : [],
+        sourceFreshnessIds: timeSensitiveKinds.has(gate.kind)
+          ? freshnessIds
+          : [],
+      };
+      if (gate.kind === "commercial-plausibility") {
+        gate.commercialRanges = Object.fromEntries(
+          [
+            ["price", 75, 150, "GBP per customer per month"],
+            ["customerVolume", 70, 160, "paying customers"],
+            ["costs", 500, 2500, "GBP per month"],
+            ["acquisition", 20, 80, "GBP per acquired customer"],
+            ["capacity", 80, 200, "customers per solo operator"],
+            ["timing", 6, 18, "months to target"],
+          ].map(([name, low, high, unit]) => [
+            name,
+            { low, high, unit, evidenceEntryIds: [inferenceId] },
+          ]),
+        );
+      }
+    }
+  }
+  command.payload.evaluation.researchDecision = {
+    type: "campaign-decision",
+    id: "decision-qualification-complete-1",
+    kind: "qualification-research",
+    outcome: "stop",
+    intakeVersion: 1,
+    applicableRule:
+      "Continue only while budget remains and a permitted action has positive Decision Value.",
+    evidenceEntryIds: [
+      "inference-dispatch-qualification-evidence",
+      "inference-tender-qualification-evidence",
+    ],
+    decisionValuePriorities: [],
+    stopReason: "qualification-complete",
+    rationale:
+      "Every surviving Opportunity has a complete terminal Qualification Gate evaluation.",
+    confidence: {
+      level: "medium",
+      limitingFactors: ["Later market changes may reopen a gate."],
+    },
+    limitations: ["Commercial ranges remain uncertain rather than forecasts."],
+    decidedAt: command.payload.recordedAt,
+  };
+  return command;
 }
 
 /**
@@ -2617,6 +2832,795 @@ test("the Breadth Gate requires the Campaign Intake Source Family coverage", asy
     "SVS-BREADTH-GATE-INVARIANT-VIOLATION",
   );
   assert.match(result.response.error.message, /Source Family diversity/i);
+});
+
+test("every surviving Opportunity receives the complete Qualification Gate contract", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-qualification-gates-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "qualification-gates-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const command = opportunityQualificationGatesCommand(campaignPath);
+  const gapEntries = command.payload.evaluation.assessments.flatMap(
+    (/** @type {any} */ assessment) =>
+      assessment.gates.map((/** @type {any} */ gate) => ({
+        type: "evidence-gap",
+        id: gate.decision.evidenceGapIds[0],
+        question: `What affirmative evidence resolves ${gate.kind} for ${assessment.opportunityId}?`,
+        affectedDecisionIds: [gate.decision.id],
+        resolutionCriteria:
+          "Current, independent evidence establishes the required condition.",
+        resolutionMethod: "Perform one bounded public research action.",
+        status: "open",
+        resolution: null,
+      })),
+  );
+  const gaps = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-qualification-gaps-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: gapEntries,
+    },
+  });
+  assert.equal(gaps.code, 0, gaps.stderr);
+
+  const invalidTarget = structuredClone(command);
+  invalidTarget.requestId = "reject-non-gate-qualification-priority";
+  invalidTarget.payload.evaluation.id = "qualification-evaluation-invalid-target";
+  invalidTarget.payload.evaluation.researchDecision.id =
+    "decision-qualification-invalid-target";
+  invalidTarget.payload.evaluation.researchDecision.decisionValuePriorities[0].target = {
+    kind: "comparison",
+    id: "breadth-gate-1",
+  };
+  const invalidTargetResult = await runKernel(kernelPath, invalidTarget);
+  assert.equal(invalidTargetResult.code, 3);
+  assert.equal(
+    invalidTargetResult.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATE-INVARIANT-VIOLATION",
+  );
+
+  const recorded = await runKernel(kernelPath, command);
+
+  assert.equal(recorded.code, 0, recorded.stderr);
+  assert.equal(recorded.response.result.recorded, true);
+  assert.equal(recorded.response.result.evaluation.id, "qualification-evaluation-1");
+  for (const opportunity of recorded.response.result.workView.opportunities) {
+    assert.deepEqual(
+      opportunity.qualificationGates.map(
+        (/** @type {any} */ gate) => gate.kind,
+      ),
+      qualificationGateKinds,
+    );
+    assert.ok(
+      opportunity.qualificationGates.every(
+        (/** @type {any} */ gate) => gate.state === "unresolved",
+      ),
+    );
+    assert.equal(opportunity.disposition.status, "unresolved");
+    assert.equal(opportunity.eligibility, "ineligible");
+    assert.equal(opportunity.terminalRole, null);
+  }
+  assert.deepEqual(recorded.response.result.workView.qualificationResearch, {
+    state: "continue",
+    decisionValuePriorities:
+      command.payload.evaluation.researchDecision.decisionValuePriorities,
+    stopReason: null,
+    decisionId: command.payload.evaluation.researchDecision.id,
+  });
+  assert.ok(
+    recorded.response.result.workView.nextPermittedActions.includes(
+      "reserve-public-research",
+    ),
+  );
+
+  const inspected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-qualification-gates-1",
+    command: "inspectCampaign",
+    payload: { campaignPath },
+  });
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(
+    inspected.response.result.workView,
+    recorded.response.result.workView,
+  );
+
+  const withoutDecisionValue = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-qualification-research-without-decision-value",
+      payload: {
+        reservedAt: "2026-09-01T10:01:00.000Z",
+        reservation: {
+          id: "reservation-qualification-without-decision-value",
+          purpose: "Research buyer economics",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(withoutDecisionValue.code, 3);
+  assert.equal(
+    withoutDecisionValue.response.error.code,
+    "SVS-RESEARCH-DECISION-VALUE-REQUIRED",
+  );
+
+  const mismatchedAction = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-qualification-research-with-mismatched-action",
+      payload: {
+        reservedAt: "2026-09-01T10:03:00.000Z",
+        reservation: {
+          id: "reservation-qualification-mismatched-action",
+          purpose: "Unrelated market scan",
+          retrievalRoute: "unplanned-route",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+          decisionValuePriorityId: "priority-qualification-buyer-economics",
+        },
+      },
+    }),
+  );
+  assert.equal(mismatchedAction.code, 3);
+  assert.equal(
+    mismatchedAction.response.error.code,
+    "SVS-RESEARCH-DECISION-VALUE-SCOPE-MISMATCH",
+  );
+
+  const withDecisionValue = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-qualification-research-with-decision-value",
+      payload: {
+        reservedAt: "2026-09-01T10:04:00.000Z",
+        reservation: {
+          id: "reservation-qualification-with-decision-value",
+          purpose: "Research buyer economics",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+          decisionValuePriorityId: "priority-qualification-buyer-economics",
+        },
+      },
+    }),
+  );
+  assert.equal(withDecisionValue.code, 0, withDecisionValue.stderr);
+});
+
+test("a terminal Qualification Gate requires affirmative medium-confidence evidence", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-qualification-confidence-",
+  );
+  const command = opportunityQualificationGatesCommand("/unused-campaign");
+  const gate = command.payload.evaluation.assessments[0].gates[0];
+  gate.state = "passed";
+  gate.decision.outcome = "passed";
+  gate.decision.evidenceGapIds = [];
+
+  const result = await runKernel(kernelPath, command);
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATES-INVALID",
+  );
+  assert.match(
+    result.response.error.details.join(" "),
+    /supportingEvidenceEntryIds.+non-empty.+medium or high Evidence Confidence/is,
+  );
+});
+
+test("affirmative Qualification Gate evidence must be an Opportunity-scoped Inference", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-qualification-scoped-evidence-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(
+    storagePath,
+    "qualification-scoped-evidence-campaign",
+  );
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const command = opportunityQualificationGatesCommand(campaignPath);
+  const gate = command.payload.evaluation.assessments[0].gates[0];
+  gate.state = "passed";
+  gate.decision.outcome = "passed";
+  gate.decision.supportingEvidenceEntryIds = [
+    "observation-coordination-workaround",
+  ];
+  gate.decision.evidenceGapIds = [];
+  gate.decision.confidence = {
+    level: "medium",
+    limitingFactors: ["The public sample is bounded."],
+  };
+  gate.evidenceBasis.behavioralEvidenceEntryIds = [
+    "observation-coordination-workaround",
+  ];
+  const gapEntries = command.payload.evaluation.assessments.flatMap(
+    (/** @type {any} */ assessment) =>
+      assessment.gates
+        .filter((/** @type {any} */ candidate) => candidate !== gate)
+        .map((/** @type {any} */ candidate) => ({
+          type: "evidence-gap",
+          id: candidate.decision.evidenceGapIds[0],
+          question: `What evidence resolves ${candidate.kind}?`,
+          affectedDecisionIds: [candidate.decision.id],
+          resolutionCriteria: "Affirmative evidence establishes the condition.",
+          resolutionMethod: "Perform bounded Public Research.",
+          status: "open",
+          resolution: null,
+        })),
+  );
+  assert.equal(
+    (
+      await runKernel(kernelPath, {
+        envelopeVersion: "0.1.0",
+        requestId: "record-qualification-scoped-evidence-gaps",
+        command: "recordEvidenceReasoning",
+        payload: {
+          campaignPath,
+          coordinatorId: "coordinator-primary",
+          recordedAt: "2026-09-01T09:58:00.000Z",
+          entries: gapEntries,
+        },
+      })
+    ).code,
+    0,
+  );
+
+  const result = await runKernel(kernelPath, command);
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(result.response.error.message, /Opportunity-scoped Inferences/);
+});
+
+test("market Qualification Gates require independent behavior evidence, current evidence, and traceable ranges", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-qualification-evidence-quality-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(
+    storagePath,
+    "qualification-evidence-quality-campaign",
+  );
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath, {
+      dispatchClassification: "elevated-risk",
+    }),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+  const reasoning = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-qualification-evidence-quality",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: [
+        ...[
+          [
+            "freshness-dispatch-occupation",
+            "source-occupation-map",
+            "observation-coordination-workaround",
+          ],
+          [
+            "freshness-dispatch-study",
+            "source-dispatch-study",
+            "observation-dispatch-time-loss",
+          ],
+          [
+            "freshness-tender-procurement",
+            "source-procurement-map",
+            "observation-procurement-escalation",
+          ],
+          [
+            "freshness-tender-study",
+            "source-supplier-study",
+            "observation-supplier-review-spend",
+          ],
+        ].map(([id, sourceId, observationId]) => ({
+          type: "source-freshness",
+          id,
+          sourceId,
+          observationId,
+          intendedUse:
+            "Assess a current time-sensitive Qualification Gate claim.",
+          assessment: "high",
+          timeSensitivity:
+            "Buyer behavior, market conditions, and feasibility may change.",
+          rationale: "The evidence was published within the current quarter.",
+          limitations: ["The next material market change requires reassessment."],
+        })),
+        {
+          type: "inference",
+          id: "inference-dispatch-qualification-evidence",
+          text:
+            "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.",
+          scope: "opportunity-dispatch-reconciliation",
+          reasoning:
+            "Two independently originated Sources report committed behavior and material consequences in the current workflow.",
+          supportingEntryIds: [
+            "observation-coordination-workaround",
+            "observation-dispatch-time-loss",
+          ],
+          challengingEntryIds: [],
+          confidence: { level: "medium", limitingFactors: ["The sample is bounded."] },
+        },
+        {
+          type: "inference",
+          id: "inference-tender-qualification-evidence",
+          text:
+            "Independent current behavior evidence supports the tender Opportunity's qualification requirements and bounded commercial ranges.",
+          scope: "opportunity-specialist-tender-review",
+          reasoning:
+            "Two independently originated Sources report committed buyer expenditure and consequences in the current workflow.",
+          supportingEntryIds: [
+            "observation-procurement-escalation",
+            "observation-supplier-review-spend",
+          ],
+          challengingEntryIds: [],
+          confidence: { level: "medium", limitingFactors: ["The sample is bounded."] },
+        },
+      ],
+    },
+  });
+  assert.equal(reasoning.code, 0, reasoning.stderr);
+
+  const command = passingOpportunityQualificationGatesCommand(campaignPath);
+  const dependent = structuredClone(command);
+  dependent.requestId = "reject-one-qualification-source-lineage";
+  dependent.payload.evaluation.assessments[0].gates[0]
+    .evidenceBasis.independentSourceLineages.pop();
+  const dependentResult = await runKernel(kernelPath, dependent);
+  assert.equal(dependentResult.code, 3, JSON.stringify(dependentResult.response));
+  assert.equal(
+    dependentResult.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATE-INVARIANT-VIOLATION",
+    JSON.stringify(dependentResult.response),
+  );
+  assert.match(dependentResult.response.error.message, /independent behavior evidence/i);
+
+  const stale = structuredClone(command);
+  stale.requestId = "reject-qualification-without-current-evidence";
+  stale.payload.evaluation.assessments[0].gates.find(
+    (/** @type {any} */ gate) =>
+      gate.kind === "legal-operational-feasibility",
+  ).evidenceBasis.sourceFreshnessIds = [];
+  const staleResult = await runKernel(kernelPath, stale);
+  assert.equal(staleResult.code, 3);
+  assert.equal(
+    staleResult.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(staleResult.response.error.message, /current evidence/i);
+
+  const pointForecast = structuredClone(command);
+  pointForecast.requestId = "reject-point-commercial-forecast";
+  const commercialGate = pointForecast.payload.evaluation.assessments[0].gates.find(
+    (/** @type {any} */ gate) => gate.kind === "commercial-plausibility",
+  );
+  commercialGate.commercialRanges.price.high =
+    commercialGate.commercialRanges.price.low;
+  const pointResult = await runKernel(kernelPath, pointForecast);
+  assert.equal(pointResult.code, 3);
+  assert.equal(
+    pointResult.response.error.code,
+    "SVS-OPPORTUNITY-QUALIFICATION-GATES-INVALID",
+  );
+  assert.match(pointResult.response.error.details.join(" "), /low less than high/i);
+
+  const recorded = await runKernel(kernelPath, command);
+  assert.equal(recorded.code, 0, recorded.stderr);
+  assert.deepEqual(
+    recorded.response.result.workView.opportunities.map(
+      (/** @type {any} */ opportunity) => ({
+        disposition: opportunity.disposition.status,
+        eligibility: opportunity.eligibility,
+      }),
+    ),
+    [
+      { disposition: "unresolved", eligibility: "ineligible" },
+      { disposition: "active", eligibility: "eligible" },
+    ],
+  );
+  assert.deepEqual(recorded.response.result.workView.nextPermittedActions, [
+    "compare-eligible-opportunities",
+  ]);
+});
+
+test("no eligible Opportunity is a successful immutable terminal outcome", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-no-qualifying-opportunity-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "no-qualifier-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const qualification = opportunityQualificationGatesCommand(campaignPath);
+  qualification.requestId = "record-terminal-qualification-gates";
+  qualification.payload.evaluation.id = "qualification-evaluation-terminal";
+  const rejectedGate = qualification.payload.evaluation.assessments[0].gates.find(
+    (/** @type {any} */ gate) => gate.kind === "solo-feasibility",
+  );
+  rejectedGate.state = "failed";
+  rejectedGate.decision.outcome = "failed";
+  rejectedGate.decision.supportingEvidenceEntryIds = [
+    "inference-dispatch-market-classification",
+  ];
+  rejectedGate.decision.evidenceGapIds = [];
+  rejectedGate.decision.rationale =
+    "Affirmative evidence establishes that the required operation exceeds the Solo Developer's capacity.";
+  rejectedGate.decision.confidence = {
+    level: "medium",
+    limitingFactors: ["The assessment uses the confirmed capacity snapshot."],
+  };
+  const gapEntries = qualification.payload.evaluation.assessments.flatMap(
+    (/** @type {any} */ assessment) =>
+      assessment.gates
+        .filter((/** @type {any} */ gate) => gate !== rejectedGate)
+        .map((/** @type {any} */ gate) => ({
+          type: "evidence-gap",
+          id: gate.decision.evidenceGapIds[0],
+          question: `What affirmative evidence resolves ${gate.kind} for ${assessment.opportunityId}?`,
+          affectedDecisionIds: [gate.decision.id],
+          resolutionCriteria:
+            "Current independent evidence establishes the required condition.",
+          resolutionMethod:
+            "Reopen only if a permitted public Source has positive Decision Value.",
+          status: "open",
+          resolution: null,
+        })),
+  );
+  qualification.payload.evaluation.researchDecision = {
+    type: "campaign-decision",
+    id: "decision-stop-qualification-research",
+    kind: "qualification-research",
+    outcome: "stop",
+    intakeVersion: 1,
+    applicableRule:
+      "Continue only while budget remains and a permitted action has positive Decision Value.",
+    evidenceEntryIds: [
+      "gap-qualification-costly-problem-opportunity-specialist-tender-review",
+    ],
+    decisionValuePriorities: [],
+    stopReason: "no-permitted-positive-decision-value",
+    rationale:
+      "No remaining lawful Public Research action has positive Decision Value for an unresolved gate.",
+    confidence: {
+      level: "medium",
+      limitingFactors: ["External Validation Actions remain outside Campaign Research."],
+    },
+    limitations: ["Several Qualification Gates remain unresolved."],
+    decidedAt: qualification.payload.recordedAt,
+  };
+  const gaps = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-terminal-qualification-gaps",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: gapEntries,
+    },
+  });
+  assert.equal(gaps.code, 0, gaps.stderr);
+  const evaluated = await runKernel(kernelPath, qualification);
+  assert.equal(evaluated.code, 0, evaluated.stderr);
+  assert.deepEqual(
+    evaluated.response.result.workView.opportunities.map(
+      (/** @type {any} */ opportunity) => opportunity.disposition.status,
+    ),
+    ["rejected", "unresolved"],
+  );
+
+  const conclusion = {
+    envelopeVersion: "0.1.0",
+    requestId: "conclude-no-qualifying-opportunity-1",
+    command: "concludeNoQualifyingOpportunity",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      concludedAt: "2026-09-01T10:05:00.000Z",
+      reportId: "no-qualifying-opportunity-report-1",
+      continuationConditions: [
+        {
+          id: "continue-tender-costly-problem",
+          opportunityId: "opportunity-specialist-tender-review",
+          condition:
+            "Reopen only if independent current behavior evidence can resolve the Costly Problem gate within a revised Research Budget.",
+          evidenceGapIds: [
+            "gap-qualification-costly-problem-opportunity-specialist-tender-review",
+          ],
+        },
+      ],
+    },
+  };
+  const completed = await runKernel(kernelPath, conclusion);
+
+  assert.equal(completed.code, 0, completed.stderr);
+  assert.equal(completed.response.ok, true);
+  assert.equal(completed.response.result.completed, true);
+  assert.equal(
+    completed.response.result.terminalOutcome,
+    "no-qualifying-opportunity",
+  );
+  assert.deepEqual(
+    completed.response.result.report.rejectedOpportunities.map(
+      (/** @type {any} */ opportunity) => opportunity.id,
+    ),
+    ["opportunity-dispatch-reconciliation"],
+  );
+  assert.deepEqual(
+    completed.response.result.report.unresolvedOpportunities.map(
+      (/** @type {any} */ opportunity) => opportunity.id,
+    ),
+    ["opportunity-specialist-tender-review"],
+  );
+  assert.equal(completed.response.result.report.coverage.discoverySweeps, 4);
+  assert.deepEqual(completed.response.result.report.coverage.breadthGate, {
+    id: "breadth-gate-1",
+    status: "passed",
+  });
+  assert.equal(
+    completed.response.result.report.researchBudget.settledSourceUnits,
+    8,
+  );
+  assert.equal(
+    completed.response.result.report.completeness.researchExhausted,
+    true,
+  );
+  assert.deepEqual(completed.response.result.workView.terminal, {
+    outcome: "no-qualifying-opportunity",
+    reportId: "no-qualifying-opportunity-report-1",
+    artifactPath: "no-qualifying-opportunity-report.md",
+    immutable: true,
+    concludedAt: "2026-09-01T10:05:00.000Z",
+  });
+  assert.equal(completed.response.result.workView.phase, "terminal");
+  assert.equal(completed.response.result.workView.publicResearchAvailable, false);
+  assert.deepEqual(completed.response.result.workView.nextPermittedActions, [
+    "inspect-no-qualifying-opportunity-report",
+    "explain-no-qualifying-opportunity",
+    "start-separate-campaign",
+    "finish",
+  ]);
+
+  const artifactPath = path.join(
+    campaignPath,
+    "no-qualifying-opportunity-report.md",
+  );
+  const artifact = await readFile(artifactPath, "utf8");
+  assert.match(artifact, /^# No Qualifying Opportunity Report/m);
+  assert.match(artifact, /valid terminal outcome, not an error/i);
+  assert.match(artifact, /Affirmatively rejected Opportunities/);
+  assert.match(artifact, /Unresolved Opportunities/);
+  assert.match(artifact, /Coverage and Breadth Gate/);
+  assert.match(artifact, /Research Budget use/);
+  assert.match(artifact, /Paid spend cap: 0 GBP/);
+  assert.match(artifact, /Recorded paid spend: 0 GBP/);
+  assert.match(artifact, /Remaining paid spend: 0 GBP/);
+  assert.match(artifact, /Limitations/);
+  assert.match(artifact, /Continuation conditions/);
+  assert.equal((await stat(artifactPath)).mode & 0o777, 0o600);
+
+  const replay = await runKernel(kernelPath, conclusion);
+  assert.equal(replay.code, 0, replay.stderr);
+  assert.equal(replay.response.result.completed, false);
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const inspected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-no-qualifier-campaign",
+    command: "inspectCampaign",
+    payload: { campaignPath },
+  });
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(
+    inspected.response.result.noQualifyingOpportunityReport,
+    completed.response.result.report,
+  );
+  assert.equal(inspected.response.result.workView.phase, "terminal");
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const postTerminalResearch = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-after-no-qualifier",
+      payload: {
+        reservedAt: "2026-09-01T10:06:00.000Z",
+        reservation: {
+          id: "reservation-after-no-qualifier",
+          purpose: "Attempt to mutate a terminal Campaign",
+          researchClass: "deepening",
+          opportunityId: "opportunity-specialist-tender-review",
+          decisionValuePriorityId: "retired-priority",
+        },
+      },
+    }),
+  );
+  assert.equal(postTerminalResearch.code, 3);
+  assert.equal(
+    postTerminalResearch.response.error.code,
+    "SVS-CAMPAIGN-TERMINAL",
+  );
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+
+  const postTerminalResume = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-after-no-qualifier",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      resumedAt: "2026-09-01T10:07:00.000Z",
+      leaseExpiresAt: "2026-09-01T11:07:00.000Z",
+    },
+  });
+  assert.equal(postTerminalResume.code, 3);
+  assert.equal(postTerminalResume.response.error.code, "SVS-CAMPAIGN-TERMINAL");
+  assert.equal(await readFile(artifactPath, "utf8"), artifact);
+});
+
+test("no surviving Opportunity still reaches the no-qualifier terminal outcome", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-no-surviving-opportunity-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "no-surviving-opportunity");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const result = await runKernel(kernelPath, command);
+    assert.equal(result.code, 0, result.stderr);
+  }
+
+  const exclusions = opportunityExclusionGatesCommand(campaignPath);
+  for (const assessment of exclusions.payload.assessments) {
+    assessment.marketSafety.classification = "excluded-market";
+    assessment.marketSafety.intendedActivity =
+      "Directly enable an excluded credential-theft workflow";
+    assessment.marketSafety.excludedCategory = "credential-theft-enablement";
+    assessment.marketSafety.directlyServesExcludedActivity = true;
+    assessment.marketSafety.gate.state = "failed";
+    assessment.marketSafety.gate.decision.outcome = "failed";
+    assessment.marketSafety.gate.decision.rationale =
+      "Affirmative evidence establishes direct service of an excluded activity.";
+    assessment.marketSafety.gate.decision.limitations = [
+      "The rejection applies to the stated intended activity.",
+    ];
+  }
+  const excluded = await runKernel(kernelPath, exclusions);
+  assert.equal(excluded.code, 0, excluded.stderr);
+
+  const evaluated = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-empty-survivor-qualification-evaluation",
+    command: "recordOpportunityQualificationGates",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:00:00.000Z",
+      evaluation: {
+        id: "qualification-evaluation-no-survivors",
+        assessments: [],
+        researchDecision: {
+          type: "campaign-decision",
+          id: "decision-no-survivors-stop-research",
+          kind: "qualification-research",
+          outcome: "stop",
+          intakeVersion: 1,
+          applicableRule:
+            "Continue only while budget remains and a permitted action has positive Decision Value.",
+          evidenceEntryIds: [],
+          decisionValuePriorities: [],
+          stopReason: "no-permitted-positive-decision-value",
+          rationale:
+            "No Opportunity survived Exclusion Gates, so no qualification research can change eligibility.",
+          confidence: {
+            level: "high",
+            limitingFactors: ["A differently scoped future Campaign may form new Opportunities."],
+          },
+          limitations: ["The result applies to the formed Opportunities only."],
+          decidedAt: "2026-09-01T10:00:00.000Z",
+        },
+      },
+    },
+  });
+  assert.equal(evaluated.code, 0, evaluated.stderr);
+
+  const concluded = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "conclude-no-surviving-opportunity",
+    command: "concludeNoQualifyingOpportunity",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      concludedAt: "2026-09-01T10:01:00.000Z",
+      reportId: "no-qualifying-opportunity-no-survivors",
+      continuationConditions: [],
+    },
+  });
+  assert.equal(concluded.code, 0, concluded.stderr);
+  assert.deepEqual(
+    concluded.response.result.report.rejectedOpportunities.map(
+      (/** @type {any} */ opportunity) => opportunity.id,
+    ),
+    [
+      "opportunity-dispatch-reconciliation",
+      "opportunity-specialist-tender-review",
+    ],
+  );
+  assert.deepEqual(concluded.response.result.report.unresolvedOpportunities, []);
+  assert.ok(
+    concluded.response.result.report.limitations.includes(
+      "The rejection applies to the stated intended activity.",
+    ),
+  );
 });
 
 test("Discovery Tranches enforce source-led, novelty, and familiar-domain boundaries", async (t) => {

@@ -945,6 +945,203 @@ capacity. Refusal records its Evidence Gap and leaves the Opportunity unresolved
 ineligible rather than rejected. Shallow classification and independent permitted work
 remain available without treating silence as approval.
 
+## Record Opportunity Qualification Gates
+
+After Exclusion Gates, use `recordOpportunityQualificationGates` with exactly one
+assessment for every surviving Opportunity. Each assessment contains exactly these
+gate kinds: `costly-problem`, `buyer-economics`, `customer-access`,
+`value-feasibility`, `solo-feasibility`, `competitive-viability`,
+`legal-operational-feasibility`, and `commercial-plausibility`.
+
+This excerpt shows the command envelope and complete shapes for an ordinary gate, the
+commercial gate, and the research decision. A real command must include all eight gate
+objects for every surviving Opportunity; do not submit this abbreviated example:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-qualification-evaluation-stable-request-id",
+  "command": "recordOpportunityQualificationGates",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T11:00:00.000Z",
+    "evaluation": {
+      "id": "stable-qualification-evaluation-id",
+      "assessments": [
+        {
+          "id": "stable-opportunity-qualification-assessment-id",
+          "opportunityId": "stable-opportunity-id",
+          "gates": [
+            {
+              "id": "gate-costly-problem-stable-opportunity-id",
+              "kind": "costly-problem",
+              "state": "unresolved",
+              "evidenceBasis": {
+                "behavioralEvidenceEntryIds": [],
+                "independentSourceLineages": [],
+                "sourceFreshnessIds": []
+              },
+              "decision": {
+                "type": "campaign-decision",
+                "id": "decision-costly-problem-stable-opportunity-id",
+                "kind": "qualification-gate",
+                "outcome": "unresolved",
+                "opportunityId": "stable-opportunity-id",
+                "intakeVersion": 1,
+                "applicableRule": "Require affirmative evidence of a current Costly Problem.",
+                "supportingEvidenceEntryIds": [],
+                "challengingEvidenceEntryIds": [],
+                "evidenceGapIds": ["gap-costly-problem-stable-opportunity-id"],
+                "contradictionIds": [],
+                "rationale": "The required affirmative evidence is missing.",
+                "confidence": {
+                  "level": "low",
+                  "limitingFactors": ["Independent behavior evidence is missing."]
+                },
+                "limitations": ["The open Evidence Gap may change this gate."],
+                "decidedAt": "2026-08-31T11:00:00.000Z"
+              }
+            },
+            {
+              "id": "gate-commercial-plausibility-stable-opportunity-id",
+              "kind": "commercial-plausibility",
+              "state": "passed",
+              "evidenceBasis": {
+                "behavioralEvidenceEntryIds": ["inference-commercial-behavior"],
+                "independentSourceLineages": [
+                  { "sourceIds": ["source-independent-a"], "rationale": "Distinct origin A." },
+                  { "sourceIds": ["source-independent-b"], "rationale": "Distinct origin B." }
+                ],
+                "sourceFreshnessIds": ["freshness-a", "freshness-b"]
+              },
+              "commercialRanges": {
+                "price": { "low": 75, "high": 150, "unit": "GBP/customer/month", "evidenceEntryIds": ["inference-commercial-behavior"] },
+                "customerVolume": { "low": 70, "high": 160, "unit": "customers", "evidenceEntryIds": ["inference-commercial-behavior"] },
+                "costs": { "low": 500, "high": 2500, "unit": "GBP/month", "evidenceEntryIds": ["inference-commercial-behavior"] },
+                "acquisition": { "low": 20, "high": 80, "unit": "GBP/customer", "evidenceEntryIds": ["inference-commercial-behavior"] },
+                "capacity": { "low": 80, "high": 200, "unit": "customers/Solo Developer", "evidenceEntryIds": ["inference-commercial-behavior"] },
+                "timing": { "low": 6, "high": 18, "unit": "months to target", "evidenceEntryIds": ["inference-commercial-behavior"] }
+              },
+              "decision": {
+                "type": "campaign-decision",
+                "id": "decision-commercial-plausibility-stable-opportunity-id",
+                "kind": "qualification-gate",
+                "outcome": "passed",
+                "opportunityId": "stable-opportunity-id",
+                "intakeVersion": 1,
+                "applicableRule": "Require an evidence-backed range path to the Commercial Outcome Target.",
+                "supportingEvidenceEntryIds": ["inference-commercial-behavior"],
+                "challengingEvidenceEntryIds": [],
+                "evidenceGapIds": [],
+                "contradictionIds": [],
+                "rationale": "Independent current behavior evidence supports every range.",
+                "confidence": { "level": "medium", "limitingFactors": ["Ranges remain uncertain."] },
+                "limitations": ["This is not a point forecast."],
+                "decidedAt": "2026-08-31T11:00:00.000Z"
+              }
+            }
+          ]
+        }
+      ],
+      "researchDecision": {
+        "type": "campaign-decision",
+        "id": "stable-qualification-research-decision-id",
+        "kind": "qualification-research",
+        "outcome": "continue",
+        "intakeVersion": 1,
+        "applicableRule": "Continue only while budget remains and a permitted action has positive Decision Value.",
+        "evidenceEntryIds": ["gap-costly-problem-stable-opportunity-id"],
+        "decisionValuePriorities": [
+          {
+            "id": "priority-costly-problem-stable-opportunity-id",
+            "researchQuestion": "Can independent behavior evidence resolve this gate?",
+            "target": { "kind": "gate", "id": "gate-costly-problem-stable-opportunity-id" },
+            "permittedAction": {
+              "purpose": "Research current Costly Problem behavior",
+              "retrievalRoute": "public-web-search",
+              "researchClass": "deepening",
+              "opportunityId": "stable-opportunity-id"
+            },
+            "rationale": "The answer can change Opportunity eligibility."
+          }
+        ],
+        "stopReason": null,
+        "rationale": "Budget remains and the named permitted action can resolve a gate.",
+        "confidence": { "level": "medium", "limitingFactors": ["Only one next action is prioritized."] },
+        "limitations": ["Research remains bounded."],
+        "decidedAt": "2026-08-31T11:00:00.000Z"
+      }
+    }
+  }
+}
+```
+
+A terminal gate needs medium or high Evidence Confidence, Opportunity-scoped
+supporting Inferences, no decision-changing open Evidence Gap, and no unresolved
+Contradiction involving its evidence. Market and commercial gates require independent
+behavior evidence. Time-sensitive gates cite current Source Freshness entries for every
+supporting Observation. `commercialRanges` is `null` only while unresolved; otherwise
+every low value is less than its high value and every range cites supporting evidence.
+
+When research continues, each later post-Breadth-Gate reservation selects a current
+positive Decision Value priority by adding:
+
+```json
+{
+  "purpose": "Research current Costly Problem behavior",
+  "retrievalRoute": "public-web-search",
+  "researchClass": "deepening",
+  "opportunityId": "stable-opportunity-id",
+  "decisionValuePriorityId": "stable-current-priority-id"
+}
+```
+
+The reservation's purpose, retrieval route, research class, and Opportunity must
+exactly match the priority's `permittedAction`; naming the priority alone does not
+authorize unrelated research.
+
+Use stop reason `ordinary-budget-exhausted` only when recorded budget use leaves zero
+ordinary Source units, `no-permitted-positive-decision-value` when no lawful in-scope
+action can change a gate, and `qualification-complete` only when at least one Opportunity
+is eligible for later comparison.
+
+## Conclude No Qualifying Opportunity
+
+When no Opportunity is eligible and the latest qualification-related Campaign Decision stopped
+for budget exhaustion or no permitted positive Decision Value, run:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "conclude-no-qualifying-opportunity-stable-request-id",
+  "command": "concludeNoQualifyingOpportunity",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "concludedAt": "2026-08-31T11:30:00.000Z",
+    "reportId": "stable-no-qualifying-opportunity-report-id",
+    "continuationConditions": [
+      {
+        "id": "stable-continuation-condition-id",
+        "opportunityId": "stable-unresolved-opportunity-id",
+        "condition": "Reopen only if a public Source can resolve the linked gap within a revised Research Budget.",
+        "evidenceGapIds": ["stable-open-qualification-gap-id"]
+      }
+    ]
+  }
+}
+```
+
+All reservations must be settled, and continuation conditions cover every unresolved
+Opportunity and no rejected Opportunity. The kernel derives the structured record from
+authoritative history and deterministically renders
+`no-qualifying-opportunity-report.md`. It separates rejected and unresolved
+Opportunities and includes coverage, Breadth Gate state, Research Budget use,
+limitations, continuation conditions, completeness checks, and audit pointers. Success
+uses exit `0`: this is a valid terminal outcome, not an error. The identical request is
+idempotent; later mutation commands fail because the report and Campaign are immutable.
+
 ## Record Research Expenditure
 
 After an approved paid action is actually charged, record its budget effect:

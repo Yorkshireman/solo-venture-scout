@@ -17,6 +17,8 @@ import type {
   RecordEvidenceReasoningCommand,
   RecordDiscoveryTrancheCommand,
   RecordOpportunityExclusionGatesCommand,
+  RecordOpportunityQualificationGatesCommand,
+  ConcludeNoQualifyingOpportunityCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -34,6 +36,8 @@ import {
   validateRecordDiscoveryTrancheFields,
   validateRecordEvidenceReasoningFields,
   validateRecordOpportunityExclusionGatesFields,
+  validateRecordOpportunityQualificationGatesFields,
+  validateConcludeNoQualifyingOpportunityFields,
   validateRecordOpportunityFormationFields,
   validateRecordPublicResearchObservationFields,
   validateRecordResearchApprovalInformationFields,
@@ -51,6 +55,8 @@ import {
   recordDiscoveryTranche,
   recordEvidenceReasoning,
   recordOpportunityExclusionGates,
+  recordOpportunityQualificationGates,
+  concludeNoQualifyingOpportunity,
   recordOpportunityFormation,
   recordPublicResearchObservation,
   recordResearchApprovalInformation,
@@ -143,6 +149,8 @@ export async function executeCommand(
       "recordOpportunityFormation",
       "passBreadthGate",
       "recordOpportunityExclusionGates",
+      "recordOpportunityQualificationGates",
+      "concludeNoQualifyingOpportunity",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -457,6 +465,58 @@ export async function executeCommand(
     }
     return recordOpportunityExclusionGates(
       command as unknown as RecordOpportunityExclusionGatesCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordOpportunityQualificationGates") {
+    const invalidFields = validateRecordOpportunityQualificationGatesFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-OPPORTUNITY-QUALIFICATION-GATES-INVALID",
+          message: "Opportunity Qualification Gate evidence is invalid.",
+          action:
+            "Correct every Qualification Gate, commercial range, evidence basis, and research decision before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordOpportunityQualificationGates(
+      command as unknown as RecordOpportunityQualificationGatesCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "concludeNoQualifyingOpportunity") {
+    const invalidFields = validateConcludeNoQualifyingOpportunityFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-NO-QUALIFYING-OPPORTUNITY-INVALID",
+          message: "No Qualifying Opportunity conclusion is invalid.",
+          action:
+            "Correct the report identity and traceable continuation conditions before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return concludeNoQualifyingOpportunity(
+      command as unknown as ConcludeNoQualifyingOpportunityCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

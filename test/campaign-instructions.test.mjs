@@ -206,6 +206,66 @@ test("packaged Scout documents Opportunity Exclusion Gates and Elevated-Risk app
   assert.match(reference, /"researchDepth": "deep"/);
 });
 
+test("packaged Scout qualifies Opportunities and reports an honest no-qualifier outcome", async () => {
+  const { outputRoot } = await buildPackagedScout(
+    "solo-venture-scout-qualification-guide-",
+  );
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  for (const gate of [
+    "Costly Problem",
+    "buyer economics",
+    "customer access",
+    "value feasibility",
+    "solo feasibility",
+    "competitive viability",
+    "legal and operational feasibility",
+    "commercial plausibility",
+  ]) {
+    assert.match(instructions, new RegExp(gate, "i"));
+  }
+  assert.match(
+    instructions,
+    /Qualification Gate.+affirmative evidence.+medium or high Evidence\s+Confidence/is,
+  );
+  assert.match(
+    instructions,
+    /market and commercial claims.+independent behavior evidence/is,
+  );
+  assert.match(instructions, /time-sensitive claims.+current evidence/is);
+  assert.match(
+    instructions,
+    /Evidence Gap|Contradiction.+block.+Qualification Gate/is,
+  );
+  assert.match(
+    instructions,
+    /price.+volume.+costs.+acquisition.+capacity.+timing.+ranges.+point forecast/is,
+  );
+  assert.match(
+    instructions,
+    /Research Budget.+positive Decision Value.+continue/is,
+  );
+  assert.match(
+    instructions,
+    /No Qualifying Opportunity Report.+immutable.+valid.+not an error/is,
+  );
+  assert.match(
+    instructions,
+    /rejected Opportunities.+unresolved\s+Opportunities.+coverage.+Breadth Gate.+budget.+limitations.+continuation conditions/is,
+  );
+  assert.match(reference, /"command": "recordOpportunityQualificationGates"/);
+  assert.match(reference, /"kind": "commercial-plausibility"/);
+  assert.match(reference, /"commercialRanges"/);
+  assert.match(reference, /"decisionValuePriorityId"/);
+  assert.match(reference, /"command": "concludeNoQualifyingOpportunity"/);
+  assert.match(reference, /no-qualifying-opportunity-report\.md/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

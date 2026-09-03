@@ -261,6 +261,46 @@ facts. `active`, `rejected`, and `unresolved` are dispositions; `passed`, `faile
 `unresolved` are gate states; Leading Opportunity and Developer-Selected Opportunity
 are later terminal roles. Never turn one into another for convenience.
 
+## Apply Opportunity Qualification Gates
+
+After Exclusion Gates, evaluate every surviving Opportunity with
+`recordOpportunityQualificationGates` from
+[references/campaigns.md](references/campaigns.md). Apply the complete contract:
+Costly Problem, buyer economics, customer access, value feasibility, solo feasibility,
+competitive viability, legal and operational feasibility, and commercial plausibility.
+A Qualification Gate passes only with affirmative evidence at medium or high Evidence
+Confidence. Missing evidence leaves it unresolved; affirmative evidence against the
+required condition may fail it. Every material Evidence Gap or unresolved Contradiction
+must be recorded and blocks a passed or failed gate until resolved.
+
+Market and commercial claims require independent behavior evidence from at least two
+genuinely independent Source Lineages. Do not count duplicate publication, syndication,
+or a shared dataset twice. Time-sensitive claims require current evidence: record a
+medium- or high-confidence Source Freshness assessment for every supporting Observation
+and reassess after a material change. Supporting evidence must be an available Inference
+scoped to that Opportunity; raw Observations and cross-Opportunity Inferences do not
+affirm a Qualification Gate.
+
+Commercial plausibility must use traceable non-point ranges for price, customer volume,
+costs, acquisition, capacity, and timing. Link every range to supporting Inferences.
+The ranges describe supported bounds and uncertainty, not a point forecast or promise.
+
+After each evaluation, make an explicit qualification-related Campaign Decision. Continue only
+when Research Budget remains and at least one permitted research action has positive
+Decision Value. Put the exact purpose, retrieval route, research class, and Opportunity
+in each `decisionValuePriorities` entry, then require each later post-gate research
+reservation to reference that identity and match its action. Stop when the
+ordinary budget is exhausted, no permitted action has positive Decision Value, or every
+surviving Opportunity has completed qualification.
+
+When no Opportunity is eligible and permitted research is exhausted, use
+`concludeNoQualifyingOpportunity`. The resulting No Qualifying Opportunity Report is an
+immutable, valid terminal outcome, not an error or a forced recommendation. Report its
+Markdown path and distinguish affirmatively rejected Opportunities from unresolved
+Opportunities. Show discovery coverage, Breadth Gate state, Research Budget use,
+limitations, and traceable continuation conditions. Never send this report to Wayfinder
+or mutate the completed Campaign; a continuation requires separate developer authority.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

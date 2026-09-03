@@ -1,4 +1,5 @@
 import path from "node:path";
+import { qualificationGateKinds } from "./types.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -505,7 +506,13 @@ export function validateConfirmCampaignIntakeFields(
 
 export function validatePublicResearchCommandBase(
   payload: Record<string, unknown>,
-  instantField: "reservedAt" | "recordedAt" | "requestedAt" | "respondedAt" | "incurredAt",
+  instantField:
+    | "reservedAt"
+    | "recordedAt"
+    | "requestedAt"
+    | "respondedAt"
+    | "incurredAt"
+    | "concludedAt",
 ): string[] {
   const details: string[] = [];
   for (const field of ["campaignPath", "coordinatorId"] as const) {
@@ -539,6 +546,9 @@ export function validatePublicResearchReservation(
       ...(value.researchClass === undefined ? [] : ["researchClass"]),
       ...(value.opportunityId === undefined ? [] : ["opportunityId"]),
       ...(value.approvalId === undefined ? [] : ["approvalId"]),
+      ...(value.decisionValuePriorityId === undefined
+        ? []
+        : ["decisionValuePriorityId"]),
     ])
   ) {
     return [`${field} must contain id, sourceUnits, purpose, and retrievalRoute.`];
@@ -565,7 +575,11 @@ export function validatePublicResearchReservation(
       `${field}.researchClass must be deepening or open-world-discovery when present.`,
     );
   }
-  for (const optionalIdentity of ["opportunityId", "approvalId"] as const) {
+  for (const optionalIdentity of [
+    "opportunityId",
+    "approvalId",
+    "decisionValuePriorityId",
+  ] as const) {
     if (
       value[optionalIdentity] !== undefined &&
       (typeof value[optionalIdentity] !== "string" ||
@@ -1879,10 +1893,12 @@ export function validatePassBreadthGateFields(command: Record<string, unknown>):
   ];
 }
 
-export function validateOpportunityGateDecision(
+export function validateGateDecision(
   value: unknown,
   recordedAt: unknown,
   field: string,
+  expectedKind: "exclusion-gate" | "qualification-gate",
+  label: "Exclusion Gate" | "Qualification Gate",
 ): string[] {
   if (
     !isRecord(value) ||
@@ -1904,9 +1920,9 @@ export function validateOpportunityGateDecision(
       "decidedAt",
     ]) ||
     value.type !== "campaign-decision" ||
-    value.kind !== "exclusion-gate"
+    value.kind !== expectedKind
   ) {
-    return [`${field} must be a complete Exclusion Gate Campaign Decision.`];
+    return [`${field} must be a complete ${label} Campaign Decision.`];
   }
   const details = validateReasoningTextFields(value, field, [
     "id",
@@ -1955,6 +1971,20 @@ export function validateOpportunityGateDecision(
     details.push(`${field} cannot reach a terminal gate state with a decision-changing gap or Contradiction.`);
   }
   return details;
+}
+
+export function validateOpportunityGateDecision(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  return validateGateDecision(
+    value,
+    recordedAt,
+    field,
+    "exclusion-gate",
+    "Exclusion Gate",
+  );
 }
 
 export function validateExclusionGate(
@@ -2098,6 +2128,431 @@ export function validateRecordOpportunityExclusionGatesFields(
           assessment,
           command.payload.recordedAt,
           `payload.assessments[${index}]`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+export function validateQualificationEvidenceBasis(
+  value: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "behavioralEvidenceEntryIds",
+      "independentSourceLineages",
+      "sourceFreshnessIds",
+    ])
+  ) {
+    return [`${field} must contain the complete Qualification Gate evidence basis.`];
+  }
+  const details = [
+    ...validateEntryIdList(
+      value.behavioralEvidenceEntryIds,
+      `${field}.behavioralEvidenceEntryIds`,
+      true,
+    ),
+    ...validateEntryIdList(
+      value.sourceFreshnessIds,
+      `${field}.sourceFreshnessIds`,
+      true,
+    ),
+  ];
+  if (!Array.isArray(value.independentSourceLineages)) {
+    details.push(`${field}.independentSourceLineages must be an array.`);
+  } else {
+    for (const [index, lineage] of value.independentSourceLineages.entries()) {
+      const lineageField = `${field}.independentSourceLineages[${index}]`;
+      if (
+        !isRecord(lineage) ||
+        !hasOnlyFields(lineage, ["sourceIds", "rationale"])
+      ) {
+        details.push(`${lineageField} must identify one Source Lineage and rationale.`);
+        continue;
+      }
+      details.push(
+        ...validateEntryIdList(lineage.sourceIds, `${lineageField}.sourceIds`, false),
+        ...validateReasoningTextFields(lineage, lineageField, ["rationale"]),
+      );
+    }
+  }
+  return details;
+}
+
+export function validateTraceableCommercialRange(
+  value: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["low", "high", "unit", "evidenceEntryIds"])
+  ) {
+    return [`${field} must be a complete traceable range.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["unit"]);
+  if (
+    typeof value.low !== "number" ||
+    !Number.isFinite(value.low) ||
+    typeof value.high !== "number" ||
+    !Number.isFinite(value.high) ||
+    value.low >= value.high
+  ) {
+    details.push(`${field} must have finite low and high values with low less than high.`);
+  }
+  details.push(
+    ...validateEntryIdList(
+      value.evidenceEntryIds,
+      `${field}.evidenceEntryIds`,
+      false,
+    ),
+  );
+  return details;
+}
+
+export function validateCommercialPlausibilityRanges(
+  value: unknown,
+  field: string,
+): string[] {
+  const rangeNames = [
+    "price",
+    "customerVolume",
+    "costs",
+    "acquisition",
+    "capacity",
+    "timing",
+  ];
+  if (!isRecord(value) || !hasOnlyFields(value, rangeNames)) {
+    return [`${field} must contain every traceable commercial range.`];
+  }
+  return rangeNames.flatMap((rangeName) =>
+    validateTraceableCommercialRange(value[rangeName], `${field}.${rangeName}`),
+  );
+}
+
+export function validateQualificationGateDecision(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  return validateGateDecision(
+    value,
+    recordedAt,
+    field,
+    "qualification-gate",
+    "Qualification Gate",
+  );
+}
+
+export function validateQualificationGate(
+  value: unknown,
+  opportunityId: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (!isRecord(value)) {
+    return [`${field} must be a complete Qualification Gate.`];
+  }
+  const commercial = value.kind === "commercial-plausibility";
+  const expectedFields = [
+    "id",
+    "kind",
+    "state",
+    "evidenceBasis",
+    ...(commercial ? ["commercialRanges"] : []),
+    "decision",
+  ];
+  if (!hasOnlyFields(value, expectedFields)) {
+    return [`${field} must be a complete Qualification Gate.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id"]);
+  if (!(qualificationGateKinds as readonly unknown[]).includes(value.kind)) {
+    details.push(`${field}.kind must name a supported Qualification Gate.`);
+  }
+  if (!(["passed", "failed", "unresolved"] as unknown[]).includes(value.state)) {
+    details.push(`${field}.state must be passed, failed, or unresolved.`);
+  }
+  details.push(
+    ...validateQualificationEvidenceBasis(
+      value.evidenceBasis,
+      `${field}.evidenceBasis`,
+    ),
+    ...validateQualificationGateDecision(
+      value.decision,
+      recordedAt,
+      `${field}.decision`,
+    ),
+  );
+  if (
+    isRecord(value.decision) &&
+    (value.decision.outcome !== value.state ||
+      value.decision.opportunityId !== opportunityId)
+  ) {
+    details.push(`${field}.decision must match the gate state and Opportunity.`);
+  }
+  if (commercial) {
+    if (value.commercialRanges === null && value.state !== "unresolved") {
+      details.push(`${field}.commercialRanges may be null only while the gate is unresolved.`);
+    } else if (value.commercialRanges !== null) {
+      details.push(
+        ...validateCommercialPlausibilityRanges(
+          value.commercialRanges,
+          `${field}.commercialRanges`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+export function validateQualificationCampaignDecision(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "kind",
+      "outcome",
+      "intakeVersion",
+      "applicableRule",
+      "evidenceEntryIds",
+      "decisionValuePriorities",
+      "stopReason",
+      "rationale",
+      "confidence",
+      "limitations",
+      "decidedAt",
+    ]) ||
+    value.type !== "campaign-decision" ||
+    value.kind !== "qualification-research"
+  ) {
+    return [`${field} must be a complete qualification-related Campaign Decision.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "applicableRule",
+    "rationale",
+  ]);
+  if (!(["continue", "stop"] as unknown[]).includes(value.outcome)) {
+    details.push(`${field}.outcome must be continue or stop.`);
+  }
+  if (!Number.isSafeInteger(value.intakeVersion) || Number(value.intakeVersion) <= 0) {
+    details.push(`${field}.intakeVersion must be a positive safe integer.`);
+  }
+  details.push(
+    ...validateEntryIdList(value.evidenceEntryIds, `${field}.evidenceEntryIds`, true),
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+    ...validateAssessmentLimitations(value.limitations, field),
+  );
+  if (!isIsoInstant(value.decidedAt) || value.decidedAt !== recordedAt) {
+    details.push(`${field}.decidedAt must equal the operation's recordedAt instant.`);
+  }
+  if (!Array.isArray(value.decisionValuePriorities)) {
+    details.push(`${field}.decisionValuePriorities must be an array.`);
+  } else {
+    for (const [index, priority] of value.decisionValuePriorities.entries()) {
+      const priorityField = `${field}.decisionValuePriorities[${index}]`;
+      if (
+        !isRecord(priority) ||
+        !hasOnlyFields(priority, [
+          "id",
+          "researchQuestion",
+          "target",
+          "permittedAction",
+          "rationale",
+        ])
+      ) {
+        details.push(`${priorityField} must be a complete qualitative Decision Value priority.`);
+        continue;
+      }
+      details.push(
+        ...validateReasoningTextFields(priority, priorityField, [
+          "id",
+          "researchQuestion",
+          "rationale",
+        ]),
+      );
+      if (
+        !isRecord(priority.target) ||
+        !hasOnlyFields(priority.target, ["kind", "id"]) ||
+        !["formation", "gate", "contradiction", "comparison"].includes(
+          String(priority.target.kind),
+        )
+      ) {
+        details.push(`${priorityField}.target must name one supported decision target.`);
+      } else {
+        details.push(
+          ...validateReasoningTextFields(priority.target, `${priorityField}.target`, ["id"]),
+        );
+      }
+      if (
+        !isRecord(priority.permittedAction) ||
+        !hasOnlyFields(priority.permittedAction, [
+          "purpose",
+          "retrievalRoute",
+          "researchClass",
+          "opportunityId",
+        ])
+      ) {
+        details.push(
+          `${priorityField}.permittedAction must describe the exact permitted research action.`,
+        );
+      } else {
+        details.push(
+          ...validateReasoningTextFields(
+            priority.permittedAction,
+            `${priorityField}.permittedAction`,
+            ["purpose", "retrievalRoute", "opportunityId"],
+          ),
+        );
+        if (priority.permittedAction.researchClass !== "deepening") {
+          details.push(
+            `${priorityField}.permittedAction.researchClass must be deepening.`,
+          );
+        }
+      }
+    }
+  }
+  const validStopReasons = [
+    "ordinary-budget-exhausted",
+    "no-permitted-positive-decision-value",
+    "qualification-complete",
+  ];
+  if (
+    (value.outcome === "continue" &&
+      (value.stopReason !== null ||
+        !Array.isArray(value.decisionValuePriorities) ||
+        value.decisionValuePriorities.length === 0)) ||
+    (value.outcome === "stop" &&
+      (!validStopReasons.includes(String(value.stopReason)) ||
+        !Array.isArray(value.decisionValuePriorities) ||
+        value.decisionValuePriorities.length !== 0))
+  ) {
+    details.push(`${field} must pair continued research with priorities or stopped research with one stop reason.`);
+  }
+  return details;
+}
+
+export function validateOpportunityQualificationAssessment(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["id", "opportunityId", "gates"])
+  ) {
+    return [`${field} must be a complete Opportunity qualification assessment.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id", "opportunityId"]);
+  if (!Array.isArray(value.gates) || value.gates.length === 0) {
+    details.push(`${field}.gates must contain the complete Qualification Gate contract.`);
+  } else {
+    for (const [index, gate] of value.gates.entries()) {
+      details.push(
+        ...validateQualificationGate(
+          gate,
+          value.opportunityId,
+          recordedAt,
+          `${field}.gates[${index}]`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+export function validateRecordOpportunityQualificationGatesFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "recordedAt");
+  if (
+    !isRecord(command.payload.evaluation) ||
+    !hasOnlyFields(command.payload.evaluation, [
+      "id",
+      "assessments",
+      "researchDecision",
+    ])
+  ) {
+    details.push("payload.evaluation must contain the complete Qualification Gate evaluation.");
+    return details;
+  }
+  const evaluation = command.payload.evaluation;
+  details.push(
+    ...validateReasoningTextFields(evaluation, "payload.evaluation", ["id"]),
+  );
+  if (!Array.isArray(evaluation.assessments)) {
+    details.push("payload.evaluation.assessments must contain every surviving Opportunity.");
+  } else {
+    for (const [index, assessment] of evaluation.assessments.entries()) {
+      details.push(
+        ...validateOpportunityQualificationAssessment(
+          assessment,
+          command.payload.recordedAt,
+          `payload.evaluation.assessments[${index}]`,
+        ),
+      );
+    }
+  }
+  details.push(
+    ...validateQualificationCampaignDecision(
+      evaluation.researchDecision,
+      command.payload.recordedAt,
+      "payload.evaluation.researchDecision",
+    ),
+  );
+  return details;
+}
+
+export function validateConcludeNoQualifyingOpportunityFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(
+    command.payload,
+    "concludedAt",
+  );
+  details.push(
+    ...validateReasoningTextFields(command.payload, "payload", ["reportId"]),
+  );
+  if (!Array.isArray(command.payload.continuationConditions)) {
+    details.push("payload.continuationConditions must be an array.");
+  } else {
+    for (const [index, condition] of command.payload.continuationConditions.entries()) {
+      const field = `payload.continuationConditions[${index}]`;
+      if (
+        !isRecord(condition) ||
+        !hasOnlyFields(condition, [
+          "id",
+          "opportunityId",
+          "condition",
+          "evidenceGapIds",
+        ])
+      ) {
+        details.push(`${field} must be a complete continuation condition.`);
+        continue;
+      }
+      details.push(
+        ...validateReasoningTextFields(condition, field, [
+          "id",
+          "opportunityId",
+          "condition",
+        ]),
+        ...validateEntryIdList(
+          condition.evidenceGapIds,
+          `${field}.evidenceGapIds`,
+          true,
         ),
       );
     }

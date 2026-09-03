@@ -13,6 +13,8 @@ import type {
   RecordEvidenceReasoningCommand,
   RecordDiscoveryTrancheCommand,
   RecordOpportunityExclusionGatesCommand,
+  RecordOpportunityQualificationGatesCommand,
+  ConcludeNoQualifyingOpportunityCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -40,6 +42,10 @@ import {
   locateCampaign,
   opportunityExclusionEvaluationViolation,
   opportunityExclusionGateRecords,
+  opportunityQualificationEvaluationViolation,
+  opportunityQualificationGateRecords,
+  noQualifyingOpportunityRecords,
+  noQualifyingOpportunityViolation,
   opportunityFormationRecords,
   opportunityFormationViolation,
   opportunityDeepeningViolation,
@@ -47,6 +53,7 @@ import {
   persistDerivedCampaignState,
   publicResearchObservationRecords,
   publicResearchAllocationViolation,
+  researchDecisionValueViolation,
   publicResearchApprovalScopeMismatch,
   publicResearchReservationRecords,
   readCampaignRecords,
@@ -72,6 +79,8 @@ export type CoordinatorCommand =
   | RecordOpportunityFormationCommand
   | PassBreadthGateCommand
   | RecordOpportunityExclusionGatesCommand
+  | RecordOpportunityQualificationGatesCommand
+  | ConcludeNoQualifyingOpportunityCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -198,6 +207,19 @@ export async function runCoordinatorOperation<
         command,
         descriptor.replayResult(command, replayed),
       );
+    }
+
+    if (
+      rebuiltCampaign.authoritativeHistory.noQualifyingOpportunityReports.length >
+      0
+    ) {
+      return coordinatorOperationFailure(command, {
+        code: "SVS-CAMPAIGN-TERMINAL",
+        message:
+          "The Scouting Campaign has an immutable No Qualifying Opportunity terminal record.",
+        action:
+          "Inspect or explain the terminal report; begin a separately authorised continuation rather than mutating this Campaign.",
+      });
     }
 
     if (descriptor.loadBeforeRequestConflict) {
@@ -611,6 +633,30 @@ export async function reservePublicResearch(
             command.payload.reservation.researchClass === "deepening"
               ? "Use the next ordinary Source unit for open-world discovery."
               : "Use the next ordinary Source unit for Opportunity deepening.",
+        };
+      }
+      const decisionValueViolation = researchDecisionValueViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.reservation,
+      );
+      if (decisionValueViolation !== undefined) {
+        return {
+          code:
+            decisionValueViolation === "required"
+              ? "SVS-RESEARCH-DECISION-VALUE-REQUIRED"
+              : decisionValueViolation === "scope"
+                ? "SVS-RESEARCH-DECISION-VALUE-SCOPE-MISMATCH"
+                : "SVS-QUALIFICATION-RESEARCH-STOPPED",
+          message:
+            decisionValueViolation === "required"
+              ? "Qualification research must name a current positive Decision Value priority."
+              : decisionValueViolation === "scope"
+                ? "The research reservation does not match a current Decision Value priority for this Opportunity."
+                : "The latest qualification-related Campaign Decision stopped further research.",
+          action:
+            decisionValueViolation === "stopped"
+              ? "Do not reserve more research; follow the latest terminal or comparison action."
+              : "Use one current Decision Value priority and keep the reservation within its target Opportunity and research allocation.",
         };
       }
       return undefined;
@@ -1778,6 +1824,202 @@ export async function recordOpportunityExclusionGates(
   });
 }
 
+export async function recordOpportunityQualificationGates(
+  command: RecordOpportunityQualificationGatesCommand,
+  currentTime: string,
+) {
+  const result = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    evaluation: command.payload.evaluation,
+    workView: campaign.workView,
+    evidenceLedger: campaign.evidenceLedger,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record Opportunity Qualification Gates concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Opportunity Qualification Gate request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Opportunity Qualification Gates could not be recorded against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors[
+              "record-opportunity-qualification-gates"
+            ].outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.evaluation) ===
+            JSON.stringify(command.payload.evaluation),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.authoritativeHistory.opportunityExclusionEvaluations
+        .length === 0
+        ? {
+            code: "SVS-OPPORTUNITY-QUALIFICATION-GATES-NOT-AVAILABLE",
+            message:
+              "Opportunity Qualification Gates require recorded Opportunity Exclusion Gates.",
+            action:
+              "Complete every Exclusion Gate before recording Qualification Gate decisions.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Opportunity Qualification Gates require the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before recording gate decisions.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const violation = opportunityQualificationEvaluationViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.evaluation,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-OPPORTUNITY-QUALIFICATION-GATE-INVARIANT-VIOLATION",
+            message: `Opportunity Qualification Gates violate a campaign invariant: ${violation}.`,
+            action:
+              "Assess every surviving Opportunity against the complete Qualification Gate contract using traceable affirmative evidence or an explicit unresolved state.",
+          };
+    },
+    records({ before }) {
+      return opportunityQualificationGateRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
+export async function concludeNoQualifyingOpportunity(
+  command: ConcludeNoQualifyingOpportunityCommand,
+  currentTime: string,
+) {
+  const result = (completed: boolean, campaign: LoadedCampaign) => ({
+    completed,
+    terminalOutcome: "no-qualifying-opportunity" as const,
+    report: campaign.noQualifyingOpportunityReport,
+    artifact: {
+      path: path.join(
+        campaign.campaign.path,
+        "no-qualifying-opportunity-report.md",
+      ),
+      format: "markdown" as const,
+      immutable: true as const,
+    },
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not conclude the Scouting Campaign concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "No Qualifying Opportunity request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "No Qualifying Opportunity could not be concluded against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors[
+              "conclude-no-qualifying-opportunity"
+            ].outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.report) &&
+          record.report.id === command.payload.reportId &&
+          JSON.stringify(record.report.continuationConditions) ===
+            JSON.stringify(command.payload.continuationConditions),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      const violation = noQualifyingOpportunityViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.reportId,
+        command.payload.concludedAt,
+        command.payload.continuationConditions,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-NO-QUALIFYING-OPPORTUNITY-NOT-AVAILABLE",
+            message: `No Qualifying Opportunity violates a campaign invariant: ${violation}.`,
+            action:
+              "Finish every surviving Opportunity's Qualification Gates and exhaust permitted positive-Decision-Value research before concluding.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "No Qualifying Opportunity conclusion requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before terminalizing it.",
+        };
+      },
+    },
+    records({ rebuiltCampaign }) {
+      return noQualifyingOpportunityRecords(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
 export async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -1855,6 +2097,8 @@ export async function createCampaign(command: CreateCampaignCommand) {
         campaignIntake: "campaign-intake.json",
         researchBudget: "research-budget.json",
         evidenceLedger: "evidence-ledger.json",
+        noQualifyingOpportunityReport:
+          "no-qualifying-opportunity-report.md",
       },
     };
 
