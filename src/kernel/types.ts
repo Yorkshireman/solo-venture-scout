@@ -117,7 +117,7 @@ export type ResearchBudget = {
 };
 
 export type CampaignIntake = {
-  version: 1;
+  version: number;
   explicitlyConfirmed: true;
   developerProfileSnapshot: DeveloperProfileSnapshot;
   commercialOutcomeTarget: CommercialOutcomeTarget;
@@ -151,6 +151,7 @@ export type PublicResearchReservation = {
   opportunityId?: string;
   approvalId?: string;
   decisionValuePriorityId?: string;
+  evidenceGapId?: string;
 };
 
 export type ReservePublicResearchCommand = {
@@ -499,11 +500,20 @@ export type ComparisonCampaignDecision = {
   decidedAt: string;
 };
 
+export type InconclusiveComparisonCampaignDecision = Omit<
+  ComparisonCampaignDecision,
+  "outcome" | "leaderOpportunityId"
+> & {
+  outcome: "inconclusive-comparison";
+  leaderOpportunityId: null;
+};
+
 export type CampaignDecision =
   | FormationCampaignDecision
   | OpportunityGateDecision
   | QualificationCampaignDecision
-  | ComparisonCampaignDecision;
+  | ComparisonCampaignDecision
+  | InconclusiveComparisonCampaignDecision;
 
 export type ExclusionGate = {
   id: string;
@@ -838,11 +848,19 @@ export type OpportunityBrief = {
   briefVersion: string;
   id: string;
   kind: "opportunity-brief";
-  role: "scout-recommended-leading-opportunity";
+  role:
+    | "scout-recommended-leading-opportunity"
+    | "developer-selected-opportunity";
   campaignId: string;
   concludedAt: string;
   intakeVersion: number;
   supersedes: null;
+  selectionProvenance?: {
+    kind: "developer-selection";
+    reportId: string;
+    rationale: string;
+    classification: "developer-preference-not-market-evidence";
+  };
   opportunity: OpportunityBriefOpportunity;
   commercialOutcomeTarget: CommercialOutcomeTarget;
   researchBudget: ResearchBudgetView;
@@ -896,7 +914,7 @@ export type OpportunityBrief = {
   wayfinderHandoff: {
     optional: true;
     invoked: false;
-    briefPath: "opportunity-brief.md";
+    briefPath: string;
     instruction: string;
   };
 };
@@ -919,6 +937,104 @@ export type ConcludeLeadingOpportunityCommand = {
     comparison: OpportunityComparison;
     brief: LeadingOpportunityBriefInput;
   };
+};
+
+export type InconclusiveComparisonBlocker = {
+  contenderOpportunityId: string;
+  couldDisplaceOpportunityIds: string[];
+  summary: string;
+  evidenceGapIds: string[];
+  contradictionIds: string[];
+  evidenceEntryIds: string[];
+};
+
+export type InconclusiveOpportunityComparison = Pick<
+  OpportunityComparison,
+  "id" | "profiles" | "dominanceAssessments" | "nonDominatedOpportunityIds"
+> & {
+  decisiveTradeOffs: Array<
+    EvidenceBackedComparison & { opportunityIds: string[] }
+  >;
+  apparentLeaderOpportunityId: string | null;
+  blockers: InconclusiveComparisonBlocker[];
+  decision: InconclusiveComparisonCampaignDecision;
+};
+
+export type InconclusiveComparisonReport = {
+  reportVersion: string;
+  id: string;
+  kind: "inconclusive-comparison-report";
+  campaignId: string;
+  concludedAt: string;
+  intakeVersion: number;
+  supersedes: string | null;
+  comparison: InconclusiveOpportunityComparison;
+  availableActions: ["stop", "extend", "select"];
+  audit: {
+    authoritativeRecordsPath: "records.jsonl";
+    evidenceLedgerPath: "evidence-ledger.json";
+  };
+};
+
+export type ConcludeInconclusiveComparisonCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "concludeInconclusiveComparison";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    concludedAt: string;
+    reportId: string;
+    comparison: InconclusiveOpportunityComparison;
+  };
+};
+
+export type InconclusiveComparisonStopResponse = {
+  kind: "stop";
+  rationale: string;
+};
+
+export type InconclusiveComparisonExtendResponse = {
+  kind: "extend";
+  rationale: string;
+  targetedEvidenceGapIds: string[];
+  affectedOpportunityIds: string[];
+  researchBudget: ResearchBudget;
+};
+
+export type DeveloperOpportunitySelection = {
+  opportunityId: string;
+  rationale: string;
+  brief: LeadingOpportunityBriefInput;
+};
+
+export type InconclusiveComparisonSelectResponse = {
+  kind: "select";
+  selections: DeveloperOpportunitySelection[];
+};
+
+export type InconclusiveComparisonResponse =
+  | InconclusiveComparisonStopResponse
+  | InconclusiveComparisonExtendResponse
+  | InconclusiveComparisonSelectResponse;
+
+export type RespondInconclusiveComparisonCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "respondInconclusiveComparison";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    respondedAt: string;
+    reportId: string;
+    response: InconclusiveComparisonResponse;
+  };
+};
+
+export type InconclusiveComparisonResponseRecord = {
+  reportId: string;
+  respondedAt: string;
+  response: InconclusiveComparisonResponse;
 };
 
 export type OpportunityFormationAssessment = {
@@ -1211,6 +1327,7 @@ export type WorkView = {
     | "discovery-active"
     | "opportunity-formation"
     | "opportunity-deepening"
+    | "inconclusive-comparison"
     | "terminal";
   pause:
     | null
@@ -1320,7 +1437,10 @@ export type WorkView = {
       decisionIds: string[];
     };
     eligibility?: "ineligible" | "pending-qualification" | "eligible";
-    terminalRole?: null | "leading-opportunity";
+    terminalRole?:
+      | null
+      | "leading-opportunity"
+      | "developer-selected-opportunity";
   }>;
   researchAllocation?:
     | {
@@ -1369,7 +1489,36 @@ export type WorkView = {
         artifactPath: "opportunity-brief.md";
         immutable: true;
         concludedAt: string;
+      }
+    | {
+        outcome: "inconclusive-comparison";
+        reportId: string;
+        artifactPath: "inconclusive-comparison-report.md";
+        action: "stopped";
+        immutable: true;
+        concludedAt: string;
+      }
+    | {
+        outcome: "developer-selected-opportunities";
+        reportId: string;
+        briefIds: string[];
+        artifactPaths: string[];
+        immutable: true;
+        concludedAt: string;
       };
+  inconclusiveComparison?: {
+    reportId: string;
+    artifactPath: "inconclusive-comparison-report.md";
+    immutable: true;
+    concludedAt: string;
+    availableActions: ["stop", "extend", "select"];
+  };
+  researchExtension?: {
+    reportId: string;
+    intakeVersion: number;
+    targetedEvidenceGapIds: string[];
+    affectedOpportunityIds: string[];
+  };
 };
 
 export type CoordinatorLease = {
@@ -1392,6 +1541,8 @@ export type AuthoritativeOperation =
   | "record-opportunity-qualification-gates"
   | "conclude-no-qualifying-opportunity"
   | "conclude-leading-opportunity"
+  | "conclude-inconclusive-comparison"
+  | "respond-inconclusive-comparison"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"

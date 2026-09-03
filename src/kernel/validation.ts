@@ -554,6 +554,7 @@ export function validatePublicResearchReservation(
       ...(value.decisionValuePriorityId === undefined
         ? []
         : ["decisionValuePriorityId"]),
+      ...(value.evidenceGapId === undefined ? [] : ["evidenceGapId"]),
     ])
   ) {
     return [`${field} must contain id, sourceUnits, purpose, and retrievalRoute.`];
@@ -584,6 +585,7 @@ export function validatePublicResearchReservation(
     "opportunityId",
     "approvalId",
     "decisionValuePriorityId",
+    "evidenceGapId",
   ] as const) {
     if (
       value[optionalIdentity] !== undefined &&
@@ -3394,5 +3396,444 @@ export function validateRecordResearchExpenditureFields(
   ) {
     details.push("payload.expenditure.amount must be a positive finite number.");
   }
+  return details;
+}
+
+export function validateConcludeInconclusiveComparisonFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "concludedAt");
+  details.push(
+    ...validateReasoningTextFields(command.payload, "payload", ["reportId"]),
+  );
+  const comparison = command.payload.comparison;
+  if (
+    !isRecord(comparison) ||
+    !hasOnlyFields(comparison, [
+      "id",
+      "profiles",
+      "dominanceAssessments",
+      "nonDominatedOpportunityIds",
+      "decisiveTradeOffs",
+      "apparentLeaderOpportunityId",
+      "blockers",
+      "decision",
+    ])
+  ) {
+    details.push("payload.comparison must be a complete unscored inconclusive Opportunity comparison.");
+    return details;
+  }
+  details.push(
+    ...validateReasoningTextFields(comparison, "payload.comparison", ["id"]),
+    ...validateNoFalsePrecision(comparison, "payload.comparison"),
+  );
+  if (!Array.isArray(comparison.profiles) || comparison.profiles.length === 0) {
+    details.push("payload.comparison.profiles must contain every Eligible Opportunity.");
+  } else {
+    comparison.profiles.forEach((profile, index) => {
+      details.push(
+        ...validateComparisonProfile(
+          profile,
+          `payload.comparison.profiles[${index}]`,
+        ),
+      );
+    });
+  }
+  if (!Array.isArray(comparison.dominanceAssessments)) {
+    details.push("payload.comparison.dominanceAssessments must be an array.");
+  } else {
+    comparison.dominanceAssessments.forEach((assessment, index) => {
+      const field = `payload.comparison.dominanceAssessments[${index}]`;
+      if (
+        !isRecord(assessment) ||
+        !hasOnlyFields(assessment, [
+          "challengerOpportunityId",
+          "alternativeOpportunityId",
+          "outcome",
+          "criteria",
+          "rationale",
+          "evidenceEntryIds",
+          "confidence",
+        ]) ||
+        !isRecord(assessment.criteria) ||
+        !hasOnlyFields(assessment.criteria, [
+          "requiresNoMoreMaterialInput",
+          "offersNoLessCredibleOutput",
+          "fitsDeveloperProfileAtLeastAsWell",
+          "materiallyBetterOn",
+        ])
+      ) {
+        details.push(`${field} must be a complete pairwise dominance assessment.`);
+        return;
+      }
+      details.push(
+        ...validateReasoningTextFields(assessment, field, [
+          "challengerOpportunityId",
+          "alternativeOpportunityId",
+          "rationale",
+        ]),
+        ...validateEntryIdList(
+          assessment.evidenceEntryIds,
+          `${field}.evidenceEntryIds`,
+          false,
+        ),
+        ...validateEvidenceConfidence(assessment.confidence, `${field}.confidence`),
+      );
+      if (!(assessment.outcome === "dominates" || assessment.outcome === "does-not-dominate")) {
+        details.push(`${field}.outcome must be dominates or does-not-dominate.`);
+      }
+      for (const criterion of [
+        "requiresNoMoreMaterialInput",
+        "offersNoLessCredibleOutput",
+        "fitsDeveloperProfileAtLeastAsWell",
+      ] as const) {
+        if (typeof assessment.criteria[criterion] !== "boolean") {
+          details.push(`${field}.criteria.${criterion} must be a boolean.`);
+        }
+      }
+      details.push(
+        ...validateEntryIdList(
+          assessment.criteria.materiallyBetterOn,
+          `${field}.criteria.materiallyBetterOn`,
+          assessment.outcome !== "dominates",
+        ),
+      );
+      if (
+        Array.isArray(assessment.criteria.materiallyBetterOn) &&
+        assessment.criteria.materiallyBetterOn.some(
+          (dimension) =>
+            !(comparisonDimensions as readonly unknown[]).includes(dimension),
+        )
+      ) {
+        details.push(`${field}.criteria.materiallyBetterOn contains an unknown comparison dimension.`);
+      }
+    });
+  }
+  details.push(
+    ...validateEntryIdList(
+      comparison.nonDominatedOpportunityIds,
+      "payload.comparison.nonDominatedOpportunityIds",
+      false,
+    ),
+  );
+  if (!Array.isArray(comparison.decisiveTradeOffs) || comparison.decisiveTradeOffs.length === 0) {
+    details.push("payload.comparison.decisiveTradeOffs must name at least one evidence-backed trade-off.");
+  } else {
+    comparison.decisiveTradeOffs.forEach((tradeOff, index) => {
+      const field = `payload.comparison.decisiveTradeOffs[${index}]`;
+      if (
+        !isRecord(tradeOff) ||
+        !hasOnlyFields(tradeOff, [
+          "opportunityIds",
+          "summary",
+          "evidenceEntryIds",
+          "confidence",
+        ])
+      ) {
+        details.push(`${field} must be a complete evidence-backed decisive trade-off.`);
+        return;
+      }
+      details.push(
+        ...validateEntryIdList(tradeOff.opportunityIds, `${field}.opportunityIds`, false),
+        ...validateEvidenceBackedComparison(
+          {
+            summary: tradeOff.summary,
+            evidenceEntryIds: tradeOff.evidenceEntryIds,
+            confidence: tradeOff.confidence,
+          },
+          field,
+        ),
+      );
+    });
+  }
+  if (
+    comparison.apparentLeaderOpportunityId !== null &&
+    (typeof comparison.apparentLeaderOpportunityId !== "string" ||
+      comparison.apparentLeaderOpportunityId.trim() === "")
+  ) {
+    details.push("payload.comparison.apparentLeaderOpportunityId must be null or a non-empty Opportunity identity.");
+  }
+  if (!Array.isArray(comparison.blockers)) {
+    details.push("payload.comparison.blockers must be an array of explicit unresolved-contender blockers.");
+  } else {
+    comparison.blockers.forEach((blocker, index) => {
+      const field = `payload.comparison.blockers[${index}]`;
+      if (
+        !isRecord(blocker) ||
+        !hasOnlyFields(blocker, [
+          "contenderOpportunityId",
+          "couldDisplaceOpportunityIds",
+          "summary",
+          "evidenceGapIds",
+          "contradictionIds",
+          "evidenceEntryIds",
+        ])
+      ) {
+        details.push(`${field} must be a complete explicit contender blocker.`);
+        return;
+      }
+      details.push(
+        ...validateReasoningTextFields(blocker, field, [
+          "contenderOpportunityId",
+          "summary",
+        ]),
+        ...validateEntryIdList(
+          blocker.couldDisplaceOpportunityIds,
+          `${field}.couldDisplaceOpportunityIds`,
+          false,
+        ),
+        ...validateEntryIdList(blocker.evidenceGapIds, `${field}.evidenceGapIds`, true),
+        ...validateEntryIdList(blocker.contradictionIds, `${field}.contradictionIds`, true),
+        ...validateEntryIdList(blocker.evidenceEntryIds, `${field}.evidenceEntryIds`, false),
+      );
+      if (
+        Array.isArray(blocker.evidenceGapIds) &&
+        Array.isArray(blocker.contradictionIds) &&
+        blocker.evidenceGapIds.length + blocker.contradictionIds.length === 0
+      ) {
+        details.push(`${field} must link an unresolved Evidence Gap or Contradiction.`);
+      }
+    });
+  }
+  const decision = comparison.decision;
+  if (
+    !isRecord(decision) ||
+    !hasOnlyFields(decision, [
+      "type",
+      "id",
+      "kind",
+      "outcome",
+      "leaderOpportunityId",
+      "intakeVersion",
+      "applicableRule",
+      "evidenceEntryIds",
+      "rationale",
+      "confidence",
+      "limitations",
+      "decidedAt",
+    ]) ||
+    decision.type !== "campaign-decision" ||
+    decision.kind !== "opportunity-comparison" ||
+    decision.outcome !== "inconclusive-comparison" ||
+    decision.leaderOpportunityId !== null
+  ) {
+    details.push("payload.comparison.decision must be an Inconclusive Comparison Campaign Decision without a leader.");
+  } else {
+    details.push(
+      ...validateReasoningTextFields(decision, "payload.comparison.decision", [
+        "id",
+        "applicableRule",
+        "rationale",
+      ]),
+      ...validateEntryIdList(
+        decision.evidenceEntryIds,
+        "payload.comparison.decision.evidenceEntryIds",
+        false,
+      ),
+      ...validateEvidenceConfidence(
+        decision.confidence,
+        "payload.comparison.decision.confidence",
+      ),
+      ...validateAssessmentLimitations(
+        decision.limitations,
+        "payload.comparison.decision",
+      ),
+    );
+    if (!Number.isSafeInteger(decision.intakeVersion) || Number(decision.intakeVersion) <= 0) {
+      details.push("payload.comparison.decision.intakeVersion must be a positive safe integer.");
+    }
+    if (!isIsoInstant(decision.decidedAt) || decision.decidedAt !== command.payload.concludedAt) {
+      details.push("payload.comparison.decision.decidedAt must equal payload.concludedAt.");
+    }
+  }
+  return details;
+}
+
+export function validateRespondInconclusiveComparisonFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "respondedAt");
+  details.push(
+    ...validateReasoningTextFields(command.payload, "payload", ["reportId"]),
+  );
+  const response = command.payload.response;
+  if (
+    isRecord(response) &&
+    response.kind === "extend" &&
+    hasOnlyFields(response, [
+      "kind",
+      "rationale",
+      "targetedEvidenceGapIds",
+      "affectedOpportunityIds",
+      "researchBudget",
+    ])
+  ) {
+    details.push(
+      ...validateReasoningTextFields(response, "payload.response", ["rationale"]),
+      ...validateEntryIdList(
+        response.targetedEvidenceGapIds,
+        "payload.response.targetedEvidenceGapIds",
+        false,
+      ),
+      ...validateEntryIdList(
+        response.affectedOpportunityIds,
+        "payload.response.affectedOpportunityIds",
+        false,
+      ),
+      ...validateResearchBudget(
+        response.researchBudget,
+        isRecord(response.researchBudget) &&
+          isRecord(response.researchBudget.paidSpendCap)
+          ? response.researchBudget.paidSpendCap.currency
+          : undefined,
+      ),
+    );
+    return details;
+  }
+  if (
+    isRecord(response) &&
+    response.kind === "select" &&
+    hasOnlyFields(response, ["kind", "selections"])
+  ) {
+    if (!Array.isArray(response.selections) || response.selections.length === 0) {
+      details.push("payload.response.selections must contain at least one Developer-Selected Opportunity.");
+      return details;
+    }
+    response.selections.forEach((selection, selectionIndex) => {
+      const selectionField = `payload.response.selections[${selectionIndex}]`;
+      if (
+        !isRecord(selection) ||
+        !hasOnlyFields(selection, ["opportunityId", "rationale", "brief"])
+      ) {
+        details.push(`${selectionField} must contain one Opportunity, developer rationale, and brief input.`);
+        return;
+      }
+      details.push(
+        ...validateReasoningTextFields(selection, selectionField, [
+          "opportunityId",
+          "rationale",
+        ]),
+      );
+      const brief = selection.brief;
+      if (
+        !isRecord(brief) ||
+        !hasOnlyFields(brief, [
+          "id",
+          "buyerEconomics",
+          "customerAccess",
+          "alternatives",
+          "risks",
+          "valueHypothesis",
+        ])
+      ) {
+        details.push(`${selectionField}.brief must contain the complete Opportunity Brief input without product specification fields.`);
+        return;
+      }
+      details.push(
+        ...validateReasoningTextFields(brief, `${selectionField}.brief`, ["id"]),
+      );
+      for (const field of ["buyerEconomics", "customerAccess", "alternatives"] as const) {
+        details.push(
+          ...validateEvidenceBackedComparison(
+            brief[field],
+            `${selectionField}.brief.${field}`,
+          ),
+        );
+      }
+      if (!Array.isArray(brief.risks) || brief.risks.length === 0) {
+        details.push(`${selectionField}.brief.risks must contain at least one evidence-backed risk or limitation.`);
+      } else {
+        brief.risks.forEach((risk, riskIndex) => {
+          details.push(
+            ...validateEvidenceBackedComparison(
+              risk,
+              `${selectionField}.brief.risks[${riskIndex}]`,
+            ),
+          );
+        });
+      }
+      const hypothesis = brief.valueHypothesis;
+      if (
+        !isRecord(hypothesis) ||
+        !hasOnlyFields(hypothesis, [
+          "status",
+          "customer",
+          "situation",
+          "smallestDesiredCustomerOutcome",
+          "supportedReason",
+          "confidence",
+          "supportingEvidenceEntryIds",
+          "challengingEvidenceEntryIds",
+          "assumptionIds",
+          "evidenceGapIds",
+          "disconfirmationConditions",
+        ]) ||
+        hypothesis.status !== "provisional-not-a-product-specification"
+      ) {
+        details.push(`${selectionField}.brief.valueHypothesis must be explicitly provisional and contain no product specification fields.`);
+        return;
+      }
+      details.push(
+        ...validateReasoningTextFields(
+          hypothesis,
+          `${selectionField}.brief.valueHypothesis`,
+          [
+            "customer",
+            "situation",
+            "smallestDesiredCustomerOutcome",
+            "supportedReason",
+          ],
+        ),
+        ...validateEvidenceConfidence(
+          hypothesis.confidence,
+          `${selectionField}.brief.valueHypothesis.confidence`,
+        ),
+        ...validateEntryIdList(
+          hypothesis.supportingEvidenceEntryIds,
+          `${selectionField}.brief.valueHypothesis.supportingEvidenceEntryIds`,
+          false,
+        ),
+        ...validateEntryIdList(
+          hypothesis.challengingEvidenceEntryIds,
+          `${selectionField}.brief.valueHypothesis.challengingEvidenceEntryIds`,
+          true,
+        ),
+        ...validateEntryIdList(
+          hypothesis.assumptionIds,
+          `${selectionField}.brief.valueHypothesis.assumptionIds`,
+          true,
+        ),
+        ...validateEntryIdList(
+          hypothesis.evidenceGapIds,
+          `${selectionField}.brief.valueHypothesis.evidenceGapIds`,
+          true,
+        ),
+        ...validateEntryIdList(
+          hypothesis.disconfirmationConditions,
+          `${selectionField}.brief.valueHypothesis.disconfirmationConditions`,
+          false,
+        ),
+        ...validateNoFalsePrecision(brief, `${selectionField}.brief`),
+      );
+    });
+    return details;
+  }
+  if (
+    !isRecord(response) ||
+    !hasOnlyFields(response, ["kind", "rationale"]) ||
+    response.kind !== "stop"
+  ) {
+    details.push("payload.response must be an explicit stop, targeted extension, or developer selection.");
+    return details;
+  }
+  details.push(
+    ...validateReasoningTextFields(response, "payload.response", ["rationale"]),
+  );
   return details;
 }

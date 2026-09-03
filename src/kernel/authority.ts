@@ -48,6 +48,12 @@ import type {
   OpportunityComparison,
   OpportunityBrief,
   ConcludeLeadingOpportunityCommand,
+  InconclusiveComparisonReport,
+  InconclusiveOpportunityComparison,
+  ConcludeInconclusiveComparisonCommand,
+  RespondInconclusiveComparisonCommand,
+  InconclusiveComparisonResponseRecord,
+  DeveloperOpportunitySelection,
   OpportunityFormation,
   RecordOpportunityFormationCommand,
   BreadthGate,
@@ -80,6 +86,11 @@ import {
 } from "./leading-opportunity.js";
 export { renderOpportunityBrief } from "./leading-opportunity.js";
 import {
+  createInconclusiveComparisonModule,
+  renderInconclusiveComparisonReport,
+} from "./inconclusive-comparison.js";
+export { renderInconclusiveComparisonReport } from "./inconclusive-comparison.js";
+import {
   hasOnlyFields,
   isIsoInstant,
   isRecord,
@@ -95,6 +106,8 @@ import {
   validateRecordOpportunityQualificationGatesFields,
   validateConcludeNoQualifyingOpportunityFields,
   validateConcludeLeadingOpportunityFields,
+  validateConcludeInconclusiveComparisonFields,
+  validateRespondInconclusiveComparisonFields,
   validateRecordOpportunityFormationFields,
   validateResearchApprovalRequest,
 } from "./validation.js";
@@ -263,6 +276,9 @@ export type AuthoritativeHistoryRebuild = {
   noQualifyingOpportunityReports: NoQualifyingOpportunityReport[];
   opportunityComparisons: OpportunityComparison[];
   opportunityBriefs: OpportunityBrief[];
+  inconclusiveComparisonReports: InconclusiveComparisonReport[];
+  inconclusiveComparisonResponses: InconclusiveComparisonResponseRecord[];
+  developerSelectedOpportunityBriefs: OpportunityBrief[];
   campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
@@ -297,6 +313,195 @@ export function activeResearchApprovalDecision(
         (response) => response.decisionId === decision.id,
       ),
   );
+}
+
+export function latestInconclusiveResearchExtension(
+  history: Pick<AuthoritativeHistoryRebuild, "inconclusiveComparisonResponses">,
+) {
+  return history.inconclusiveComparisonResponses
+    .filter((entry) => entry.response.kind === "extend")
+    .at(-1);
+}
+
+export function activeInconclusiveResearchExtension(
+  history: Pick<
+    AuthoritativeHistoryRebuild,
+    "inconclusiveComparisonReports" | "inconclusiveComparisonResponses"
+  >,
+) {
+  const report = history.inconclusiveComparisonReports.at(-1);
+  if (report === undefined) {
+    return undefined;
+  }
+  const response = latestInconclusiveResearchExtension(history);
+  return response?.reportId === report.id && response.response.kind === "extend"
+    ? response
+    : undefined;
+}
+
+export function reservationMatchesInconclusiveExtension(
+  reservation: Pick<
+    PublicResearchReservation,
+    "researchClass" | "opportunityId" | "evidenceGapId"
+  >,
+  extension: {
+    affectedOpportunityIds: string[];
+    targetedEvidenceGapIds: string[];
+  },
+): boolean {
+  return (
+    reservation.researchClass === "deepening" &&
+    extension.affectedOpportunityIds.includes(reservation.opportunityId ?? "") &&
+    extension.targetedEvidenceGapIds.includes(reservation.evidenceGapId ?? "")
+  );
+}
+
+export function inconclusiveResearchExtensionViolation(
+  history: AuthoritativeHistoryRebuild,
+  operation: AuthoritativeOperation,
+  outcome: Record<string, unknown>,
+): string | undefined {
+  const extension = activeInconclusiveResearchExtension(history);
+  if (extension?.response.kind !== "extend") {
+    return undefined;
+  }
+  const extensionScope = extension.response;
+  const affectedOpportunityIds = extensionScope.affectedOpportunityIds;
+  const targetedEvidenceGapIds = extensionScope.targetedEvidenceGapIds;
+  const scopedReservations = [...history.reservations.values()].filter(
+    (reservation) =>
+      history.reservationRecordedAt.get(reservation.id)! >= extension.respondedAt &&
+      reservationMatchesInconclusiveExtension(reservation, extensionScope),
+  );
+  const scopedReservationIds = new Set(
+    scopedReservations.map((reservation) => reservation.id),
+  );
+  const scopedObservationIds = new Set(
+    scopedReservations
+      .map((reservation) => history.reservationObservationIds.get(reservation.id))
+      .filter((id): id is string => id !== undefined),
+  );
+  const scopedSourceIds = new Set(
+    history.observations
+      .filter((observation) => scopedObservationIds.has(observation.id))
+      .map((observation) => observation.sourceId),
+  );
+  const pendingApproval = activeResearchApprovalDecision(history);
+  const approvalIsScoped =
+    pendingApproval !== undefined &&
+    affectedOpportunityIds.includes(pendingApproval.request.opportunityId ?? "");
+
+  switch (operation) {
+    case "resume-campaign":
+    case "conclude-leading-opportunity":
+    case "conclude-inconclusive-comparison":
+      return undefined;
+    case "reserve-public-research": {
+      const reservation = isRecord(outcome.reservation)
+        ? outcome.reservation
+        : {};
+      return reservationMatchesInconclusiveExtension(
+        reservation,
+        extensionScope,
+      )
+        ? undefined
+        : "research reservation is outside the targeted extension";
+    }
+    case "record-public-research-observation":
+      return scopedReservationIds.has(String(outcome.reservationId))
+        ? undefined
+        : "research observation is outside the targeted extension";
+    case "record-evidence-reasoning": {
+      if (!Array.isArray(outcome.entries) || outcome.entries.length === 0) {
+        return "evidence reasoning is outside the targeted extension";
+      }
+      const entryIsScoped = (entry: unknown): boolean => {
+        if (!isRecord(entry)) {
+          return false;
+        }
+        switch (entry.type) {
+          case "source-lineage":
+            return (
+              Array.isArray(entry.sourceIds) &&
+              entry.sourceIds.length > 0 &&
+              entry.sourceIds.every((id) => scopedSourceIds.has(String(id)))
+            );
+          case "source-credibility":
+          case "source-freshness":
+            return scopedObservationIds.has(String(entry.observationId));
+          case "evidence-gap":
+            return targetedEvidenceGapIds.includes(String(entry.id));
+          case "assumption":
+            return (
+              affectedOpportunityIds.includes(String(entry.scope)) &&
+              targetedEvidenceGapIds.includes(String(entry.evidenceGapId))
+            );
+          case "inference":
+            return affectedOpportunityIds.includes(String(entry.scope));
+          case "contradiction":
+            return affectedOpportunityIds.includes(String(entry.disputedScope));
+          case "correction":
+            return targetedEvidenceGapIds.includes(String(entry.targetEntryId));
+          default:
+            return false;
+        }
+      };
+      return outcome.entries.every(entryIsScoped)
+        ? undefined
+        : "evidence reasoning is outside the targeted extension";
+    }
+    case "record-opportunity-exclusion-gates": {
+      const opportunityIds = Array.isArray(outcome.assessments)
+        ? outcome.assessments.map((assessment) =>
+            isRecord(assessment) ? String(assessment.opportunityId) : "",
+          )
+        : [];
+      return opportunityIds.length > 0 &&
+        opportunityIds.every((id) => affectedOpportunityIds.includes(id))
+        ? undefined
+        : "Opportunity exclusion work is outside the targeted extension";
+    }
+    case "record-opportunity-qualification-gates": {
+      const evaluation = isRecord(outcome.evaluation) ? outcome.evaluation : {};
+      const opportunityIds = Array.isArray(evaluation.assessments)
+        ? evaluation.assessments.map((assessment) =>
+            isRecord(assessment) ? String(assessment.opportunityId) : "",
+          )
+        : [];
+      return opportunityIds.length > 0 &&
+        opportunityIds.every((id) => affectedOpportunityIds.includes(id))
+        ? undefined
+        : "Opportunity qualification work is outside the targeted extension";
+    }
+    case "request-research-approval": {
+      const decision = isRecord(outcome.pendingDecision)
+        ? outcome.pendingDecision
+        : {};
+      const request = isRecord(decision.request) ? decision.request : {};
+      return affectedOpportunityIds.includes(String(request.opportunityId ?? ""))
+        ? undefined
+        : "Research Approval is outside the targeted extension";
+    }
+    case "record-research-approval-information":
+    case "respond-research-approval":
+      return approvalIsScoped
+        ? undefined
+        : "Research Approval work is outside the targeted extension";
+    case "record-research-expenditure": {
+      const expenditure = isRecord(outcome.expenditure)
+        ? outcome.expenditure
+        : {};
+      const approval = history.researchApprovals.find(
+        (entry) => entry.id === expenditure.approvalId,
+      );
+      return approval !== undefined &&
+        affectedOpportunityIds.includes(approval.scope.opportunityId ?? "")
+        ? undefined
+        : "research expenditure is outside the targeted extension";
+    }
+    default:
+      return "operation is outside the targeted extension";
+  }
 }
 
 export type PublicResearchAllocationViolation =
@@ -2057,10 +2262,17 @@ export function researchBudgetViewForHistory(
   history: AuthoritativeHistoryRebuild,
 ): ResearchBudgetView {
   const intake = history.intake!;
+  const activeExtension = latestInconclusiveResearchExtension(history);
+  const activeReservations = [...history.reservations.values()].filter(
+    (reservation) =>
+      activeExtension === undefined ||
+      history.reservationRecordedAt.get(reservation.id)! >=
+        activeExtension.respondedAt,
+  );
   const ordinarySourceCap =
     intake.researchBudget.sourceCap -
     intake.researchBudget.adversarialSourceReserve;
-  const reservedSourceUnits = [...history.reservations.values()].reduce(
+  const reservedSourceUnits = activeReservations.reduce(
     (total, reservation) =>
       total +
       (history.settledReservationIds.has(reservation.id)
@@ -2068,7 +2280,7 @@ export function researchBudgetViewForHistory(
         : reservation.sourceUnits),
     0,
   );
-  const settledSourceUnits = [...history.reservations.values()].reduce(
+  const settledSourceUnits = activeReservations.reduce(
     (total, reservation) =>
       total +
       (history.settledReservationIds.has(reservation.id)
@@ -2076,13 +2288,16 @@ export function researchBudgetViewForHistory(
         : 0),
     0,
   );
-  const usedOrdinarySourceUnits = [...history.reservations.values()]
+  const usedOrdinarySourceUnits = activeReservations
     .filter((reservation) => reservation.researchClass !== "adversarial")
     .reduce((total, reservation) => total + reservation.sourceUnits, 0);
-  const recordedPaidSpend = history.researchExpenditures.reduce(
-    (total, expenditure) => total + expenditure.amount,
-    0,
-  );
+  const recordedPaidSpend = history.researchExpenditures
+    .filter(
+      (expenditure) =>
+        activeExtension === undefined ||
+        expenditure.incurredAt >= activeExtension.respondedAt,
+    )
+    .reduce((total, expenditure) => total + expenditure.amount, 0);
   return {
     sourceCap: intake.researchBudget.sourceCap,
     adversarialSourceReserve: intake.researchBudget.adversarialSourceReserve,
@@ -2092,7 +2307,7 @@ export function researchBudgetViewForHistory(
     remainingOrdinarySourceUnits: ordinarySourceCap - usedOrdinarySourceUnits,
     remainingAdversarialSourceUnits:
       intake.researchBudget.adversarialSourceReserve -
-      [...history.reservations.values()].filter(
+      activeReservations.filter(
         (reservation) => reservation.researchClass === "adversarial",
       ).length,
     paidSpendCap: intake.researchBudget.paidSpendCap,
@@ -2412,6 +2627,37 @@ export const leadingOpportunityViolation =
 export const buildLeadingOpportunityBrief =
   leadingOpportunityModule.buildLeadingOpportunityBrief;
 
+const inconclusiveComparisonModule = createInconclusiveComparisonModule({
+  opportunityComparisonViolation:
+    leadingOpportunityModule.opportunityComparisonViolation,
+  availableAffirmativeEvidenceIds,
+  unresolvedOpportunityIds: leadingOpportunityModule.unresolvedOpportunityIds,
+  buildOpportunityBrief: leadingOpportunityModule.buildOpportunityBrief,
+});
+
+export const inconclusiveComparisonViolation =
+  inconclusiveComparisonModule.inconclusiveComparisonViolation;
+export const buildInconclusiveComparisonReport =
+  inconclusiveComparisonModule.buildInconclusiveComparisonReport;
+export const buildDeveloperSelectedOpportunityBrief =
+  inconclusiveComparisonModule.buildDeveloperSelectedOpportunityBrief;
+
+export function buildDeveloperSelectedOpportunityBriefs(
+  history: AuthoritativeHistoryRebuild,
+  report: InconclusiveComparisonReport,
+  selections: DeveloperOpportunitySelection[],
+  selectedAt: string,
+): OpportunityBrief[] {
+  return selections.map((selection) =>
+    buildDeveloperSelectedOpportunityBrief(
+      history,
+      report,
+      selection,
+      selectedAt,
+    ),
+  );
+}
+
 export function leadingOpportunityRecords(
   history: AuthoritativeHistoryRebuild,
   command: ConcludeLeadingOpportunityCommand,
@@ -2474,6 +2720,209 @@ export function applyLeadingOpportunity(
   history.campaignDecisions.push(comparison.decision);
   history.opportunityComparisons.push(comparison);
   history.opportunityBriefs.push(brief);
+  return undefined;
+}
+
+export function inconclusiveComparisonRecords(
+  history: AuthoritativeHistoryRebuild,
+  command: ConcludeInconclusiveComparisonCommand,
+  firstSequence: number,
+) {
+  const report = buildInconclusiveComparisonReport(history, command);
+  return campaignRecordPair({
+    campaignId: history.campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.concludedAt,
+    firstSequence,
+    operation: "conclude-inconclusive-comparison",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      comparisonId: command.payload.comparison.id,
+      reportId: command.payload.reportId,
+    },
+    outcome: { report },
+  });
+}
+
+export function applyInconclusiveComparisonReport(
+  history: AuthoritativeHistoryRebuild,
+  report: InconclusiveComparisonReport,
+): string | undefined {
+  const violation = inconclusiveComparisonViolation(
+    history,
+    report.comparison,
+    report.concludedAt,
+  );
+  if (violation !== undefined) {
+    return violation;
+  }
+  const expected = buildInconclusiveComparisonReport(history, {
+    envelopeVersion: contracts.commandEnvelope,
+    requestId: "authoritative-rebuild",
+    command: "concludeInconclusiveComparison",
+    payload: {
+      campaignPath: "/authoritative-rebuild",
+      coordinatorId: "authoritative-rebuild",
+      concludedAt: report.concludedAt,
+      reportId: report.id,
+      comparison: report.comparison,
+    },
+  });
+  if (JSON.stringify(report) !== JSON.stringify(expected)) {
+    return "Inconclusive Comparison Report does not match authoritative Campaign history";
+  }
+  history.campaignDecisions.push(report.comparison.decision);
+  history.inconclusiveComparisonReports.push(report);
+  return undefined;
+}
+
+export function inconclusiveComparisonResponseRecords(
+  history: AuthoritativeHistoryRebuild,
+  command: RespondInconclusiveComparisonCommand,
+  firstSequence: number,
+) {
+  const responseRecord: InconclusiveComparisonResponseRecord = {
+    reportId: command.payload.reportId,
+    respondedAt: command.payload.respondedAt,
+    response: command.payload.response,
+  };
+  const report = history.inconclusiveComparisonReports.at(-1)!;
+  const briefs =
+    command.payload.response.kind === "select"
+      ? buildDeveloperSelectedOpportunityBriefs(
+          history,
+          report,
+          command.payload.response.selections,
+          command.payload.respondedAt,
+        )
+      : [];
+  return campaignRecordPair({
+    campaignId: history.campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.respondedAt,
+    firstSequence,
+    operation: "respond-inconclusive-comparison",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      reportId: command.payload.reportId,
+      responseKind: command.payload.response.kind,
+    },
+    outcome: { responseRecord, briefs },
+  });
+}
+
+export function applyInconclusiveComparisonResponse(
+  history: AuthoritativeHistoryRebuild,
+  responseRecord: InconclusiveComparisonResponseRecord,
+  briefs: OpportunityBrief[] = [],
+): string | undefined {
+  const activeReport = history.inconclusiveComparisonReports.at(-1);
+  if (activeReport === undefined || activeReport.id !== responseRecord.reportId) {
+    return "the response must target the active Inconclusive Comparison Report";
+  }
+  if (
+    history.inconclusiveComparisonResponses.some(
+      (response) => response.reportId === activeReport.id,
+    )
+  ) {
+    return "the Inconclusive Comparison Report already has a terminal response";
+  }
+  if (responseRecord.respondedAt <= activeReport.concludedAt) {
+    return "the Inconclusive Comparison response must follow the report";
+  }
+  if (responseRecord.response.kind === "extend") {
+    const targetedGapIds = responseRecord.response.targetedEvidenceGapIds;
+    const blockerGaps = new Set(
+      activeReport.comparison.blockers.flatMap(
+        (blocker) => blocker.evidenceGapIds,
+      ),
+    );
+    if (
+      targetedGapIds.some(
+        (gapId) =>
+          !blockerGaps.has(gapId) ||
+          !history.evidenceGaps.some(
+            (gap) => gap.id === gapId && gap.status === "open",
+          ),
+      )
+    ) {
+      return "a research extension may target only open Evidence Gaps named by the report blockers";
+    }
+    const derivedAffectedIds = new Set(
+      activeReport.comparison.blockers
+        .filter((blocker) =>
+          blocker.evidenceGapIds.some((gapId) => targetedGapIds.includes(gapId)),
+        )
+        .flatMap((blocker) => [
+          blocker.contenderOpportunityId,
+          ...blocker.couldDisplaceOpportunityIds,
+        ]),
+    );
+    if (
+      derivedAffectedIds.size !== responseRecord.response.affectedOpportunityIds.length ||
+      responseRecord.response.affectedOpportunityIds.some(
+        (id) => !derivedAffectedIds.has(id),
+      )
+    ) {
+      return "affected work must contain exactly the Opportunities named by the targeted blockers";
+    }
+    if (
+      responseRecord.response.researchBudget.paidSpendCap.currency !==
+      history.intake!.commercialOutcomeTarget.currency
+    ) {
+      return "the extension Research Budget currency must match the Commercial Outcome Target";
+    }
+    history.intake = {
+      ...history.intake!,
+      version: history.intake!.version + 1,
+      confirmedAt: responseRecord.respondedAt,
+      researchBudget: responseRecord.response.researchBudget,
+    };
+  } else if (responseRecord.response.kind === "select") {
+    const selectedOpportunityIds = responseRecord.response.selections.map(
+      (selection) => selection.opportunityId,
+    );
+    if (
+      new Set(selectedOpportunityIds).size !== selectedOpportunityIds.length ||
+      selectedOpportunityIds.some(
+        (id) => !activeReport.comparison.nonDominatedOpportunityIds.includes(id),
+      )
+    ) {
+      return "Select accepts one or more distinct Eligible Non-Dominated Opportunities only";
+    }
+    for (const selection of responseRecord.response.selections) {
+      const briefViolation =
+        leadingOpportunityModule.opportunityBriefInputViolation(
+          history,
+          selection.opportunityId,
+          selection.brief,
+        );
+      if (briefViolation !== undefined) {
+        return briefViolation;
+      }
+    }
+    if (
+      briefs.length !== responseRecord.response.selections.length ||
+      new Set(briefs.map((brief) => brief.id)).size !== briefs.length
+    ) {
+      return "each selected Opportunity requires one separately identified Opportunity Brief";
+    }
+    for (const [index, selection] of responseRecord.response.selections.entries()) {
+      const expected = buildDeveloperSelectedOpportunityBrief(
+        history,
+        activeReport,
+        selection,
+        responseRecord.respondedAt,
+      );
+      if (JSON.stringify(briefs[index]) !== JSON.stringify(expected)) {
+        return "Developer-Selected Opportunity Brief does not match authoritative Campaign history";
+      }
+    }
+    history.developerSelectedOpportunityBriefs.push(...briefs);
+  } else if (briefs.length > 0) {
+    return "Stop and Extend must not create an Opportunity Brief";
+  }
+  history.inconclusiveComparisonResponses.push(responseRecord);
   return undefined;
 }
 
@@ -2633,7 +3082,23 @@ export const authoritativeOperationDescriptors = {
         invalidAuthoritativeRecord(outcomeSequence);
       }
       const reservation = outcome.reservation as unknown as PublicResearchReservation;
+      const activeExtension = activeInconclusiveResearchExtension(history);
+      if (
+        activeExtension?.response.kind === "extend" &&
+        !reservationMatchesInconclusiveExtension(
+          reservation,
+          activeExtension.response,
+        )
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
       const sameClassReserved = [...history.reservations.values()]
+        .filter(
+          (existing) =>
+            activeExtension === undefined ||
+            history.reservationRecordedAt.get(existing.id)! >=
+              activeExtension.respondedAt,
+        )
         .filter((existing) =>
           reservation.researchClass === "adversarial"
             ? existing.researchClass === "adversarial"
@@ -2650,7 +3115,10 @@ export const authoritativeOperationDescriptors = {
           `authoritative record ${outcomeSequence} exceeds the Research Budget`,
         );
       }
-      if (publicResearchAllocationViolation(history, reservation) !== undefined) {
+      if (
+        activeExtension === undefined &&
+        publicResearchAllocationViolation(history, reservation) !== undefined
+      ) {
         invalidAuthoritativeRecord(outcomeSequence);
       }
       if (
@@ -2943,6 +3411,65 @@ export const authoritativeOperationDescriptors = {
       }
     },
   },
+  "conclude-inconclusive-comparison": {
+    outcome: "inconclusive-comparison-concluded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (!isRecord(outcome.report)) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const report = outcome.report as unknown as InconclusiveComparisonReport;
+      if (
+        intent.comparisonId !== report.comparison.id ||
+        intent.reportId !== report.id ||
+        validateConcludeInconclusiveComparisonFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            concludedAt: outcome.recordedAt,
+            reportId: intent.reportId,
+            comparison: report.comparison,
+          },
+        }).length > 0 ||
+        applyInconclusiveComparisonReport(history, report) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "respond-inconclusive-comparison": {
+    outcome: "inconclusive-comparison-response-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (!isRecord(outcome.responseRecord) || !Array.isArray(outcome.briefs)) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const responseRecord =
+        outcome.responseRecord as unknown as InconclusiveComparisonResponseRecord;
+      if (
+        intent.reportId !== responseRecord.reportId ||
+        intent.responseKind !== responseRecord.response.kind ||
+        validateRespondInconclusiveComparisonFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            respondedAt: outcome.recordedAt,
+            reportId: responseRecord.reportId,
+            response: responseRecord.response,
+          },
+        }).length > 0 ||
+        applyInconclusiveComparisonResponse(
+          history,
+          responseRecord,
+          outcome.briefs as OpportunityBrief[],
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
   "request-research-approval": {
     outcome: "research-approval-requested",
     position: "subsequent",
@@ -3149,15 +3676,19 @@ export const authoritativeOperationDescriptors = {
 export function authoritativeOperationDescriptor(
   operation: unknown,
 ): AuthoritativeOperationDescriptor | undefined {
-  if (
-    typeof operation !== "string" ||
-    !Object.hasOwn(authoritativeOperationDescriptors, operation)
-  ) {
+  if (!isAuthoritativeOperation(operation)) {
     return undefined;
   }
-  return authoritativeOperationDescriptors[
-    operation as AuthoritativeOperation
-  ];
+  return authoritativeOperationDescriptors[operation];
+}
+
+export function isAuthoritativeOperation(
+  operation: unknown,
+): operation is AuthoritativeOperation {
+  return (
+    typeof operation === "string" &&
+    Object.hasOwn(authoritativeOperationDescriptors, operation)
+  );
 }
 
 export function initialWorkView(campaignId: string): WorkView {
@@ -3630,6 +4161,9 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     noQualifyingOpportunityReports: [],
     opportunityComparisons: [],
     opportunityBriefs: [],
+    inconclusiveComparisonReports: [],
+    inconclusiveComparisonResponses: [],
+    developerSelectedOpportunityBriefs: [],
     campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
@@ -3690,6 +4224,16 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     ) {
       throw new Error(`authoritative record ${outcomeSequence} is invalid`);
     }
+    if (
+      !isAuthoritativeOperation(record.operation) ||
+      inconclusiveResearchExtensionViolation(
+        authoritativeHistory,
+        record.operation,
+        outcome,
+      ) !== undefined
+    ) {
+      throw new Error(`authoritative record ${outcomeSequence} is invalid`);
+    }
     operationDescriptor.validateAndApply({
       intent: record,
       outcome,
@@ -3719,6 +4263,9 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     noQualifyingOpportunityReports,
     opportunityComparisons,
     opportunityBriefs,
+    inconclusiveComparisonReports,
+    inconclusiveComparisonResponses,
+    developerSelectedOpportunityBriefs,
     campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
@@ -4201,6 +4748,90 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       concludedAt: brief.concludedAt,
     };
   }
+  if (inconclusiveComparisonReports.length > 0) {
+    const report = inconclusiveComparisonReports.at(-1)!;
+    workView.phase = "inconclusive-comparison";
+    workView.publicResearchAvailable = false;
+    workView.completedWork.push(
+      `Inconclusive Comparison Report ${report.id} produced`,
+    );
+    workView.nextPermittedActions = [
+      "stop-inconclusive-comparison",
+      "extend-targeted-research",
+      "select-non-dominated-opportunities",
+    ];
+    workView.inconclusiveComparison = {
+      reportId: report.id,
+      artifactPath: "inconclusive-comparison-report.md",
+      immutable: true,
+      concludedAt: report.concludedAt,
+      availableActions: report.availableActions,
+    };
+    const response = inconclusiveComparisonResponses.at(-1);
+    if (response?.response.kind === "stop") {
+      workView.phase = "terminal";
+      workView.completedWork.push(
+        `Developer stopped after Inconclusive Comparison Report ${report.id}`,
+      );
+      workView.nextPermittedActions = [
+        "inspect-inconclusive-comparison-report",
+        "explain-inconclusive-comparison",
+        "finish",
+      ];
+      workView.terminal = {
+        outcome: "inconclusive-comparison",
+        reportId: report.id,
+        artifactPath: "inconclusive-comparison-report.md",
+        action: "stopped",
+        immutable: true,
+        concludedAt: response.respondedAt,
+      };
+    } else if (response?.response.kind === "extend") {
+      workView.phase = "opportunity-deepening";
+      workView.publicResearchAvailable = true;
+      workView.completedWork.push(
+        `Targeted research extension created Campaign Intake version ${intake!.version}`,
+      );
+      workView.nextPermittedActions = ["reserve-targeted-research"];
+      workView.researchExtension = {
+        reportId: report.id,
+        intakeVersion: intake!.version,
+        targetedEvidenceGapIds: response.response.targetedEvidenceGapIds,
+        affectedOpportunityIds: response.response.affectedOpportunityIds,
+      };
+    } else if (response?.response.kind === "select") {
+      const selectedIds = response.response.selections.map(
+        (selection) => selection.opportunityId,
+      );
+      const artifactPaths = developerSelectedOpportunityBriefs.map(
+        (brief) => brief.wayfinderHandoff.briefPath,
+      );
+      workView.phase = "terminal";
+      workView.publicResearchAvailable = false;
+      workView.completedWork.push(
+        `${selectedIds.length} Developer-Selected Opportunity Briefs produced from ${report.id}`,
+      );
+      workView.nextPermittedActions = [
+        "inspect-developer-selected-opportunity-briefs",
+        "optionally-invoke-wayfinder-separately-for-each-brief",
+        "finish",
+      ];
+      workView.opportunities = workView.opportunities?.map((opportunity) => ({
+        ...opportunity,
+        terminalRole: selectedIds.includes(opportunity.id)
+          ? ("developer-selected-opportunity" as const)
+          : opportunity.terminalRole,
+      }));
+      workView.terminal = {
+        outcome: "developer-selected-opportunities",
+        reportId: report.id,
+        briefIds: developerSelectedOpportunityBriefs.map((brief) => brief.id),
+        artifactPaths,
+        immutable: true,
+        concludedAt: response.respondedAt,
+      };
+    }
+  }
   const pendingDecision = activeResearchApprovalDecision({
     researchApprovalDecisions,
     researchApprovalResponses,
@@ -4292,6 +4923,20 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     corrections,
     campaignDecisions,
   };
+  const activeResearchExtension = latestInconclusiveResearchExtension({
+    inconclusiveComparisonResponses,
+  });
+  const budgetReservations = [...reservations.values()].filter(
+    (reservation) =>
+      activeResearchExtension === undefined ||
+      authoritativeHistory.reservationRecordedAt.get(reservation.id)! >=
+        activeResearchExtension.respondedAt,
+  );
+  const budgetExpenditures = researchExpenditures.filter(
+    (expenditure) =>
+      activeResearchExtension === undefined ||
+      expenditure.incurredAt >= activeResearchExtension.respondedAt,
+  );
   const researchBudget: ResearchBudgetView | undefined =
     intake === undefined
       ? undefined
@@ -4301,7 +4946,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           ordinarySourceCap:
             intake.researchBudget.sourceCap -
             intake.researchBudget.adversarialSourceReserve,
-          reservedSourceUnits: [...reservations.values()].reduce(
+          reservedSourceUnits: budgetReservations.reduce(
             (total, reservation) =>
               total +
               (settledReservationIds.has(reservation.id)
@@ -4309,7 +4954,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
                 : reservation.sourceUnits),
             0,
           ),
-          settledSourceUnits: [...reservations.values()].reduce(
+          settledSourceUnits: budgetReservations.reduce(
             (total, reservation) =>
               total +
               (settledReservationIds.has(reservation.id)
@@ -4320,7 +4965,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           remainingOrdinarySourceUnits:
             intake.researchBudget.sourceCap -
             intake.researchBudget.adversarialSourceReserve -
-            [...reservations.values()]
+            budgetReservations
               .filter(
                 (reservation) => reservation.researchClass !== "adversarial",
               )
@@ -4330,15 +4975,15 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
               ),
           remainingAdversarialSourceUnits:
             intake.researchBudget.adversarialSourceReserve -
-            [...reservations.values()].filter(
+            budgetReservations.filter(
               (reservation) => reservation.researchClass === "adversarial",
             ).length,
-          ...(researchExpenditures.length === 0
+          ...(budgetExpenditures.length === 0
             ? {}
             : {
                 paidSpendCap: intake.researchBudget.paidSpendCap,
                 recordedPaidSpend: {
-                  amount: researchExpenditures.reduce(
+                  amount: budgetExpenditures.reduce(
                     (total, expenditure) => total + expenditure.amount,
                     0,
                   ),
@@ -4347,7 +4992,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
                 remainingPaidSpend: {
                   amount:
                     intake.researchBudget.paidSpendCap.amount -
-                    researchExpenditures.reduce(
+                    budgetExpenditures.reduce(
                       (total, expenditure) => total + expenditure.amount,
                       0,
                     ),
@@ -4395,6 +5040,15 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           opportunityComparison: opportunityComparisons[0],
           opportunityBrief: opportunityBriefs[0],
         }),
+    ...(inconclusiveComparisonReports.length === 0
+      ? {}
+      : {
+          inconclusiveComparisonReport:
+            inconclusiveComparisonReports.at(-1),
+        }),
+    ...(developerSelectedOpportunityBriefs.length === 0
+      ? {}
+      : { opportunityBriefs: developerSelectedOpportunityBriefs }),
   };
 }
 
@@ -4527,6 +5181,39 @@ export async function loadCampaign(campaignPath: string) {
   ) {
     throw new Error("Opportunity Brief does not match authoritative history");
   }
+  const inconclusiveComparisonReportPath = path.join(
+    rebuiltCampaign.campaign.path,
+    "inconclusive-comparison-report.md",
+  );
+  if (rebuiltCampaign.inconclusiveComparisonReport === undefined) {
+    if (await pathExists(inconclusiveComparisonReportPath)) {
+      throw new Error(
+        "Inconclusive Comparison Report has no authoritative record",
+      );
+    }
+  } else if (
+    (await readFile(inconclusiveComparisonReportPath, "utf8")) !==
+    renderInconclusiveComparisonReport(
+      rebuiltCampaign.inconclusiveComparisonReport,
+    )
+  ) {
+    throw new Error(
+      "Inconclusive Comparison Report does not match authoritative history",
+    );
+  }
+  for (const brief of rebuiltCampaign.opportunityBriefs ?? []) {
+    const briefPath = path.join(
+      rebuiltCampaign.campaign.path,
+      brief.wayfinderHandoff.briefPath,
+    );
+    if (
+      (await readFile(briefPath, "utf8")) !== renderOpportunityBrief(brief)
+    ) {
+      throw new Error(
+        "Developer-Selected Opportunity Brief does not match authoritative history",
+      );
+    }
+  }
 
   return {
     campaign: rebuiltCampaign.campaign,
@@ -4567,6 +5254,15 @@ export async function loadCampaign(campaignPath: string) {
           opportunityComparison: rebuiltCampaign.opportunityComparison,
           opportunityBrief: rebuiltCampaign.opportunityBrief,
         }),
+    ...(rebuiltCampaign.inconclusiveComparisonReport === undefined
+      ? {}
+      : {
+          inconclusiveComparisonReport:
+            rebuiltCampaign.inconclusiveComparisonReport,
+        }),
+    ...(rebuiltCampaign.opportunityBriefs === undefined
+      ? {}
+      : { opportunityBriefs: rebuiltCampaign.opportunityBriefs }),
   };
 }
 
@@ -4618,6 +5314,20 @@ export async function persistDerivedCampaignState(
     await replacePrivateText(
       path.join(campaignPath, "opportunity-brief.md"),
       renderOpportunityBrief(rebuiltCampaign.opportunityBrief),
+    );
+  }
+  if (rebuiltCampaign.inconclusiveComparisonReport !== undefined) {
+    await replacePrivateText(
+      path.join(campaignPath, "inconclusive-comparison-report.md"),
+      renderInconclusiveComparisonReport(
+        rebuiltCampaign.inconclusiveComparisonReport,
+      ),
+    );
+  }
+  for (const brief of rebuiltCampaign.opportunityBriefs ?? []) {
+    await replacePrivateText(
+      path.join(campaignPath, brief.wayfinderHandoff.briefPath),
+      renderOpportunityBrief(brief),
     );
   }
 }

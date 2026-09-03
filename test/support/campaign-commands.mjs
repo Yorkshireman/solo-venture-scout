@@ -16,6 +16,7 @@
  *       opportunityId?: string;
  *       approvalId?: string;
  *       decisionValuePriorityId?: string;
+ *       evidenceGapId?: string;
  *     };
  *   };
  * }} PublicResearchReservationCommand

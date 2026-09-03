@@ -20,6 +20,8 @@ import type {
   RecordOpportunityQualificationGatesCommand,
   ConcludeNoQualifyingOpportunityCommand,
   ConcludeLeadingOpportunityCommand,
+  ConcludeInconclusiveComparisonCommand,
+  RespondInconclusiveComparisonCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -40,6 +42,8 @@ import {
   validateRecordOpportunityQualificationGatesFields,
   validateConcludeNoQualifyingOpportunityFields,
   validateConcludeLeadingOpportunityFields,
+  validateConcludeInconclusiveComparisonFields,
+  validateRespondInconclusiveComparisonFields,
   validateRecordOpportunityFormationFields,
   validateRecordPublicResearchObservationFields,
   validateRecordResearchApprovalInformationFields,
@@ -60,6 +64,8 @@ import {
   recordOpportunityQualificationGates,
   concludeNoQualifyingOpportunity,
   concludeLeadingOpportunity,
+  concludeInconclusiveComparison,
+  respondInconclusiveComparison,
   recordOpportunityFormation,
   recordPublicResearchObservation,
   recordResearchApprovalInformation,
@@ -155,6 +161,8 @@ export async function executeCommand(
       "recordOpportunityQualificationGates",
       "concludeNoQualifyingOpportunity",
       "concludeLeadingOpportunity",
+      "concludeInconclusiveComparison",
+      "respondInconclusiveComparison",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -547,6 +555,58 @@ export async function executeCommand(
     }
     return concludeLeadingOpportunity(
       command as unknown as ConcludeLeadingOpportunityCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "concludeInconclusiveComparison") {
+    const invalidFields = validateConcludeInconclusiveComparisonFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-INCONCLUSIVE-COMPARISON-INVALID",
+          message: "Inconclusive Opportunity comparison input is invalid.",
+          action:
+            "Correct the unscored profiles, decisive trade-offs, explicit contender blockers, and Campaign Decision before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return concludeInconclusiveComparison(
+      command as unknown as ConcludeInconclusiveComparisonCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "respondInconclusiveComparison") {
+    const invalidFields = validateRespondInconclusiveComparisonFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-INCONCLUSIVE-COMPARISON-RESPONSE-INVALID",
+          message: "Inconclusive Comparison response is invalid.",
+          action:
+            "Choose one explicit Stop, targeted Extend, or Select response and correct the reported fields.",
+          details: invalidFields,
+        },
+      };
+    }
+    return respondInconclusiveComparison(
+      command as unknown as RespondInconclusiveComparisonCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }

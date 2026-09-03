@@ -17,6 +17,39 @@ type FormedOpportunity = {
   decisionId: string;
 };
 
+export type BaseOpportunityComparison = Pick<
+  OpportunityComparison,
+  "id" | "profiles" | "dominanceAssessments" | "nonDominatedOpportunityIds"
+> & {
+  decision: Pick<
+    OpportunityComparison["decision"],
+    "id" | "intakeVersion" | "evidenceEntryIds" | "confidence" | "decidedAt"
+  >;
+};
+
+export type OpportunityBriefBuildInput = {
+  comparison: BaseOpportunityComparison;
+  brief: LeadingOpportunityBriefInput;
+  opportunityId: string;
+  concludedAt: string;
+  role: OpportunityBrief["role"];
+  selectionProvenance?: OpportunityBrief["selectionProvenance"];
+  selection: {
+    rationale: string;
+    decisionId: string;
+    evidenceEntryIds: string[];
+    limitations: string[];
+    traceabilityConclusion: string;
+  };
+  adversarialReservationIds: string[];
+  comparisonLimitingFactors: string[];
+  additionalTraceabilityRows: Array<{
+    conclusion: string;
+    entryIds: string[];
+  }>;
+  wayfinderHandoff: OpportunityBrief["wayfinderHandoff"];
+};
+
 export type LeadingOpportunityServices = {
   activeResearchApprovalDecision: (
     history: AuthoritativeHistoryRebuild,
@@ -58,6 +91,19 @@ export function createLeadingOpportunityModule({
         (opportunity) =>
           noQualifyingOpportunityDisposition(history, opportunity.id, at).status ===
           "eligible",
+      )
+      .map((opportunity) => opportunity.id);
+  }
+
+  function unresolvedOpportunityIds(
+    history: AuthoritativeHistoryRebuild,
+    at: string,
+  ): string[] {
+    return formedOpportunities(history)
+      .filter(
+        (opportunity) =>
+          noQualifyingOpportunityDisposition(history, opportunity.id, at).status ===
+          "unresolved",
       )
       .map((opportunity) => opportunity.id);
   }
@@ -130,11 +176,10 @@ export function createLeadingOpportunityModule({
     ];
   }
 
-  function leadingOpportunityViolation(
+  function opportunityComparisonViolation(
     history: AuthoritativeHistoryRebuild,
-    comparison: OpportunityComparison,
+    comparison: BaseOpportunityComparison,
     concludedAt: string,
-    briefInput: LeadingOpportunityBriefInput,
   ): string | undefined {
     if (
       history.intake === undefined ||
@@ -142,7 +187,7 @@ export function createLeadingOpportunityModule({
       history.opportunityQualificationEvaluations.at(-1)?.researchDecision
         .stopReason !== "qualification-complete"
     ) {
-      return "Leading Opportunity requires a passed Breadth Gate and completed Qualification Gates";
+      return "Opportunity comparison requires a passed Breadth Gate and completed Qualification Gates";
     }
     if (
       history.noQualifyingOpportunityReports.length > 0 ||
@@ -151,10 +196,10 @@ export function createLeadingOpportunityModule({
       return "the Scouting Campaign already has an immutable terminal artifact";
     }
     if (history.reservations.size !== history.settledReservationIds.size) {
-      return "Leading Opportunity requires every reserved Source examination to be settled";
+      return "Opportunity comparison requires every reserved Source examination to be settled";
     }
     if (activeResearchApprovalDecision(history) !== undefined) {
-      return "Leading Opportunity cannot conclude with a pending Research Approval decision";
+      return "Opportunity comparison cannot conclude with a pending Research Approval decision";
     }
     if (
       history.campaignDecisions.some(
@@ -162,6 +207,13 @@ export function createLeadingOpportunityModule({
       )
     ) {
       return `Campaign Decision identity ${comparison.decision.id} is already present`;
+    }
+    if (
+      comparison.decision.intakeVersion !== history.intake.version ||
+      comparison.decision.decidedAt !== concludedAt ||
+      !["medium", "high"].includes(comparison.decision.confidence.level)
+    ) {
+      return "Opportunity comparison requires a supported Campaign Decision for the current Campaign Intake";
     }
     const eligibleIds = eligibleOpportunityIds(history, concludedAt);
     const profileIds = comparison.profiles.map((profile) => profile.opportunityId);
@@ -253,24 +305,100 @@ export function createLeadingOpportunityModule({
             assessment.outcome === "dominates",
         ),
     );
-    if (
-      comparison.nonDominatedOpportunityIds.length !==
-        derivedNonDominatedIds.length ||
-      new Set(comparison.nonDominatedOpportunityIds).size !==
-        comparison.nonDominatedOpportunityIds.length ||
-      derivedNonDominatedIds.some(
-        (id) => !comparison.nonDominatedOpportunityIds.includes(id),
-      )
-    ) {
+    if (!sameIdentitySet(comparison.nonDominatedOpportunityIds, derivedNonDominatedIds)) {
       return "every and only Non-Dominated Opportunity must remain visible";
     }
+    return comparisonEvidenceViolation(
+      history,
+      comparison.decision.evidenceEntryIds,
+      eligibleIds,
+    );
+  }
+
+  function opportunityBriefInputViolation(
+    history: AuthoritativeHistoryRebuild,
+    opportunityId: string,
+    briefInput: LeadingOpportunityBriefInput,
+  ): string | undefined {
+    for (const assessment of [
+      briefInput.buyerEconomics,
+      briefInput.customerAccess,
+      briefInput.alternatives,
+      ...briefInput.risks,
+    ]) {
+      const evidenceViolation = materialComparisonEvidenceViolation(
+        history,
+        assessment,
+        [opportunityId],
+        "Opportunity Brief material claims",
+      );
+      if (evidenceViolation !== undefined) {
+        return evidenceViolation;
+      }
+    }
+    const opportunity = formedOpportunities(history).find(
+      (opportunity) => opportunity.id === opportunityId,
+    );
+    const hypothesis = briefInput.valueHypothesis;
+    if (
+      opportunity === undefined ||
+      hypothesis.customer !== opportunity.customer ||
+      hypothesis.situation !== opportunity.situation
+    ) {
+      return "Value Hypothesis must identify the Opportunity's customer and situation";
+    }
+    const hypothesisEvidenceViolation = materialComparisonEvidenceViolation(
+      history,
+      {
+        confidence: hypothesis.confidence,
+        evidenceEntryIds: [
+          ...hypothesis.supportingEvidenceEntryIds,
+          ...hypothesis.challengingEvidenceEntryIds,
+        ],
+      },
+      [opportunityId],
+      "Value Hypothesis support",
+    );
+    if (hypothesisEvidenceViolation !== undefined) {
+      return hypothesisEvidenceViolation;
+    }
+    if (
+      hypothesis.assumptionIds.some(
+        (id) => !history.assumptions.some((assumption) => assumption.id === id),
+      ) ||
+      hypothesis.evidenceGapIds.some(
+        (id) => !history.evidenceGaps.some((gap) => gap.id === id),
+      )
+    ) {
+      return "Value Hypothesis links an unavailable Assumption or Evidence Gap";
+    }
+    return undefined;
+  }
+
+  function leadingOpportunityViolation(
+    history: AuthoritativeHistoryRebuild,
+    comparison: OpportunityComparison,
+    concludedAt: string,
+    briefInput: LeadingOpportunityBriefInput,
+  ): string | undefined {
+    const comparisonViolation = opportunityComparisonViolation(
+      history,
+      comparison,
+      concludedAt,
+    );
+    if (comparisonViolation !== undefined) {
+      return comparisonViolation;
+    }
+    const intake = history.intake!;
+    const intakePreferences = intake.statements.filter(
+      (statement) => statement.classification === "preference",
+    );
+    const eligibleIds = eligibleOpportunityIds(history, concludedAt);
+    const derivedNonDominatedIds = comparison.nonDominatedOpportunityIds;
     const leading = comparison.leadingAssessment;
     if (
       !derivedNonDominatedIds.includes(leading.opportunityId) ||
-      comparison.decision.leaderOpportunityId !== leading.opportunityId ||
-      comparison.decision.intakeVersion !== history.intake.version ||
-      comparison.decision.decidedAt !== concludedAt ||
-      !["medium", "high"].includes(comparison.decision.confidence.level)
+      comparison.decision.leaderOpportunityId !== leading.opportunityId
     ) {
       return "Leading Opportunity must be a current Non-Dominated Opportunity with a supported terminal Campaign Decision";
     }
@@ -287,7 +415,7 @@ export function createLeadingOpportunityModule({
     }
     for (const advantage of leading.advantagesOverAlternatives) {
       if (advantage.basis === "major-preference") {
-        const preference = history.intake.statements.find(
+        const preference = intake.statements.find(
           (statement) => statement.id === advantage.preferenceStatementId,
         );
         if (
@@ -419,13 +547,10 @@ export function createLeadingOpportunityModule({
             contradiction.entryIds.some((id) => comparisonEvidenceGraphIds.has(id))),
       )
       .map((contradiction) => contradiction.id);
-    const derivedUnresolvedContenderIds = formedOpportunities(history)
-      .filter(
-        (opportunity) =>
-          noQualifyingOpportunityDisposition(history, opportunity.id, concludedAt)
-            .status === "unresolved",
-      )
-      .map((opportunity) => opportunity.id);
+    const derivedUnresolvedContenderIds = unresolvedOpportunityIds(
+      history,
+      concludedAt,
+    );
     if (
       !sameIdentitySet(
         leading.unresolvedContenderOpportunityIds,
@@ -454,7 +579,7 @@ export function createLeadingOpportunityModule({
     );
     const challengeIds = leading.adversarialChallenge.reservationIds;
     if (
-      adversarialReservations.length !== history.intake.researchBudget.adversarialSourceReserve ||
+      adversarialReservations.length !== intake.researchBudget.adversarialSourceReserve ||
       challengeIds.length !== adversarialReservations.length ||
       new Set(challengeIds).size !== challengeIds.length ||
       adversarialReservations.some(
@@ -490,56 +615,13 @@ export function createLeadingOpportunityModule({
     ) {
       return "adversarial challenge evidence must account for every protected Source examination";
     }
-    for (const assessment of [
-      briefInput.buyerEconomics,
-      briefInput.customerAccess,
-      briefInput.alternatives,
-      ...briefInput.risks,
-    ]) {
-      const evidenceViolation = materialComparisonEvidenceViolation(
-        history,
-        assessment,
-        [leading.opportunityId],
-        "Opportunity Brief material claims",
-      );
-      if (evidenceViolation !== undefined) {
-        return evidenceViolation;
-      }
-    }
-    const opportunity = formedOpportunities(history).find(
-      (candidate) => candidate.id === leading.opportunityId,
-    )!;
-    const hypothesis = briefInput.valueHypothesis;
-    if (
-      hypothesis.customer !== opportunity.customer ||
-      hypothesis.situation !== opportunity.situation
-    ) {
-      return "Value Hypothesis must identify the Leading Opportunity's customer and situation";
-    }
-    const hypothesisEvidenceViolation = materialComparisonEvidenceViolation(
+    const briefViolation = opportunityBriefInputViolation(
       history,
-      {
-        confidence: hypothesis.confidence,
-        evidenceEntryIds: [
-          ...hypothesis.supportingEvidenceEntryIds,
-          ...hypothesis.challengingEvidenceEntryIds,
-        ],
-      },
-      [leading.opportunityId],
-      "Value Hypothesis support",
+      leading.opportunityId,
+      briefInput,
     );
-    if (hypothesisEvidenceViolation !== undefined) {
-      return hypothesisEvidenceViolation;
-    }
-    if (
-      hypothesis.assumptionIds.some(
-        (id) => !history.assumptions.some((assumption) => assumption.id === id),
-      ) ||
-      hypothesis.evidenceGapIds.some(
-        (id) => !history.evidenceGaps.some((gap) => gap.id === id),
-      )
-    ) {
-      return "Value Hypothesis links an unavailable Assumption or Evidence Gap";
+    if (briefViolation !== undefined) {
+      return briefViolation;
     }
     for (const assessment of [
       leading.noMaterialDisadvantage,
@@ -562,24 +644,23 @@ export function createLeadingOpportunityModule({
     );
   }
 
-  function buildLeadingOpportunityBrief(
+  function buildOpportunityBrief(
     history: AuthoritativeHistoryRebuild,
-    command: ConcludeLeadingOpportunityCommand,
+    input: OpportunityBriefBuildInput,
   ): OpportunityBrief {
-    const { comparison, brief } = command.payload;
-    const opportunityId = comparison.leadingAssessment.opportunityId;
+    const { comparison, brief, opportunityId } = input;
     const opportunity = formedOpportunities(history).find(
-      (candidate) => candidate.id === opportunityId,
+      (opportunity) => opportunity.id === opportunityId,
     )!;
     const profile = comparison.profiles.find(
-      (candidate) => candidate.opportunityId === opportunityId,
+      (profile) => profile.opportunityId === opportunityId,
     )!;
     const exclusion = history.opportunityExclusionEvaluations
       .at(-1)!
-      .assessments.find((candidate) => candidate.opportunityId === opportunityId)!;
+      .assessments.find((assessment) => assessment.opportunityId === opportunityId)!;
     const qualification = history.opportunityQualificationEvaluations
       .at(-1)!
-      .assessments.find((candidate) => candidate.opportunityId === opportunityId)!;
+      .assessments.find((assessment) => assessment.opportunityId === opportunityId)!;
     const eligibility = [
       { kind: "market-safety" as const, gate: exclusion.marketSafety.gate },
       ...exclusion.hardConstraints.map(({ gate }) => ({
@@ -615,26 +696,18 @@ export function createLeadingOpportunityModule({
     const limitations = [
       ...eligibility.flatMap((gate) => {
         const decision = history.campaignDecisions.find(
-          (candidate) => candidate.id === gate.decisionId,
+          (decision) => decision.id === gate.decisionId,
         )!;
         return decision.limitations;
       }),
-      ...comparison.decision.limitations,
+      ...input.selection.limitations,
       ...profileAssessments.flatMap(
         (assessment) => assessment.confidence.limitingFactors,
       ),
       ...comparison.dominanceAssessments.flatMap(
         (assessment) => assessment.confidence.limitingFactors,
       ),
-      ...comparison.leadingAssessment.advantagesOverAlternatives.flatMap(
-        (assessment) => assessment.confidence.limitingFactors,
-      ),
-      ...comparison.leadingAssessment.noMaterialDisadvantage.confidence
-        .limitingFactors,
-      ...comparison.leadingAssessment.robustAcrossCredibleRanges.confidence
-        .limitingFactors,
-      ...comparison.leadingAssessment.adversarialChallenge.confidence
-        .limitingFactors,
+      ...input.comparisonLimitingFactors,
       ...[
         brief.buyerEconomics,
         brief.customerAccess,
@@ -719,22 +792,27 @@ export function createLeadingOpportunityModule({
           ...brief.valueHypothesis.evidenceGapIds,
         ],
       },
+      ...input.additionalTraceabilityRows,
       {
-        conclusion: "Adversarial conclusion",
-        entryIds:
-          comparison.leadingAssessment.adversarialChallenge.evidenceEntryIds,
+        conclusion: input.selection.traceabilityConclusion,
+        entryIds: [
+          input.selection.decisionId,
+          ...input.selection.evidenceEntryIds,
+        ],
       },
-      { conclusion: "Leading Opportunity selection", entryIds: [comparison.decision.id, ...comparison.decision.evidenceEntryIds] },
     ];
     return {
       briefVersion: contracts.renderTemplates,
       id: brief.id,
       kind: "opportunity-brief",
-      role: "scout-recommended-leading-opportunity",
+      role: input.role,
       campaignId: history.campaignId,
-      concludedAt: command.payload.concludedAt,
+      concludedAt: input.concludedAt,
       intakeVersion: history.intake!.version,
       supersedes: null,
+      ...(input.selectionProvenance === undefined
+        ? {}
+        : { selectionProvenance: input.selectionProvenance }),
       opportunity: {
         id: opportunity.id,
         customer: opportunity.customer,
@@ -776,20 +854,57 @@ export function createLeadingOpportunityModule({
       comparisonContext: {
         comparisonId: comparison.id,
         eligibleOpportunityIds: comparison.profiles.map(
-          (candidate) => candidate.opportunityId,
+          (profile) => profile.opportunityId,
         ),
         nonDominatedOpportunityIds: comparison.nonDominatedOpportunityIds,
         dominanceAssessments: comparison.dominanceAssessments,
-        selectionRationale: comparison.decision.rationale,
-        decisionId: comparison.decision.id,
-        adversarialReservationIds:
-          comparison.leadingAssessment.adversarialChallenge.reservationIds,
+        selectionRationale: input.selection.rationale,
+        decisionId: input.selection.decisionId,
+        adversarialReservationIds: input.adversarialReservationIds,
       },
       traceability: {
         authoritativeRecordsPath: "records.jsonl",
         evidenceLedgerPath: "evidence-ledger.json",
         rows: traceabilityRows,
       },
+      wayfinderHandoff: input.wayfinderHandoff,
+    };
+  }
+
+  function buildLeadingOpportunityBrief(
+    history: AuthoritativeHistoryRebuild,
+    command: ConcludeLeadingOpportunityCommand,
+  ): OpportunityBrief {
+    const { comparison, brief } = command.payload;
+    const leading = comparison.leadingAssessment;
+    return buildOpportunityBrief(history, {
+      comparison,
+      brief,
+      opportunityId: leading.opportunityId,
+      concludedAt: command.payload.concludedAt,
+      role: "scout-recommended-leading-opportunity",
+      selection: {
+        rationale: comparison.decision.rationale,
+        decisionId: comparison.decision.id,
+        evidenceEntryIds: comparison.decision.evidenceEntryIds,
+        limitations: comparison.decision.limitations,
+        traceabilityConclusion: "Leading Opportunity selection",
+      },
+      adversarialReservationIds: leading.adversarialChallenge.reservationIds,
+      comparisonLimitingFactors: [
+        ...leading.advantagesOverAlternatives.flatMap(
+          (assessment) => assessment.confidence.limitingFactors,
+        ),
+        ...leading.noMaterialDisadvantage.confidence.limitingFactors,
+        ...leading.robustAcrossCredibleRanges.confidence.limitingFactors,
+        ...leading.adversarialChallenge.confidence.limitingFactors,
+      ],
+      additionalTraceabilityRows: [
+        {
+          conclusion: "Adversarial conclusion",
+          entryIds: leading.adversarialChallenge.evidenceEntryIds,
+        },
+      ],
       wayfinderHandoff: {
         optional: true,
         invoked: false,
@@ -797,11 +912,15 @@ export function createLeadingOpportunityModule({
         instruction:
           "If you choose, invoke Wayfinder separately using this immutable Opportunity Brief as input; challenge the provisional Value Hypothesis and keep product-planning decisions outside this Campaign.",
       },
-    };
+    });
   }
 
   return {
+    unresolvedOpportunityIds,
+    opportunityComparisonViolation,
+    opportunityBriefInputViolation,
     leadingOpportunityViolation,
+    buildOpportunityBrief,
     buildLeadingOpportunityBrief,
   };
 }
@@ -826,6 +945,7 @@ function renderComparisonGroup(
 }
 
 export function renderOpportunityBrief(brief: OpportunityBrief): string {
+  const developerSelected = brief.role === "developer-selected-opportunity";
   const ranges = Object.entries(brief.commercialRanges).map(
     ([name, range]) =>
       `- ${briefText(name)}: ${range.low}–${range.high} ${briefText(range.unit)} (Evidence: ${range.evidenceEntryIds.join(", ")})`,
@@ -836,7 +956,14 @@ export function renderOpportunityBrief(brief: OpportunityBrief): string {
   return [
     "# Opportunity Brief",
     "",
-    "**Role:** Scout-recommended Leading Opportunity",
+    developerSelected
+      ? "**Role:** Developer-Selected Opportunity"
+      : "**Role:** Scout-recommended Leading Opportunity",
+    ...(brief.selectionProvenance === undefined
+      ? []
+      : [
+          `**Selection provenance:** ${briefText(brief.selectionProvenance.rationale)} (developer Preference, not market evidence; never a Leading Opportunity)`,
+        ]),
     `**Opportunity:** ${briefText(brief.opportunity.id)}`,
     `**Customer:** ${briefText(brief.opportunity.customer)}`,
     `**Situation:** ${briefText(brief.opportunity.situation)}`,

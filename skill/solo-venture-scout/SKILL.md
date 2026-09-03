@@ -349,6 +349,34 @@ Report the generated document as Markdown with its exact path. Never open the do
 in another application without the developer's choice. Offer its instruction for an
 optional, separate, human-invoked Wayfinder effort, but never start Wayfinder.
 
+## Preserve an inconclusive comparison
+
+When no defensible stand-out remains, run `concludeInconclusiveComparison` and render
+an immutable Inconclusive Comparison Report that preserves all Eligible Non-Dominated Opportunities
+in an unscored side-by-side view of their decisive trade-offs. Show unresolved
+contenders that could displace an apparent leader as explicit blockers linked to their
+open Evidence Gaps or unresolved Contradictions. Never hide a contender or force a
+Leading Opportunity. A genuine evidence-complete tie with no apparent leader needs no
+artificial blocker.
+
+Present exactly three explicit actions and run `respondInconclusiveComparison` only
+after the developer chooses one:
+
+1. **Stop** must preserve the report unchanged and create no Opportunity Brief.
+2. **Extend** must name only targeted Evidence Gaps from the report, create a new
+   Campaign Intake version with a new Research Budget, and resume only affected work.
+   Every research reservation must name both an affected Opportunity and one targeted
+   Evidence Gap.
+3. **Select** accepts one or more Eligible Non-Dominated Opportunities. Record each
+   rationale as developer Preference, not market evidence. Create one separately
+   marked immutable Developer-Selected Opportunity Brief for each selection; never
+   relabel one as a Leading Opportunity. Give every brief its own optional, separate
+   Wayfinder instruction and never combine or start those efforts.
+
+Report the unchanged Inconclusive Comparison Report path and each distinct selected
+brief path as Markdown. Never open any generated document without the developer's
+choice.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

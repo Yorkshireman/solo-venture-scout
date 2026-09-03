@@ -291,6 +291,50 @@ test("packaged Scout compares Eligible Opportunities and hands off only a defens
   assert.match(reference, /opportunity-brief\.md/);
 });
 
+test("packaged Scout preserves inconclusive comparisons and exact developer terminal choices", async () => {
+  const { outputRoot } = await buildPackagedScout(
+    "solo-venture-scout-inconclusive-guide-",
+  );
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(
+    instructions,
+    /Inconclusive Comparison Report.+Eligible Non-Dominated\s+Opportunities.+unscored side-by-side.+decisive trade-offs/is,
+  );
+  assert.match(
+    instructions,
+    /unresolved contenders.+explicit blockers.+Stop.+Extend.+Select/is,
+  );
+  assert.match(
+    instructions,
+    /Stop.+preserve.+unchanged.+no Opportunity Brief/is,
+  );
+  assert.match(
+    instructions,
+    /Extend.+targeted Evidence Gaps.+new\s+Campaign Intake version.+Research Budget.+only affected work/is,
+  );
+  assert.match(
+    instructions,
+    /Select.+one or more.+Eligible Non-Dominated\s+Opportunities.+developer Preference.+not market evidence/is,
+  );
+  assert.match(
+    instructions,
+    /Developer-Selected Opportunity.+never.+Leading.+separate.+Wayfinder/is,
+  );
+  assert.match(reference, /"command": "concludeInconclusiveComparison"/);
+  assert.match(reference, /inconclusive-comparison-report\.md/);
+  assert.match(reference, /"kind": "stop"/);
+  assert.match(reference, /"kind": "extend"/);
+  assert.match(reference, /"targetedEvidenceGapIds"/);
+  assert.match(reference, /"kind": "select"/);
+  assert.match(reference, /"selections"/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

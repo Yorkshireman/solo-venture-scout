@@ -1524,6 +1524,274 @@ function comparisonDimension(summary, evidenceEntryId) {
   };
 }
 
+/** @param {string} evidenceEntryId @param {string} label */
+function inconclusiveComparisonProfile(evidenceEntryId, label) {
+  return {
+    requiredInput: Object.fromEntries(
+      [
+        "validation",
+        "initialDelivery",
+        "acquisition",
+        "operations",
+        "time",
+        "cash",
+        "irreversibleDownside",
+        "opportunityCost",
+      ].map((dimension) => [
+        dimension,
+        comparisonDimension(`${label} has a distinct ${dimension} trade-off.`, evidenceEntryId),
+      ]),
+    ),
+    potentialOutput: Object.fromEntries(
+      ["commercialHeadroom", "scale", "durability", "strategicLeverage"].map(
+        (dimension) => [
+          dimension,
+          comparisonDimension(`${label} has a distinct ${dimension} trade-off.`, evidenceEntryId),
+        ],
+      ),
+    ),
+    outcomeUncertainty: comparisonDimension(
+      `${label} retains material outcome uncertainty.`,
+      evidenceEntryId,
+    ),
+    inputOutputAsymmetry: comparisonDimension(
+      `${label} preserves a credible but different input-output asymmetry.`,
+      evidenceEntryId,
+    ),
+    riskToleranceFit: {
+      fit: "within",
+      ...comparisonDimension(
+        `${label} remains within the declared risk tolerance.`,
+        evidenceEntryId,
+      ),
+    },
+    preferences: [],
+    advantages: [],
+  };
+}
+
+/** @param {string} campaignPath */
+function concludeInconclusiveComparisonCommand(campaignPath) {
+  return {
+    envelopeVersion: "0.1.0",
+    requestId: "conclude-inconclusive-comparison-1",
+    command: "concludeInconclusiveComparison",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      concludedAt: "2026-09-01T10:31:00.000Z",
+      reportId: "inconclusive-comparison-report-1",
+      comparison: {
+        id: "comparison-inconclusive-1",
+        profiles: [
+          {
+            opportunityId: "opportunity-dispatch-reconciliation",
+            ...inconclusiveComparisonProfile(
+              "inference-dispatch-qualification-evidence",
+              "Dispatch reconciliation",
+            ),
+          },
+          {
+            opportunityId: "opportunity-specialist-tender-review",
+            ...inconclusiveComparisonProfile(
+              "inference-tender-qualification-evidence",
+              "Specialist tender review",
+            ),
+          },
+        ],
+        dominanceAssessments: [
+          {
+            challengerOpportunityId: "opportunity-dispatch-reconciliation",
+            alternativeOpportunityId: "opportunity-specialist-tender-review",
+            outcome: "does-not-dominate",
+            criteria: {
+              requiresNoMoreMaterialInput: true,
+              offersNoLessCredibleOutput: false,
+              fitsDeveloperProfileAtLeastAsWell: true,
+              materiallyBetterOn: ["input-output-asymmetry"],
+            },
+            rationale: "Tender durability prevents dispatch reconciliation from dominating.",
+            evidenceEntryIds: [
+              "inference-dispatch-qualification-evidence",
+              "inference-tender-qualification-evidence",
+            ],
+            confidence: { level: "medium", limitingFactors: ["Output ranges overlap."] },
+          },
+          {
+            challengerOpportunityId: "opportunity-specialist-tender-review",
+            alternativeOpportunityId: "opportunity-dispatch-reconciliation",
+            outcome: "does-not-dominate",
+            criteria: {
+              requiresNoMoreMaterialInput: false,
+              offersNoLessCredibleOutput: true,
+              fitsDeveloperProfileAtLeastAsWell: true,
+              materiallyBetterOn: ["durability"],
+            },
+            rationale: "Higher tender input prevents specialist tender review from dominating.",
+            evidenceEntryIds: [
+              "inference-dispatch-qualification-evidence",
+              "inference-tender-qualification-evidence",
+            ],
+            confidence: { level: "medium", limitingFactors: ["Input ranges overlap."] },
+          },
+        ],
+        nonDominatedOpportunityIds: [
+          "opportunity-dispatch-reconciliation",
+          "opportunity-specialist-tender-review",
+        ],
+        decisiveTradeOffs: [
+          {
+            opportunityIds: [
+              "opportunity-dispatch-reconciliation",
+              "opportunity-specialist-tender-review",
+            ],
+            summary:
+              "Dispatch reconciliation needs less operating input; tender review has stronger specialist durability.",
+            evidenceEntryIds: [
+              "inference-dispatch-qualification-evidence",
+              "inference-tender-qualification-evidence",
+            ],
+            confidence: { level: "medium", limitingFactors: ["The ranges overlap."] },
+          },
+        ],
+        apparentLeaderOpportunityId: "opportunity-dispatch-reconciliation",
+        blockers: [
+          {
+            contenderOpportunityId: "opportunity-specialist-tender-review",
+            couldDisplaceOpportunityIds: ["opportunity-dispatch-reconciliation"],
+            summary:
+              "The unresolved durability boundary could make tender review preferable.",
+            evidenceGapIds: ["gap-tender-durability-boundary"],
+            contradictionIds: [],
+            evidenceEntryIds: [
+              "inference-dispatch-qualification-evidence",
+              "inference-tender-qualification-evidence",
+            ],
+          },
+        ],
+        decision: {
+          type: "campaign-decision",
+          id: "decision-inconclusive-comparison-1",
+          kind: "opportunity-comparison",
+          outcome: "inconclusive-comparison",
+          leaderOpportunityId: null,
+          intakeVersion: 1,
+          applicableRule: "Do not force a leader when material trade-offs remain unresolved.",
+          evidenceEntryIds: [
+            "inference-dispatch-qualification-evidence",
+            "inference-tender-qualification-evidence",
+          ],
+          rationale: "Neither Eligible Non-Dominated Opportunity is defensibly strongest.",
+          confidence: { level: "medium", limitingFactors: ["One boundary remains open."] },
+          limitations: ["Public Research is not market validation."],
+          decidedAt: "2026-09-01T10:31:00.000Z",
+        },
+      },
+    },
+  };
+}
+
+/** @param {string} kernelPath @param {string} campaignPath */
+async function enterInconclusiveComparison(kernelPath, campaignPath) {
+  await prepareEligibleCampaign(kernelPath, campaignPath);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+  const gap = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-shared-inconclusive-gap",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:30:30.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-tender-durability-boundary",
+          question: "Does specialist durability outweigh the higher operating input?",
+          affectedDecisionIds: ["decision-inconclusive-comparison-1"],
+          resolutionCriteria: "Independent evidence separates the overlapping ranges.",
+          resolutionMethod: "Run one targeted comparison research extension.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(gap.code, 0, gap.stderr);
+  const concluded = await runKernel(
+    kernelPath,
+    concludeInconclusiveComparisonCommand(campaignPath),
+  );
+  assert.equal(
+    concluded.code,
+    0,
+    `${concluded.stderr}\n${JSON.stringify(concluded.response)}`,
+  );
+  return concluded;
+}
+
+/** @param {string} opportunityId */
+function developerSelection(opportunityId) {
+  const dispatch = opportunityId === "opportunity-dispatch-reconciliation";
+  const evidenceEntryId = dispatch
+    ? "inference-dispatch-qualification-evidence"
+    : "inference-tender-qualification-evidence";
+  return {
+    opportunityId,
+    rationale: dispatch
+      ? "I prefer the lower operating input despite unresolved durability trade-offs."
+      : "I prefer the specialist durability despite the higher operating input.",
+    brief: {
+      id: dispatch
+        ? "opportunity-brief-developer-dispatch"
+        : "opportunity-brief-developer-tender",
+      buyerEconomics: comparisonDimension(
+        "The evidence supports a buyer with a costly recurring problem.",
+        evidenceEntryId,
+      ),
+      customerAccess: comparisonDimension(
+        "The evidence supports a plausible bounded route to customers.",
+        evidenceEntryId,
+      ),
+      alternatives: comparisonDimension(
+        "Manual work and general tools remain the current alternatives.",
+        evidenceEntryId,
+      ),
+      risks: [
+        comparisonDimension(
+          "The unresolved comparison boundary remains a material risk.",
+          evidenceEntryId,
+        ),
+      ],
+      valueHypothesis: {
+        status: "provisional-not-a-product-specification",
+        customer: dispatch
+          ? "Independent dispatch coordinators"
+          : "Small specialist suppliers",
+        situation: dispatch
+          ? "Assigning urgent field work across changing schedules"
+          : "Submitting regulated public tenders",
+        smallestDesiredCustomerOutcome: dispatch
+          ? "Reduce paid reconciliation effort while preserving assignment accuracy."
+          : "Reduce paid specialist review and rework before tender submission.",
+        supportedReason:
+          "Current behavior evidence supports testing this smallest customer outcome separately.",
+        confidence: {
+          level: "medium",
+          limitingFactors: ["No External Validation Action has occurred."],
+        },
+        supportingEvidenceEntryIds: [evidenceEntryId],
+        challengingEvidenceEntryIds: [],
+        assumptionIds: [],
+        evidenceGapIds: ["gap-tender-durability-boundary"],
+        disconfirmationConditions: [
+          "A separately approved validation effort does not reduce the recorded costly consequence.",
+        ],
+      },
+    },
+  };
+}
+
 /**
  * @param {Partial<Record<string, unknown>>} [overrides]
  * @returns {any}
@@ -3550,6 +3818,583 @@ test("the protected adversarial reserve can challenge an apparent leader after q
   );
   assert.equal(exhausted.code, 3);
   assert.equal(exhausted.response.error.code, "SVS-ADVERSARIAL-RESEARCH-BUDGET-EXHAUSTED");
+});
+
+test("a genuine tie produces an immutable unscored Inconclusive Comparison Report", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-inconclusive-comparison-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "inconclusive-comparison-campaign");
+  await prepareEligibleCampaign(kernelPath, campaignPath);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+  const gap = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-inconclusive-comparison-gap",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:30:30.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-tender-durability-boundary",
+          question: "Does specialist durability outweigh the higher operating input?",
+          affectedDecisionIds: ["decision-inconclusive-comparison-1"],
+          resolutionCriteria: "Independent evidence separates the overlapping ranges.",
+          resolutionMethod: "Run one targeted comparison research extension.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(gap.code, 0, gap.stderr);
+
+  const completed = await runKernel(
+    kernelPath,
+    concludeInconclusiveComparisonCommand(campaignPath),
+  );
+
+  assert.equal(completed.code, 0, `${completed.stderr}\n${JSON.stringify(completed.response)}`);
+  assert.equal(completed.response.result.outcome, "inconclusive-comparison");
+  assert.deepEqual(
+    completed.response.result.report.comparison.nonDominatedOpportunityIds,
+    [
+      "opportunity-dispatch-reconciliation",
+      "opportunity-specialist-tender-review",
+    ],
+  );
+  assert.deepEqual(completed.response.result.report.availableActions, [
+    "stop",
+    "extend",
+    "select",
+  ]);
+  assert.deepEqual(completed.response.result.workView.nextPermittedActions, [
+    "stop-inconclusive-comparison",
+    "extend-targeted-research",
+    "select-non-dominated-opportunities",
+  ]);
+  assert.equal(completed.response.result.workView.terminal, undefined);
+  assert.equal(completed.response.result.opportunityBriefs, undefined);
+  assert.deepEqual(completed.response.result.artifact, {
+    path: path.join(campaignPath, "inconclusive-comparison-report.md"),
+    format: "markdown",
+    immutable: true,
+  });
+  const artifact = await readFile(
+    path.join(campaignPath, "inconclusive-comparison-report.md"),
+    "utf8",
+  );
+  assert.match(artifact, /^# Inconclusive Comparison Report/m);
+  assert.match(
+    artifact,
+    /Unscored side-by-side comparison[\s\S]+opportunity-dispatch-reconciliation[\s\S]+opportunity-specialist-tender-review/i,
+  );
+  assert.match(artifact, /Decisive trade-offs/i);
+  assert.match(
+    artifact,
+    /Explicit blocker[\s\S]+opportunity-specialist-tender-review[\s\S]+gap-tender-durability-boundary/i,
+  );
+  assert.doesNotMatch(artifact, /\d+% chance/i);
+  assert.equal(
+    (await stat(path.join(campaignPath, "inconclusive-comparison-report.md"))).mode &
+      0o777,
+    0o600,
+  );
+});
+
+test("an evidence-complete tie without an apparent leader needs no artificial blocker", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-settled-inconclusive-tie-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "settled-inconclusive-tie-campaign");
+  await prepareEligibleCampaign(kernelPath, campaignPath);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+  const command = concludeInconclusiveComparisonCommand(campaignPath);
+  command.requestId = "conclude-settled-inconclusive-tie-1";
+  command.payload.reportId = "settled-inconclusive-tie-report-1";
+  command.payload.comparison.id = "settled-inconclusive-tie-comparison-1";
+  command.payload.comparison.apparentLeaderOpportunityId = /** @type {any} */ (null);
+  command.payload.comparison.blockers = [];
+  command.payload.comparison.decision.id = "settled-inconclusive-tie-decision-1";
+  command.payload.comparison.decision.rationale =
+    "The evidence establishes a genuine trade-off but does not establish a defensible leader.";
+
+  const completed = await runKernel(kernelPath, command);
+
+  assert.equal(
+    completed.code,
+    0,
+    `${completed.stderr}\n${JSON.stringify(completed.response)}`,
+  );
+  const artifact = await readFile(
+    path.join(campaignPath, "inconclusive-comparison-report.md"),
+    "utf8",
+  );
+  assert.match(artifact, /Explicit blockers[\s\S]+None\./i);
+});
+
+test("one apparent leader remains inconclusive when an unresolved contender could displace it", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-unresolved-contender-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "unresolved-contender-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const result = await runKernel(kernelPath, command);
+    assert.equal(result.code, 0, result.stderr);
+  }
+  const exclusions = opportunityExclusionGatesCommand(campaignPath);
+  exclusions.payload.assessments[1].marketSafety.classification = "elevated-risk";
+  const excluded = await runKernel(kernelPath, exclusions);
+  assert.equal(excluded.code, 0, excluded.stderr);
+  await recordPassingQualificationEvidence(kernelPath, campaignPath);
+  const qualification = await runKernel(
+    kernelPath,
+    passingOpportunityQualificationGatesCommand(campaignPath),
+  );
+  assert.equal(qualification.code, 0, qualification.stderr);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+  const gap = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-unresolved-contender-gap",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:30:30.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-unresolved-tender-approval",
+          question: "Would approved deep research leave tender review able to displace dispatch reconciliation?",
+          affectedDecisionIds: ["decision-inconclusive-comparison-1"],
+          resolutionCriteria: "Approved evidence resolves the contender boundary.",
+          resolutionMethod: "Request scoped approval and deepen only the tender Opportunity.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(gap.code, 0, gap.stderr);
+  const command = concludeInconclusiveComparisonCommand(campaignPath);
+  command.requestId = "conclude-unresolved-contender-1";
+  command.payload.reportId = "unresolved-contender-report-1";
+  command.payload.comparison.id = "unresolved-contender-comparison-1";
+  command.payload.comparison.profiles = [command.payload.comparison.profiles[0]];
+  command.payload.comparison.dominanceAssessments = [];
+  command.payload.comparison.nonDominatedOpportunityIds = [
+    "opportunity-dispatch-reconciliation",
+  ];
+  command.payload.comparison.decisiveTradeOffs[0].summary =
+    "Dispatch is currently eligible, while unresolved tender durability could still displace it after approved research.";
+  command.payload.comparison.blockers[0].evidenceGapIds = [
+    "gap-unresolved-tender-approval",
+  ];
+  command.payload.comparison.decision.evidenceEntryIds = [
+    "inference-dispatch-qualification-evidence",
+  ];
+
+  const completed = await runKernel(kernelPath, command);
+
+  assert.equal(
+    completed.code,
+    0,
+    `${completed.stderr}\n${JSON.stringify(completed.response)}`,
+  );
+  const artifact = await readFile(
+    path.join(campaignPath, "inconclusive-comparison-report.md"),
+    "utf8",
+  );
+  assert.match(
+    artifact,
+    /Explicit blockers[\s\S]+opportunity-specialist-tender-review.+could displace.+opportunity-dispatch-reconciliation/i,
+  );
+});
+
+test("stopping an inconclusive comparison preserves its report and creates no Opportunity Brief", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-stop-inconclusive-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "stop-inconclusive-campaign");
+  await prepareEligibleCampaign(kernelPath, campaignPath);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+  assert.equal(
+    (
+      await runKernel(kernelPath, {
+        envelopeVersion: "0.1.0",
+        requestId: "record-stop-inconclusive-gap",
+        command: "recordEvidenceReasoning",
+        payload: {
+          campaignPath,
+          coordinatorId: "coordinator-primary",
+          recordedAt: "2026-09-01T10:30:30.000Z",
+          entries: [
+            {
+              type: "evidence-gap",
+              id: "gap-tender-durability-boundary",
+              question: "Does specialist durability outweigh the higher operating input?",
+              affectedDecisionIds: ["decision-inconclusive-comparison-1"],
+              resolutionCriteria: "Independent evidence separates the overlapping ranges.",
+              resolutionMethod: "Run one targeted comparison research extension.",
+              status: "open",
+              resolution: null,
+            },
+          ],
+        },
+      })
+    ).code,
+    0,
+  );
+  assert.equal(
+    (
+      await runKernel(
+        kernelPath,
+        concludeInconclusiveComparisonCommand(campaignPath),
+      )
+    ).code,
+    0,
+  );
+  const reportPath = path.join(campaignPath, "inconclusive-comparison-report.md");
+  const originalReport = await readFile(reportPath, "utf8");
+
+  const stopped = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "stop-inconclusive-comparison-1",
+    command: "respondInconclusiveComparison",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T10:32:00.000Z",
+      reportId: "inconclusive-comparison-report-1",
+      response: {
+        kind: "stop",
+        rationale: "The current report is sufficient; do not spend more research effort.",
+      },
+    },
+  });
+
+  assert.equal(stopped.code, 0, `${stopped.stderr}\n${JSON.stringify(stopped.response)}`);
+  assert.equal(stopped.response.result.action, "stop");
+  assert.deepEqual(stopped.response.result.workView.terminal, {
+    outcome: "inconclusive-comparison",
+    reportId: "inconclusive-comparison-report-1",
+    artifactPath: "inconclusive-comparison-report.md",
+    action: "stopped",
+    immutable: true,
+    concludedAt: "2026-09-01T10:32:00.000Z",
+  });
+  assert.equal(stopped.response.result.opportunityBriefs, undefined);
+  assert.equal(await readFile(reportPath, "utf8"), originalReport);
+  assert.equal(
+    await stat(path.join(campaignPath, "opportunity-brief.md")).then(
+      () => true,
+      () => false,
+    ),
+    false,
+  );
+
+  const research = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "research-after-inconclusive-stop",
+      payload: {
+        reservedAt: "2026-09-01T10:33:00.000Z",
+        reservation: {
+          id: "reservation-after-inconclusive-stop",
+          purpose: "Attempt to mutate a stopped Campaign",
+          researchClass: "adversarial",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(research.code, 3);
+  assert.equal(research.response.error.code, "SVS-CAMPAIGN-TERMINAL");
+  assert.equal(await readFile(reportPath, "utf8"), originalReport);
+});
+
+test("extending an inconclusive comparison versions intake and resumes only targeted Evidence Gaps", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-extend-inconclusive-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "extend-inconclusive-campaign");
+  await enterInconclusiveComparison(kernelPath, campaignPath);
+  const reportPath = path.join(campaignPath, "inconclusive-comparison-report.md");
+  const originalReport = await readFile(reportPath, "utf8");
+  const researchBudget = {
+    profile: "custom",
+    sourceCap: 5,
+    discoverySweepCap: 1,
+    sourceFamilyMinimum: 1,
+    deepenedOpportunityCap: 2,
+    minimumComparisonSet: 2,
+    adversarialSourceReserve: 1,
+    paidSpendCap: { amount: 0, currency: "GBP" },
+  };
+
+  const extended = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "extend-inconclusive-comparison-1",
+    command: "respondInconclusiveComparison",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T10:32:00.000Z",
+      reportId: "inconclusive-comparison-report-1",
+      response: {
+        kind: "extend",
+        rationale: "Resolve only the durability boundary that blocks comparison.",
+        targetedEvidenceGapIds: ["gap-tender-durability-boundary"],
+        affectedOpportunityIds: [
+          "opportunity-dispatch-reconciliation",
+          "opportunity-specialist-tender-review",
+        ],
+        researchBudget,
+      },
+    },
+  });
+
+  assert.equal(extended.code, 0, `${extended.stderr}\n${JSON.stringify(extended.response)}`);
+  assert.equal(extended.response.result.action, "extend");
+  assert.equal(extended.response.result.intake.version, 2);
+  assert.equal(
+    extended.response.result.intake.confirmedAt,
+    "2026-09-01T10:32:00.000Z",
+  );
+  assert.deepEqual(extended.response.result.intake.researchBudget, researchBudget);
+  assert.deepEqual(extended.response.result.researchBudget, {
+    sourceCap: 5,
+    adversarialSourceReserve: 1,
+    ordinarySourceCap: 4,
+    reservedSourceUnits: 0,
+    settledSourceUnits: 0,
+    remainingOrdinarySourceUnits: 4,
+    remainingAdversarialSourceUnits: 1,
+  });
+  assert.equal(extended.response.result.workView.phase, "opportunity-deepening");
+  assert.equal(extended.response.result.workView.publicResearchAvailable, true);
+  assert.deepEqual(extended.response.result.workView.researchExtension, {
+    reportId: "inconclusive-comparison-report-1",
+    intakeVersion: 2,
+    targetedEvidenceGapIds: ["gap-tender-durability-boundary"],
+    affectedOpportunityIds: [
+      "opportunity-dispatch-reconciliation",
+      "opportunity-specialist-tender-review",
+    ],
+  });
+  assert.equal(await readFile(reportPath, "utf8"), originalReport);
+
+  const unrelated = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-untargeted-extension-research",
+      payload: {
+        reservedAt: "2026-09-01T10:33:00.000Z",
+        reservation: {
+          id: "reservation-untargeted-extension",
+          purpose: "Research an unrelated question",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+          evidenceGapId: "gap-unrelated",
+        },
+      },
+    }),
+  );
+  assert.equal(unrelated.code, 3);
+  assert.equal(unrelated.response.error.code, "SVS-RESEARCH-EXTENSION-SCOPE-MISMATCH");
+
+  const unrelatedReasoning = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-untargeted-extension-reasoning",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:33:30.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-unrelated-extension-work",
+          question: "Should unrelated discovery resume?",
+          affectedDecisionIds: ["decision-breadth-gate-1"],
+          resolutionCriteria: "Unrelated discovery is separately authorised.",
+          resolutionMethod: "Start a separate Campaign.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(unrelatedReasoning.code, 3);
+  assert.equal(
+    unrelatedReasoning.response.error.code,
+    "SVS-RESEARCH-EXTENSION-SCOPE-MISMATCH",
+  );
+
+  const targeted = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-targeted-extension-research",
+      payload: {
+        reservedAt: "2026-09-01T10:33:00.000Z",
+        reservation: {
+          id: "reservation-targeted-extension",
+          purpose: "Resolve the targeted durability Evidence Gap",
+          researchClass: "deepening",
+          opportunityId: "opportunity-specialist-tender-review",
+          evidenceGapId: "gap-tender-durability-boundary",
+        },
+      },
+    }),
+  );
+  assert.equal(targeted.code, 0, `${targeted.stderr}\n${JSON.stringify(targeted.response)}`);
+  assert.equal(targeted.response.result.researchBudget.reservedSourceUnits, 1);
+  assert.equal(await readFile(reportPath, "utf8"), originalReport);
+});
+
+test("selecting multiple Non-Dominated Opportunities creates separately marked immutable briefs", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-select-inconclusive-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "select-inconclusive-campaign");
+  await enterInconclusiveComparison(kernelPath, campaignPath);
+  const reportPath = path.join(campaignPath, "inconclusive-comparison-report.md");
+  const originalReport = await readFile(reportPath, "utf8");
+
+  const selected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "select-inconclusive-opportunities-1",
+    command: "respondInconclusiveComparison",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T10:32:00.000Z",
+      reportId: "inconclusive-comparison-report-1",
+      response: {
+        kind: "select",
+        selections: [
+          developerSelection("opportunity-dispatch-reconciliation"),
+          developerSelection("opportunity-specialist-tender-review"),
+        ],
+      },
+    },
+  });
+
+  assert.equal(selected.code, 0, `${selected.stderr}\n${JSON.stringify(selected.response)}`);
+  assert.equal(selected.response.result.action, "select");
+  assert.equal(selected.response.result.opportunityBriefs.length, 2);
+  for (const brief of selected.response.result.opportunityBriefs) {
+    const preferenceTrace = brief.traceability.rows.find(
+      (/** @type {any} */ row) =>
+        row.conclusion === "Developer selection preference",
+    );
+    assert.deepEqual(preferenceTrace.entryIds, [
+      "decision-inconclusive-comparison-1",
+    ]);
+    assert.equal(
+      preferenceTrace.entryIds.some((/** @type {string} */ id) =>
+        id.startsWith("inference-"),
+      ),
+      false,
+    );
+  }
+  assert.deepEqual(
+    selected.response.result.opportunityBriefs.map(
+      (/** @type {any} */ brief) => ({
+        opportunityId: brief.opportunity.id,
+        role: brief.role,
+        provenance: brief.selectionProvenance.classification,
+        wayfinderPath: brief.wayfinderHandoff.briefPath,
+        invoked: brief.wayfinderHandoff.invoked,
+      }),
+    ),
+    [
+      {
+        opportunityId: "opportunity-dispatch-reconciliation",
+        role: "developer-selected-opportunity",
+        provenance: "developer-preference-not-market-evidence",
+        wayfinderPath:
+          "opportunity-brief-opportunity-dispatch-reconciliation.md",
+        invoked: false,
+      },
+      {
+        opportunityId: "opportunity-specialist-tender-review",
+        role: "developer-selected-opportunity",
+        provenance: "developer-preference-not-market-evidence",
+        wayfinderPath:
+          "opportunity-brief-opportunity-specialist-tender-review.md",
+        invoked: false,
+      },
+    ],
+  );
+  assert.deepEqual(selected.response.result.workView.terminal, {
+    outcome: "developer-selected-opportunities",
+    reportId: "inconclusive-comparison-report-1",
+    briefIds: [
+      "opportunity-brief-developer-dispatch",
+      "opportunity-brief-developer-tender",
+    ],
+    artifactPaths: [
+      "opportunity-brief-opportunity-dispatch-reconciliation.md",
+      "opportunity-brief-opportunity-specialist-tender-review.md",
+    ],
+    immutable: true,
+    concludedAt: "2026-09-01T10:32:00.000Z",
+  });
+  assert.deepEqual(
+    selected.response.result.workView.opportunities.map(
+      (/** @type {any} */ opportunity) => opportunity.terminalRole,
+    ),
+    ["developer-selected-opportunity", "developer-selected-opportunity"],
+  );
+  for (const opportunityId of [
+    "opportunity-dispatch-reconciliation",
+    "opportunity-specialist-tender-review",
+  ]) {
+    const brief = await readFile(
+      path.join(campaignPath, `opportunity-brief-${opportunityId}.md`),
+      "utf8",
+    );
+    assert.match(brief, /Developer-Selected Opportunity/);
+    assert.match(brief, /developer Preference, not market evidence/i);
+    assert.doesNotMatch(brief, /Scout-recommended Leading Opportunity/);
+    assert.match(brief, /Optional separate Wayfinder handoff/i);
+    assert.match(brief, /not been started/i);
+  }
+  assert.equal(await readFile(reportPath, "utf8"), originalReport);
+  assert.equal(
+    await stat(path.join(campaignPath, "opportunity-brief.md")).then(
+      () => true,
+      () => false,
+    ),
+    false,
+  );
 });
 
 test("a robust comparison produces one immutable Leading Opportunity Brief", async () => {

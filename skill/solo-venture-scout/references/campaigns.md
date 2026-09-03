@@ -1292,6 +1292,151 @@ Success creates `opportunity-brief.md` with mode `0600` and returns its absolute
 file. The brief's Wayfinder instruction is optional and records `invoked: false`; only
 the developer may start that separate effort.
 
+## Conclude and respond to an inconclusive comparison
+
+Use the same complete `profiles`, directed `dominanceAssessments`, and
+`nonDominatedOpportunityIds` contract as `concludeLeadingOpportunity`. Replace the
+leader assessment with evidence-backed `decisiveTradeOffs`, an optional
+`apparentLeaderOpportunityId`, and explicit contender `blockers`. Every blocker names
+the contender, the Eligible Non-Dominated Opportunities it could displace, and current
+open Evidence Gaps or unresolved Contradictions. Include every Opportunity whose
+authoritative disposition remains unresolved. A genuine evidence-complete tie with no
+apparent leader may use an empty `blockers` array; do not manufacture a gap merely to
+justify the inconclusive result.
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "conclude-inconclusive-comparison-stable-request-id",
+  "command": "concludeInconclusiveComparison",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "concludedAt": "2026-08-31T11:30:00.000Z",
+    "reportId": "stable-inconclusive-comparison-report-id",
+    "comparison": {
+      "id": "stable-opportunity-comparison-id",
+      "profiles": "complete profiles using the preceding schema",
+      "dominanceAssessments": "complete directed pairs using the preceding schema",
+      "nonDominatedOpportunityIds": ["stable-opportunity-a", "stable-opportunity-b"],
+      "decisiveTradeOffs": [{
+        "opportunityIds": ["stable-opportunity-a", "stable-opportunity-b"],
+        "summary": "One needs less input while the other has stronger supported durability.",
+        "evidenceEntryIds": ["stable-opportunity-a-inference", "stable-opportunity-b-inference"],
+        "confidence": { "level": "medium", "limitingFactors": ["The supported ranges overlap."] }
+      }],
+      "apparentLeaderOpportunityId": "stable-opportunity-a",
+      "blockers": [{
+        "contenderOpportunityId": "stable-opportunity-b",
+        "couldDisplaceOpportunityIds": ["stable-opportunity-a"],
+        "summary": "The unresolved durability boundary could reverse the preference.",
+        "evidenceGapIds": ["stable-durability-gap-id"],
+        "contradictionIds": [],
+        "evidenceEntryIds": ["stable-opportunity-a-inference", "stable-opportunity-b-inference"]
+      }],
+      "decision": {
+        "type": "campaign-decision",
+        "id": "stable-inconclusive-decision-id",
+        "kind": "opportunity-comparison",
+        "outcome": "inconclusive-comparison",
+        "leaderOpportunityId": null,
+        "intakeVersion": 1,
+        "applicableRule": "Do not force a leader while a material blocker remains.",
+        "evidenceEntryIds": ["stable-opportunity-a-inference", "stable-opportunity-b-inference"],
+        "rationale": "Neither Eligible Non-Dominated Opportunity is defensibly strongest.",
+        "confidence": { "level": "medium", "limitingFactors": ["One boundary remains open."] },
+        "limitations": ["Public Research is not market validation."],
+        "decidedAt": "2026-08-31T11:30:00.000Z"
+      }
+    }
+  }
+}
+```
+
+Success creates immutable `inconclusive-comparison-report.md`. Present Stop, Extend,
+and Select without choosing for the developer. Stop preserves that report and creates
+no Opportunity Brief:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "stop-inconclusive-comparison-stable-request-id",
+  "command": "respondInconclusiveComparison",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "respondedAt": "2026-08-31T11:31:00.000Z",
+    "reportId": "stable-inconclusive-comparison-report-id",
+    "response": { "kind": "stop", "rationale": "Preserve the current comparison." }
+  }
+}
+```
+
+Extend creates the next Campaign Intake version and a fresh expanded Research Budget.
+All resumed Campaign work remains confined to the named Opportunities and Evidence
+Gaps. Reservations must use `researchClass: "deepening"`, an affected `opportunityId`,
+and a targeted `evidenceGapId`:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "extend-inconclusive-comparison-stable-request-id",
+  "command": "respondInconclusiveComparison",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "respondedAt": "2026-08-31T11:31:00.000Z",
+    "reportId": "stable-inconclusive-comparison-report-id",
+    "response": {
+      "kind": "extend",
+      "rationale": "Resolve only the blocker that could change comparison.",
+      "targetedEvidenceGapIds": ["stable-durability-gap-id"],
+      "affectedOpportunityIds": ["stable-opportunity-a", "stable-opportunity-b"],
+      "researchBudget": {
+        "profile": "custom",
+        "sourceCap": 5,
+        "discoverySweepCap": 1,
+        "sourceFamilyMinimum": 1,
+        "deepenedOpportunityCap": 2,
+        "minimumComparisonSet": 2,
+        "adversarialSourceReserve": 1,
+        "paidSpendCap": { "amount": 0, "currency": "GBP" }
+      }
+    }
+  }
+}
+```
+
+Select accepts one or more entries. Each `brief` uses the complete brief-input shape
+from `concludeLeadingOpportunity` and each Opportunity must be Non-Dominated:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "select-inconclusive-opportunities-stable-request-id",
+  "command": "respondInconclusiveComparison",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "respondedAt": "2026-08-31T11:31:00.000Z",
+    "reportId": "stable-inconclusive-comparison-report-id",
+    "response": {
+      "kind": "select",
+      "selections": [{
+        "opportunityId": "stable-opportunity-a",
+        "rationale": "I prefer its lower operating input despite the unresolved trade-off.",
+        "brief": "complete evidence-backed brief input using the preceding schema"
+      }]
+    }
+  }
+}
+```
+
+Record every selection rationale as developer Preference, not market evidence. Create
+one separately marked `opportunity-brief-<opportunity-id>.md` per Developer-Selected
+Opportunity, never relabel it as Leading, and give it one separate optional Wayfinder
+instruction with `invoked: false`.
+
 ## Conclude No Qualifying Opportunity
 
 When no Opportunity is eligible and the latest qualification-related Campaign Decision stopped

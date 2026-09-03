@@ -16,6 +16,8 @@ import type {
   RecordOpportunityQualificationGatesCommand,
   ConcludeNoQualifyingOpportunityCommand,
   ConcludeLeadingOpportunityCommand,
+  ConcludeInconclusiveComparisonCommand,
+  RespondInconclusiveComparisonCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -49,6 +51,15 @@ import {
   noQualifyingOpportunityViolation,
   leadingOpportunityRecords,
   leadingOpportunityViolation,
+  inconclusiveComparisonRecords,
+  inconclusiveComparisonViolation,
+  inconclusiveComparisonResponseRecords,
+  applyInconclusiveComparisonResponse,
+  buildDeveloperSelectedOpportunityBriefs,
+  inconclusiveResearchExtensionViolation,
+  activeInconclusiveResearchExtension,
+  isAuthoritativeOperation,
+  reservationMatchesInconclusiveExtension,
   opportunityFormationRecords,
   opportunityFormationViolation,
   opportunityDeepeningViolation,
@@ -86,6 +97,8 @@ export type CoordinatorCommand =
   | RecordOpportunityQualificationGatesCommand
   | ConcludeNoQualifyingOpportunityCommand
   | ConcludeLeadingOpportunityCommand
+  | ConcludeInconclusiveComparisonCommand
+  | RespondInconclusiveComparisonCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -217,7 +230,12 @@ export async function runCoordinatorOperation<
     if (
       rebuiltCampaign.authoritativeHistory.noQualifyingOpportunityReports.length >
         0 ||
-      rebuiltCampaign.authoritativeHistory.opportunityBriefs.length > 0
+      rebuiltCampaign.authoritativeHistory.opportunityBriefs.length > 0 ||
+      rebuiltCampaign.authoritativeHistory.inconclusiveComparisonResponses.some(
+        (response) => response.response.kind === "stop",
+      ) ||
+      rebuiltCampaign.authoritativeHistory.developerSelectedOpportunityBriefs
+        .length > 0
     ) {
       return coordinatorOperationFailure(command, {
         code: "SVS-CAMPAIGN-TERMINAL",
@@ -225,6 +243,24 @@ export async function runCoordinatorOperation<
           "The Scouting Campaign has an immutable terminal record.",
         action:
           "Inspect or explain the terminal report; begin a separately authorised continuation rather than mutating this Campaign.",
+      });
+    }
+
+    const activeInconclusiveReport = rebuiltCampaign.authoritativeHistory
+      .inconclusiveComparisonReports.at(-1);
+    if (
+      activeInconclusiveReport !== undefined &&
+      command.command !== "respondInconclusiveComparison" &&
+      !rebuiltCampaign.authoritativeHistory.inconclusiveComparisonResponses.some(
+        (response) => response.reportId === activeInconclusiveReport.id,
+      )
+    ) {
+      return coordinatorOperationFailure(command, {
+        code: "SVS-INCONCLUSIVE-COMPARISON-AWAITING-RESPONSE",
+        message:
+          "The immutable Inconclusive Comparison Report requires an explicit developer response.",
+        action:
+          "Choose Stop, targeted Extend, or Select; do not continue other Campaign work first.",
       });
     }
 
@@ -267,6 +303,25 @@ export async function runCoordinatorOperation<
     }
 
     const records = descriptor.records(context);
+    const operation = records[0]?.operation;
+    if (!isAuthoritativeOperation(operation)) {
+      throw new Error("coordinator operation records contain an unknown operation");
+    }
+    const extensionViolation = inconclusiveResearchExtensionViolation(
+      rebuiltCampaign.authoritativeHistory,
+      operation,
+      records[1] ?? {},
+    );
+    if (extensionViolation !== undefined) {
+      return coordinatorOperationFailure(command, {
+        code: "SVS-RESEARCH-EXTENSION-SCOPE-MISMATCH",
+        message:
+          "The requested Campaign work is outside the targeted Inconclusive Comparison extension.",
+        action:
+          "Resume only work tied to a named affected Opportunity and targeted Evidence Gap.",
+        details: [extensionViolation],
+      });
+    }
     const after = await appendCampaignRecordsAndPersist(campaignPath, records);
     return coordinatorOperationSuccess(
       command,
@@ -548,6 +603,24 @@ export async function reservePublicResearch(
     },
     validateAfterLease({ before, rebuiltCampaign }) {
       const campaign = before!;
+      const activeExtension = activeInconclusiveResearchExtension(
+        rebuiltCampaign.authoritativeHistory,
+      );
+      if (
+        activeExtension?.response.kind === "extend" &&
+        !reservationMatchesInconclusiveExtension(
+          command.payload.reservation,
+          activeExtension.response,
+        )
+      ) {
+        return {
+          code: "SVS-RESEARCH-EXTENSION-SCOPE-MISMATCH",
+          message:
+            "The research reservation is outside the targeted Inconclusive Comparison extension.",
+          action:
+            "Reserve only deepening work for a named affected Opportunity and targeted Evidence Gap.",
+        };
+      }
       if (
         rebuiltCampaign.records.some(
           (record) =>
@@ -641,10 +714,13 @@ export async function reservePublicResearch(
               : "Keep the Opportunity unresolved and ineligible; request explicit scoped approval or continue only shallow classification and independent permitted work.",
         };
       }
-      const allocationViolation = publicResearchAllocationViolation(
-        rebuiltCampaign.authoritativeHistory,
-        command.payload.reservation,
-      );
+      const allocationViolation =
+        activeExtension === undefined
+          ? publicResearchAllocationViolation(
+              rebuiltCampaign.authoritativeHistory,
+              command.payload.reservation,
+            )
+          : undefined;
       if (allocationViolation === "required") {
         return {
           code: "SVS-RESEARCH-ALLOCATION-REQUIRED",
@@ -674,10 +750,13 @@ export async function reservePublicResearch(
               : "Use the next ordinary Source unit for Opportunity deepening.",
         };
       }
-      const decisionValueViolation = researchDecisionValueViolation(
-        rebuiltCampaign.authoritativeHistory,
-        command.payload.reservation,
-      );
+      const decisionValueViolation =
+        activeExtension === undefined
+          ? researchDecisionValueViolation(
+              rebuiltCampaign.authoritativeHistory,
+              command.payload.reservation,
+            )
+          : undefined;
       if (decisionValueViolation !== undefined) {
         return {
           code:
@@ -2146,6 +2225,232 @@ export async function concludeLeadingOpportunity(
     },
     records({ rebuiltCampaign }) {
       return leadingOpportunityRecords(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
+export async function concludeInconclusiveComparison(
+  command: ConcludeInconclusiveComparisonCommand,
+  currentTime: string,
+) {
+  const result = (completed: boolean, campaign: LoadedCampaign) => ({
+    completed,
+    outcome: "inconclusive-comparison" as const,
+    report: campaign.inconclusiveComparisonReport,
+    artifact: {
+      path: path.join(campaign.campaign.path, "inconclusive-comparison-report.md"),
+      format: "markdown" as const,
+      immutable: true as const,
+    },
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not conclude the comparison concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Inconclusive Comparison request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Inconclusive Comparison could not be concluded against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["conclude-inconclusive-comparison"]
+              .outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.report) &&
+          record.report.id === command.payload.reportId &&
+          JSON.stringify(record.report.comparison) ===
+            JSON.stringify(command.payload.comparison),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      const violation = inconclusiveComparisonViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.comparison,
+        command.payload.concludedAt,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-INCONCLUSIVE-COMPARISON-NOT-DEFENSIBLE",
+            message: `Inconclusive Comparison violates a campaign invariant: ${violation}.`,
+            action:
+              "Preserve every Eligible Non-Dominated Opportunity, expose decisive trade-offs and unresolved contender blockers, and do not force a leader.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Inconclusive Comparison conclusion requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before concluding the comparison.",
+        };
+      },
+    },
+    records({ rebuiltCampaign }) {
+      return inconclusiveComparisonRecords(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
+export async function respondInconclusiveComparison(
+  command: RespondInconclusiveComparisonCommand,
+  currentTime: string,
+) {
+  const result = (completed: boolean, campaign: LoadedCampaign) => ({
+    completed,
+    action: command.payload.response.kind,
+    report: campaign.inconclusiveComparisonReport,
+    opportunityBriefs: campaign.opportunityBriefs,
+    intake: campaign.intake,
+    researchBudget: campaign.researchBudget,
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not respond to the inconclusive comparison concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Inconclusive Comparison response identity was already used with different input.",
+      action:
+        "Reuse the original response payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "The Inconclusive Comparison response could not be applied to valid authoritative Campaign history.",
+      action:
+        "Preserve the report and Campaign contents, then inspect the Work View before retrying.",
+    },
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["respond-inconclusive-comparison"]
+              .outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.responseRecord) &&
+          JSON.stringify(record.responseRecord.response) ===
+            JSON.stringify(command.payload.response) &&
+          record.responseRecord.reportId === command.payload.reportId,
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      const responseRecord = {
+        reportId: command.payload.reportId,
+        respondedAt: command.payload.respondedAt,
+        response: command.payload.response,
+      };
+      const report = rebuiltCampaign.authoritativeHistory
+        .inconclusiveComparisonReports.at(-1);
+      if (
+        command.payload.response.kind === "select" &&
+        (report === undefined ||
+          command.payload.response.selections.some(
+            (selection) =>
+              !report.comparison.nonDominatedOpportunityIds.includes(
+                selection.opportunityId,
+              ),
+          ))
+      ) {
+        return {
+          code: "SVS-INCONCLUSIVE-COMPARISON-RESPONSE-INVALID",
+          message:
+            "Select accepts only Eligible Non-Dominated Opportunities from the active report.",
+          action:
+            "Choose one or more Opportunities from the report's Non-Dominated set without relabeling them as Leading.",
+        };
+      }
+      const briefs =
+        command.payload.response.kind === "select" && report !== undefined
+          ? buildDeveloperSelectedOpportunityBriefs(
+              rebuiltCampaign.authoritativeHistory,
+              report,
+              command.payload.response.selections,
+              command.payload.respondedAt,
+            )
+          : [];
+      const violation = applyInconclusiveComparisonResponse(
+        {
+          ...rebuiltCampaign.authoritativeHistory,
+          inconclusiveComparisonResponses: [
+            ...rebuiltCampaign.authoritativeHistory
+              .inconclusiveComparisonResponses,
+          ],
+          developerSelectedOpportunityBriefs: [
+            ...rebuiltCampaign.authoritativeHistory
+              .developerSelectedOpportunityBriefs,
+          ],
+        },
+        responseRecord,
+        briefs,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-INCONCLUSIVE-COMPARISON-RESPONSE-INVALID",
+            message: `Inconclusive Comparison response violates a campaign invariant: ${violation}.`,
+            action:
+              "Respond once to the active immutable report with Stop, Extend, or Select.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Responding to an Inconclusive Comparison requires the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before responding.",
+        };
+      },
+    },
+    records({ rebuiltCampaign }) {
+      return inconclusiveComparisonResponseRecords(
         rebuiltCampaign.authoritativeHistory,
         command,
         rebuiltCampaign.records.length + 1,
