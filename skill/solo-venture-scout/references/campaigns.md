@@ -175,6 +175,9 @@ allocation. After the gate, every ordinary reservation must add exactly one of
 `"researchClass": "open-world-discovery"`. The kernel keeps each cumulative group of
 five ordinary Source units within the four-to-one allocation and rejects unclassified
 or imbalanced reservations. Neither class can consume the separate adversarial reserve.
+After Opportunity Exclusion Gates are recorded, every deepening reservation names its
+`opportunityId`; rejected and unresolved Opportunities cannot consume deepening
+capacity. Elevated-Risk deepening also names the exact granted `approvalId`.
 
 ## Record a Public Research Observation
 
@@ -807,6 +810,135 @@ units for every Opportunity in the comparison set, while the separate adversaria
 reserve remains untouched. Passing changes the Work View allocation from equal discovery
 and shallow problem mining to eighty percent deepening and twenty percent open-world
 discovery. The adversarial reserve remains outside both allocations.
+
+## Record Opportunity Exclusion Gates
+
+Before deepening, assess every formed Opportunity in one append-only operation:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "record-opportunity-exclusion-gates-stable-request-id",
+  "command": "recordOpportunityExclusionGates",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "recordedAt": "2026-08-31T10:40:00.000Z",
+    "assessments": [{
+      "id": "stable-opportunity-exclusion-assessment-id",
+      "opportunityId": "stable-opportunity-id",
+      "marketSafety": {
+        "classification": "ordinary",
+        "intendedActivity": "Help authorized operators reconcile their own workflow records",
+        "excludedCategory": null,
+        "directlyServesExcludedActivity": false,
+        "gate": {
+          "id": "stable-market-safety-gate-id",
+          "state": "passed",
+          "decision": {
+            "type": "campaign-decision",
+            "id": "stable-market-safety-decision-id",
+            "kind": "exclusion-gate",
+            "outcome": "passed",
+            "opportunityId": "stable-opportunity-id",
+            "intakeVersion": 1,
+            "applicableRule": "Reject only intended activity that directly serves a non-overridable excluded category.",
+            "supportingEvidenceEntryIds": ["stable-intended-activity-inference-id"],
+            "challengingEvidenceEntryIds": ["stable-material-challenge-observation-id"],
+            "evidenceGapIds": [],
+            "contradictionIds": [],
+            "rationale": "Affirmative evidence supports an ordinary intended activity; hypothetical misuse does not establish direct service.",
+            "confidence": { "level": "medium", "limitingFactors": ["The assessment is limited to the stated intended activity."] },
+            "limitations": ["A material change in intended activity requires reassessment."],
+            "decidedAt": "2026-08-31T10:40:00.000Z"
+          }
+        }
+      },
+      "hardConstraints": [{
+        "hardConstraintId": "stable-confirmed-hard-constraint-id",
+        "gate": {
+          "id": "stable-hard-constraint-gate-id",
+          "state": "unresolved",
+          "decision": {
+            "type": "campaign-decision",
+            "id": "stable-hard-constraint-decision-id",
+            "kind": "exclusion-gate",
+            "outcome": "unresolved",
+            "opportunityId": "stable-opportunity-id",
+            "intakeVersion": 1,
+            "applicableRule": "Use the exact confirmed Hard Constraint text.",
+            "supportingEvidenceEntryIds": [],
+            "challengingEvidenceEntryIds": [],
+            "evidenceGapIds": ["stable-hard-constraint-evidence-gap-id"],
+            "contradictionIds": [],
+            "rationale": "Missing evidence cannot establish satisfaction or violation.",
+            "confidence": { "level": "low", "limitingFactors": ["Required-input evidence is missing."] },
+            "limitations": ["Resolve the linked Evidence Gap before deepening."],
+            "decidedAt": "2026-08-31T10:40:00.000Z"
+          }
+        }
+      }]
+    }]
+  }
+}
+```
+
+The batch must assess every formed Opportunity and every Hard Constraint in the
+current Campaign Intake exactly once. `excluded-market` requires a named category,
+`directlyServesExcludedActivity: true`, affirmative supporting evidence, a failed
+gate, and medium or high Evidence Confidence. `ordinary` and `elevated-risk` use a
+passed Exclusion Gate with `directlyServesExcludedActivity: false`; an unknown direct
+relationship uses classification and gate state `unresolved`, plus an explicit open
+Evidence Gap when support is absent. Any terminal gate state is invalid while a linked
+Evidence Gap or Contradiction remains decision-changing.
+
+The Work View retains each gate separately, derives Opportunity Disposition, keeps
+eligibility and `terminalRole` distinct, and preserves every Campaign Decision in the
+Evidence Ledger. A failed gate rejects the Opportunity. An unresolved gate makes it
+unresolved and ineligible. A passed Elevated-Risk market gate still leaves the
+Opportunity unresolved until scoped approval is granted.
+
+For deep research on an Elevated-Risk Opportunity, use the normal Research Approval
+lifecycle with this complete scope shape:
+
+```json
+{
+  "id": "stable-elevated-risk-pending-decision-id",
+  "access": "elevated-risk",
+  "action": "read-source",
+  "opportunityId": "stable-opportunity-id",
+  "researchDepth": "deep",
+  "purpose": "Resolve the named Elevated-Risk gate question",
+  "source": {
+    "id": "stable-public-risk-source-id",
+    "description": "Named public regulatory analysis",
+    "url": "https://example.com/regulatory-analysis"
+  },
+  "accessMethod": "public-read-only",
+  "data": {
+    "accessed": ["Published regulatory analysis"],
+    "retained": ["Source metadata and neutral atomic paraphrases"]
+  },
+  "externalEffects": [],
+  "maximumCost": { "amount": 0, "currency": "GBP" },
+  "risks": ["The market has material legal or safety risk"],
+  "duration": {
+    "startsAt": "2026-08-31T10:41:00.000Z",
+    "expiresAt": "2026-08-31T11:41:00.000Z"
+  },
+  "alternatives": ["Leave the Opportunity unresolved"],
+  "lawfulActivity": true,
+  "externalValidationAction": false
+}
+```
+
+After exact explicit approval, a matching deepening reservation adds
+`"opportunityId": "stable-opportunity-id"` and
+`"approvalId": "stable-elevated-risk-research-approval-id"`. The kernel rejects a
+missing, expired, differently scoped, or cross-Opportunity approval before reserving
+capacity. Refusal records its Evidence Gap and leaves the Opportunity unresolved and
+ineligible rather than rejected. Shallow classification and independent permitted work
+remain available without treating silence as approval.
 
 ## Record Research Expenditure
 

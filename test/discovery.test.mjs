@@ -22,12 +22,14 @@ async function runKernel(kernelPath, command) {
  * @param {string} campaignPath
  * @param {Array<Record<string, unknown>>} [statements]
  * @param {boolean} [includeFormationEvidence]
+ * @param {Record<string, string>} [observationTextOverrides]
  */
 async function createDiscoveryCampaign(
   kernelPath,
   campaignPath,
   statements = [],
   includeFormationEvidence = false,
+  observationTextOverrides = {},
 ) {
   const commands = [
     {
@@ -163,6 +165,12 @@ async function createDiscoveryCampaign(
       text: "The sampled process described recurring document checks before submission.",
     },
   ].slice(0, includeFormationEvidence ? undefined : 2);
+
+  for (const observation of observations) {
+    if (observation.observationId in observationTextOverrides) {
+      observation.text = observationTextOverrides[observation.observationId];
+    }
+  }
 
   for (const [index, observation] of observations.entries()) {
     const reservedAt = `2026-09-01T09:${String(10 + index * 3).padStart(2, "0")}:00.000Z`;
@@ -912,6 +920,139 @@ function passBreadthGateCommand(campaignPath) {
   };
 }
 
+/**
+ * @param {string} campaignPath
+ * @param {{
+ *   dispatchClassification?: "ordinary" | "elevated-risk" | "excluded-market" | "unresolved";
+ *   dispatchEvidenceEntryIds?: string[];
+ * }} [options]
+ * @returns {any}
+ */
+function opportunityExclusionGatesCommand(campaignPath, options = {}) {
+  const {
+    dispatchClassification = "ordinary",
+    dispatchEvidenceEntryIds = ["observation-coordination-workaround"],
+  } = options;
+  const recordedAt = "2026-09-01T09:55:00.000Z";
+  /**
+   * @param {{
+   *   opportunityId: string;
+   *   classification: "ordinary" | "elevated-risk" | "excluded-market" | "unresolved";
+   *   evidenceEntryIds: string[];
+   * }} input
+   */
+  const marketSafety = ({
+    opportunityId,
+    classification,
+    evidenceEntryIds,
+  }) => {
+    const excluded = classification === "excluded-market";
+    return {
+      classification,
+      intendedActivity: excluded
+        ? "Automate credential theft for unauthorized account access"
+        : "Help operators reconcile workflow records",
+      excludedCategory: excluded ? "credential-theft-enablement" : null,
+      directlyServesExcludedActivity: excluded,
+      gate: {
+        id: `gate-market-safety-${opportunityId}`,
+        state: excluded ? "failed" : "passed",
+        decision: {
+          type: "campaign-decision",
+          id: `decision-market-safety-${opportunityId}`,
+          kind: "exclusion-gate",
+          outcome: excluded ? "failed" : "passed",
+          opportunityId,
+          intakeVersion: 1,
+          applicableRule:
+            "Reject only intended activity that directly serves a non-overridable excluded category.",
+          supportingEvidenceEntryIds: evidenceEntryIds,
+          challengingEvidenceEntryIds: [],
+          evidenceGapIds: [],
+          contradictionIds: [],
+          rationale: excluded
+            ? "Affirmative evidence establishes that the intended activity directly enables credential theft."
+            : "Affirmative evidence establishes an ordinary operational workflow with no direct excluded activity.",
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The classification relies on bounded public evidence."],
+          },
+          limitations: ["The assessment covers the stated intended activity only."],
+          decidedAt: recordedAt,
+        },
+      },
+    };
+  };
+  return {
+    envelopeVersion: "0.1.0",
+    requestId: "record-opportunity-exclusion-gates-1",
+    command: "recordOpportunityExclusionGates",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt,
+      assessments: [
+        {
+          id: "assessment-exclusions-dispatch",
+          opportunityId: "opportunity-dispatch-reconciliation",
+          marketSafety: marketSafety({
+            opportunityId: "opportunity-dispatch-reconciliation",
+            classification: dispatchClassification,
+            evidenceEntryIds: dispatchEvidenceEntryIds,
+          }),
+          hardConstraints: [],
+        },
+        {
+          id: "assessment-exclusions-tender",
+          opportunityId: "opportunity-specialist-tender-review",
+          marketSafety: marketSafety({
+            opportunityId: "opportunity-specialist-tender-review",
+            classification: "ordinary",
+            evidenceEntryIds: ["observation-procurement-escalation"],
+          }),
+          hardConstraints: [],
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * @param {Partial<Record<string, unknown>>} [overrides]
+ * @returns {any}
+ */
+function elevatedRiskApprovalScope(overrides = {}) {
+  return {
+    id: "approval-decision-elevated-dispatch",
+    access: "elevated-risk",
+    action: "read-source",
+    opportunityId: "opportunity-dispatch-reconciliation",
+    researchDepth: "deep",
+    purpose: "Deepen the elevated-risk dispatch Opportunity",
+    source: {
+      id: "source-elevated-dispatch-deepening",
+      description: "Public regulatory analysis of dispatch automation risks",
+      url: "https://example.com/elevated-dispatch-analysis",
+    },
+    accessMethod: "public-read-only",
+    data: {
+      accessed: ["Published regulatory analysis"],
+      retained: ["Source metadata and one atomic Observation"],
+    },
+    externalEffects: [],
+    maximumCost: { amount: 0, currency: "GBP" },
+    risks: ["The market has material legal and safety risk."],
+    duration: {
+      startsAt: "2026-09-01T09:56:00.000Z",
+      expiresAt: "2099-09-01T10:30:00.000Z",
+    },
+    alternatives: ["Leave the Opportunity unresolved without deep research."],
+    lawfulActivity: true,
+    externalValidationAction: false,
+    ...overrides,
+  };
+}
+
 test("a Discovery Tranche records diverse coverage and equal shallow allowances", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-discovery-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
@@ -1191,6 +1332,601 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
     openWorld.response.result.workView.researchAllocation
       .openWorldDiscoverySourceUnits,
     1,
+  );
+});
+
+test("affirmative direct-service evidence rejects an Excluded Market with traceable gate history", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-excluded-market-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+  const campaignPath = path.join(storagePath, "excluded-market-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true, {
+    "observation-shallow-control-1":
+      "The service is sold specifically to automate credential theft for unauthorized account access.",
+  });
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const hypotheticalMisuse = opportunityExclusionGatesCommand(campaignPath, {
+    dispatchClassification: "excluded-market",
+    dispatchEvidenceEntryIds: ["observation-shallow-control-1"],
+  });
+  hypotheticalMisuse.requestId = "reject-hypothetical-misuse-classification";
+  hypotheticalMisuse.payload.assessments[0].marketSafety.intendedActivity =
+    "Help authorized administrators reconcile their own account records; misuse is only hypothetical";
+  hypotheticalMisuse.payload.assessments[0].marketSafety.directlyServesExcludedActivity =
+    false;
+  const misuseRejected = await runKernel(kernelPath, hypotheticalMisuse);
+  assert.equal(misuseRejected.code, 3);
+  assert.equal(
+    misuseRejected.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATES-INVALID",
+  );
+  assert.match(
+    misuseRejected.response.error.details.join(" "),
+    /may fail only for affirmative direct service/,
+  );
+
+  const command = opportunityExclusionGatesCommand(campaignPath, {
+    dispatchClassification: "excluded-market",
+    dispatchEvidenceEntryIds: ["observation-shallow-control-1"],
+  });
+  const recorded = await runKernel(kernelPath, command);
+
+  assert.equal(
+    recorded.code,
+    0,
+    `${recorded.stderr}\n${JSON.stringify(recorded.response)}`,
+  );
+  assert.equal(recorded.response.result.recorded, true);
+  const excluded = recorded.response.result.workView.opportunities.find(
+    (/** @type {any} */ opportunity) =>
+      opportunity.id === "opportunity-dispatch-reconciliation",
+  );
+  assert.deepEqual(excluded.exclusionGates, [
+    {
+      id: "gate-market-safety-opportunity-dispatch-reconciliation",
+      kind: "market-safety",
+      state: "failed",
+      applicableRule:
+        "Reject only intended activity that directly serves a non-overridable excluded category.",
+      decisionId:
+        "decision-market-safety-opportunity-dispatch-reconciliation",
+    },
+  ]);
+  assert.deepEqual(excluded.marketSafety, {
+    classification: "excluded-market",
+    intendedActivity: "Automate credential theft for unauthorized account access",
+    excludedCategory: "credential-theft-enablement",
+    directlyServesExcludedActivity: true,
+  });
+  assert.deepEqual(excluded.disposition, {
+    status: "rejected",
+    decisionIds: [
+      "decision-market-safety-opportunity-dispatch-reconciliation",
+    ],
+  });
+  assert.equal(excluded.eligibility, "ineligible");
+  assert.equal(excluded.terminalRole, null);
+  assert.deepEqual(
+    recorded.response.result.evidenceLedger.campaignDecisions.at(-2),
+    command.payload.assessments[0].marketSafety.gate.decision,
+  );
+
+  const inspected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-excluded-market-1",
+    command: "inspectCampaign",
+    payload: { campaignPath },
+  });
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(
+    inspected.response.result.workView.opportunities.find(
+      (/** @type {any} */ opportunity) =>
+        opportunity.id === "opportunity-dispatch-reconciliation",
+    ).disposition,
+    excluded.disposition,
+  );
+});
+
+test("Hard Constraint violations reject while missing exclusion evidence remains unresolved", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-hard-constraints-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+  const campaignPath = path.join(storagePath, "hard-constraint-campaign");
+  await createDiscoveryCampaign(
+    kernelPath,
+    campaignPath,
+    [
+      {
+        id: "constraint-no-enterprise-sales",
+        text: "Do not pursue Opportunities requiring enterprise sales.",
+        classification: "hard-constraint",
+      },
+    ],
+    true,
+  );
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+  const gap = {
+    type: "evidence-gap",
+    id: "gap-tender-market-safety",
+    question:
+      "Does the intended tender-review activity directly serve an excluded category?",
+    affectedDecisionIds: [
+      "decision-market-safety-opportunity-specialist-tender-review",
+    ],
+    resolutionCriteria:
+      "Public evidence identifies the intended activity and whether it directly serves a non-overridable excluded category.",
+    resolutionMethod: "Perform bounded shallow market-classification research.",
+    status: "open",
+    resolution: null,
+  };
+  const gapResult = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-gate-gap-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:52:00.000Z",
+      entries: [gap],
+    },
+  });
+  assert.equal(gapResult.code, 0, gapResult.stderr);
+
+  const command = opportunityExclusionGatesCommand(campaignPath);
+  /**
+   * @param {string} opportunityId
+   * @param {"passed" | "failed"} state
+   * @param {string} evidenceEntryId
+   */
+  const hardConstraintGate = (opportunityId, state, evidenceEntryId) => ({
+    hardConstraintId: "constraint-no-enterprise-sales",
+    gate: {
+      id: `gate-hard-constraint-${opportunityId}`,
+      state,
+      decision: {
+        type: "campaign-decision",
+        id: `decision-hard-constraint-${opportunityId}`,
+        kind: "exclusion-gate",
+        outcome: state,
+        opportunityId,
+        intakeVersion: 1,
+        applicableRule: "Do not pursue Opportunities requiring enterprise sales.",
+        supportingEvidenceEntryIds: [evidenceEntryId],
+        challengingEvidenceEntryIds: [],
+        evidenceGapIds: [],
+        contradictionIds: [],
+        rationale:
+          state === "failed"
+            ? "Affirmative evidence shows that this Opportunity requires enterprise sales."
+            : "Affirmative evidence shows a self-service route that does not require enterprise sales.",
+        confidence: {
+          level: "medium",
+          limitingFactors: ["The route-to-market evidence is bounded."],
+        },
+        limitations: ["Later route-to-market changes require reassessment."],
+        decidedAt: command.payload.recordedAt,
+      },
+    },
+  });
+  command.payload.assessments[0].hardConstraints = [
+    hardConstraintGate(
+      "opportunity-dispatch-reconciliation",
+      "failed",
+      "observation-dispatch-time-loss",
+    ),
+  ];
+  command.payload.assessments[1].hardConstraints = [
+    hardConstraintGate(
+      "opportunity-specialist-tender-review",
+      "passed",
+      "observation-supplier-review-spend",
+    ),
+  ];
+  const unresolvedMarket = command.payload.assessments[1].marketSafety;
+  unresolvedMarket.classification = "unresolved";
+  unresolvedMarket.intendedActivity =
+    "The intended activity remains insufficiently described for market-safety classification";
+  unresolvedMarket.excludedCategory = null;
+  unresolvedMarket.directlyServesExcludedActivity = null;
+  unresolvedMarket.gate.state = "unresolved";
+  unresolvedMarket.gate.decision.outcome = "unresolved";
+  unresolvedMarket.gate.decision.supportingEvidenceEntryIds = [];
+  unresolvedMarket.gate.decision.evidenceGapIds = [gap.id];
+  unresolvedMarket.gate.decision.rationale =
+    "Missing intended-activity evidence prevents a passed or failed Exclusion Gate.";
+  unresolvedMarket.gate.decision.confidence = {
+    level: "low",
+    limitingFactors: ["The intended activity is not established."],
+  };
+
+  const recorded = await runKernel(kernelPath, command);
+
+  assert.equal(
+    recorded.code,
+    0,
+    `${recorded.stderr}\n${JSON.stringify(recorded.response)}`,
+  );
+  const [rejected, unresolved] = recorded.response.result.workView.opportunities;
+  assert.deepEqual(rejected.disposition, {
+    status: "rejected",
+    decisionIds: [
+      "decision-hard-constraint-opportunity-dispatch-reconciliation",
+    ],
+  });
+  assert.equal(
+    rejected.exclusionGates.find(
+      (/** @type {any} */ gate) => gate.kind === "hard-constraint",
+    ).state,
+    "failed",
+  );
+  assert.deepEqual(unresolved.disposition, {
+    status: "unresolved",
+    decisionIds: [
+      "decision-market-safety-opportunity-specialist-tender-review",
+    ],
+  });
+  assert.equal(unresolved.exclusionGates[0].state, "unresolved");
+  assert.equal(unresolved.eligibility, "ineligible");
+  assert.equal(unresolved.terminalRole, null);
+  assert.deepEqual(
+    recorded.response.result.evidenceLedger.campaignDecisions.slice(-4),
+    command.payload.assessments.flatMap((/** @type {any} */ assessment) => [
+      assessment.marketSafety.gate.decision,
+      ...assessment.hardConstraints.map((/** @type {any} */ constraint) =>
+        constraint.gate.decision,
+      ),
+    ]),
+  );
+
+  const rejectedDeepening = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-rejected-opportunity-deepening",
+      payload: {
+        reservedAt: "2026-09-01T09:56:00.000Z",
+        reservation: {
+          id: "reservation-rejected-opportunity-deepening",
+          purpose: "Attempt to deepen a rejected Opportunity",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(rejectedDeepening.code, 3);
+  assert.equal(
+    rejectedDeepening.response.error.code,
+    "SVS-OPPORTUNITY-INELIGIBLE",
+  );
+});
+
+test("an Elevated-Risk Market stays unresolved and ineligible without Opportunity-specific approval", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-elevated-risk-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+  const campaignPath = path.join(storagePath, "elevated-risk-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const command = opportunityExclusionGatesCommand(campaignPath, {
+    dispatchClassification: "elevated-risk",
+  });
+  const recorded = await runKernel(kernelPath, command);
+
+  assert.equal(
+    recorded.code,
+    0,
+    `${recorded.stderr}\n${JSON.stringify(recorded.response)}`,
+  );
+  const [elevated, ordinary] = recorded.response.result.workView.opportunities;
+  assert.equal(elevated.marketSafety.classification, "elevated-risk");
+  assert.equal(elevated.exclusionGates[0].state, "passed");
+  assert.deepEqual(elevated.disposition, {
+    status: "unresolved",
+    decisionIds: [
+      "decision-market-safety-opportunity-dispatch-reconciliation",
+    ],
+  });
+  assert.equal(elevated.eligibility, "ineligible");
+  assert.equal(elevated.terminalRole, null);
+  assert.deepEqual(ordinary.disposition, {
+    status: "active",
+    decisionIds: [
+      "decision-market-safety-opportunity-specialist-tender-review",
+    ],
+  });
+  assert.ok(
+    recorded.response.result.workView.nextPermittedActions.includes(
+      "request-elevated-risk-research-approval",
+    ),
+  );
+
+  const blockedDeepening = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-unapproved-elevated-risk-deepening",
+      payload: {
+        reservedAt: "2026-09-01T09:56:00.000Z",
+        reservation: {
+          id: "reservation-unapproved-elevated-risk-deepening",
+          purpose: "Deepen the elevated-risk dispatch Opportunity",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(blockedDeepening.code, 3);
+  assert.equal(
+    blockedDeepening.response.error.code,
+    "SVS-ELEVATED-RISK-APPROVAL-REQUIRED",
+  );
+
+  const scope = elevatedRiskApprovalScope({
+    id: "approval-decision-refused-elevated-dispatch",
+  });
+  const requested = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "request-refused-elevated-dispatch-approval",
+    command: "requestResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      requestedAt: "2026-09-01T09:56:00.000Z",
+      request: scope,
+    },
+  });
+  assert.equal(requested.code, 0, requested.stderr);
+  const refused = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "refuse-elevated-dispatch-approval",
+    command: "respondResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T09:57:00.000Z",
+      decisionId: scope.id,
+      response: {
+        kind: "refuse",
+        refusal: {
+          id: "refusal-elevated-dispatch",
+          explicitlyRefused: true,
+          rationale: "The developer will not approve deeper research in this market.",
+          evidenceGap: {
+            type: "evidence-gap",
+            id: "gap-refused-elevated-dispatch-research",
+            question:
+              "Would approved deep research resolve the Elevated-Risk Opportunity?",
+            affectedDecisionIds: [scope.id],
+            resolutionCriteria:
+              "The developer grants a new Opportunity-specific approval and the scoped research is completed.",
+            resolutionMethod:
+              "Request new explicit approval only if the developer chooses to revisit the Opportunity.",
+            status: "open",
+            resolution: null,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(
+    refused.code,
+    0,
+    `${refused.stderr}\n${JSON.stringify(refused.response)}`,
+  );
+  const refusedOpportunity = refused.response.result.workView.opportunities[0];
+  assert.equal(refusedOpportunity.disposition.status, "unresolved");
+  assert.equal(refusedOpportunity.eligibility, "ineligible");
+  assert.notEqual(refusedOpportunity.disposition.status, "rejected");
+  assert.ok(
+    refused.response.result.workView.reasoning.openEvidenceGapIds.includes(
+      "gap-refused-elevated-dispatch-research",
+    ),
+  );
+});
+
+test("Opportunity-specific approval permits only its scoped Elevated-Risk deep research", async () => {
+  const { kernelPath } = await buildPackagedScout("solo-venture-scout-elevated-approval-");
+  const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
+  const campaignPath = path.join(storagePath, "elevated-approval-campaign");
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath, {
+      dispatchClassification: "elevated-risk",
+    }),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(
+      response.code,
+      0,
+      `${response.stderr}\n${JSON.stringify(response.response)}`,
+    );
+  }
+
+  const scope = elevatedRiskApprovalScope();
+  const requested = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "request-elevated-dispatch-approval",
+    command: "requestResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      requestedAt: "2026-09-01T09:56:00.000Z",
+      request: scope,
+    },
+  });
+  assert.equal(
+    requested.code,
+    0,
+    `${requested.stderr}\n${JSON.stringify(requested.response)}`,
+  );
+  assert.equal(requested.response.result.pendingDecision.id, scope.id);
+
+  const approved = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "approve-elevated-dispatch-research",
+    command: "respondResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T09:57:00.000Z",
+      decisionId: scope.id,
+      response: {
+        kind: "approve",
+        approval: {
+          id: "approval-elevated-dispatch",
+          explicitlyApproved: true,
+          scope,
+        },
+      },
+    },
+  });
+  assert.equal(
+    approved.code,
+    0,
+    `${approved.stderr}\n${JSON.stringify(approved.response)}`,
+  );
+  const elevated = approved.response.result.workView.opportunities[0];
+  assert.equal(elevated.disposition.status, "active");
+  assert.equal(elevated.eligibility, "pending-qualification");
+
+  const permitted = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-approved-elevated-risk-deepening",
+      payload: {
+        reservedAt: "2026-09-01T09:58:00.000Z",
+        reservation: {
+          id: "reservation-approved-elevated-risk-deepening",
+          purpose: scope.purpose,
+          researchClass: "deepening",
+          opportunityId: scope.opportunityId,
+          approvalId: "approval-elevated-dispatch",
+        },
+      },
+    }),
+  );
+  assert.equal(
+    permitted.code,
+    0,
+    `${permitted.stderr}\n${JSON.stringify(permitted.response)}`,
+  );
+  assert.equal(permitted.response.result.reserved, true);
+
+  const changedSource = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-changed-elevated-risk-source",
+    command: "recordPublicResearchObservation",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:01:00.000Z",
+      reservationId: "reservation-approved-elevated-risk-deepening",
+      source: {
+        id: "source-outside-elevated-risk-approval",
+        retrievalMode: "public-web",
+        url: "https://example.org/outside-approved-scope",
+        publisher: "Different Publisher",
+        originator: null,
+        publishedAt: "2026-08-01",
+        updatedAt: null,
+        accessedAt: "2026-09-01T10:00:00.000Z",
+        exactLocator: "Section 2",
+      },
+      observation: {
+        id: "observation-outside-elevated-risk-approval",
+        text: "A different public source reports a separate regulatory concern.",
+        sourceId: "source-outside-elevated-risk-approval",
+        exactLocator: "Section 2",
+      },
+    },
+  });
+  assert.equal(changedSource.code, 3);
+  assert.equal(
+    changedSource.response.error.code,
+    "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+  );
+
+  const recordedApprovedSource = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-approved-elevated-risk-source",
+    command: "recordPublicResearchObservation",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:01:00.000Z",
+      reservationId: "reservation-approved-elevated-risk-deepening",
+      source: {
+        id: scope.source.id,
+        retrievalMode: "public-web",
+        url: scope.source.url,
+        publisher: "Regulatory Analysis Publisher",
+        originator: null,
+        publishedAt: "2026-08-01",
+        updatedAt: null,
+        accessedAt: "2026-09-01T10:00:00.000Z",
+        exactLocator: "Section 4",
+      },
+      observation: {
+        id: "observation-approved-elevated-risk-source",
+        text: "The regulatory analysis reports a bounded legal risk for this workflow.",
+        sourceId: scope.source.id,
+        exactLocator: "Section 4",
+      },
+    },
+  });
+  assert.equal(
+    recordedApprovedSource.code,
+    0,
+    `${recordedApprovedSource.stderr}\n${JSON.stringify(recordedApprovedSource.response)}`,
+  );
+
+  const wrongOpportunity = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-wrong-opportunity-with-elevated-approval",
+      payload: {
+        reservedAt: "2026-09-01T09:59:00.000Z",
+        reservation: {
+          id: "reservation-wrong-opportunity-with-elevated-approval",
+          purpose: scope.purpose,
+          researchClass: "deepening",
+          opportunityId: "opportunity-specialist-tender-review",
+          approvalId: "approval-elevated-dispatch",
+        },
+      },
+    }),
+  );
+  assert.equal(wrongOpportunity.code, 3);
+  assert.equal(
+    wrongOpportunity.response.error.code,
+    "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
   );
 });
 

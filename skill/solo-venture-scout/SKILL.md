@@ -228,6 +228,36 @@ it on ordinary discovery, shallow mining, or deepening. Give every later ordinar
 Source reservation a `researchClass` of `deepening` or `open-world-discovery`; the
 kernel enforces the cumulative eighty/twenty allocation.
 
+## Apply fatal Opportunity gates
+
+Evaluate every formed Opportunity with `recordOpportunityExclusionGates` from
+[references/campaigns.md](references/campaigns.md) before deep research. An Excluded
+Market fails its Exclusion Gate only when affirmative evidence establishes that the
+Opportunity's intended activity directly serves a named non-overridable excluded
+category. A merely hypothetical misuse of an ordinary intended activity is not that
+finding. Missing evidence leaves the Exclusion Gate unresolved rather than failed.
+
+Assess every confirmed Hard Constraint separately. Affirmative evidence of a
+violation produces a traceable failed Exclusion Gate and a rejected Opportunity;
+missing evidence produces an unresolved gate. Every gate decision must name the
+Campaign Intake version and applicable rule, supporting and challenging Evidence
+Ledger entries, Evidence Gaps, Contradictions, rationale, Evidence Confidence,
+limitations, and decision time. Use a terminal passed or failed state only at medium
+or high confidence with no decision-changing unresolved gap or Contradiction.
+
+An Elevated-Risk Market may receive shallow classification research, but it requires
+Opportunity-specific Research Approval before deep research or recommendation. Use an
+`elevated-risk` approval scope naming that Opportunity, the exact public Source and
+purpose, and `researchDepth: "deep"`; include its approval identity on the later
+deepening reservation. Refused or unavailable approval leaves the Opportunity
+unresolved and ineligible, not rejected. Approval cannot override a failed Exclusion
+Gate or authorize illegality.
+
+Treat Opportunity Disposition, gate state, eligibility, and terminal role as distinct
+facts. `active`, `rejected`, and `unresolved` are dispositions; `passed`, `failed`, and
+`unresolved` are gate states; Leading Opportunity and Developer-Selected Opportunity
+are later terminal roles. Never turn one into another for convenience.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

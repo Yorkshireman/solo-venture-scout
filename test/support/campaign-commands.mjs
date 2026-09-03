@@ -13,6 +13,8 @@
  *       purpose: string;
  *       retrievalRoute: string;
  *       researchClass?: "deepening" | "open-world-discovery";
+ *       opportunityId?: string;
+ *       approvalId?: string;
  *     };
  *   };
  * }} PublicResearchReservationCommand

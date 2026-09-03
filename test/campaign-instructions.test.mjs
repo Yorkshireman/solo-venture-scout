@@ -169,6 +169,43 @@ test("packaged Scout forms evidence-backed Opportunities and narrows only throug
   assert.match(reference, /"command": "passBreadthGate"/);
 });
 
+test("packaged Scout documents fatal Opportunity gates and Elevated-Risk approval", async () => {
+  const { outputRoot } = await buildPackagedScout("solo-venture-scout-exclusion-guide-");
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(
+    instructions,
+    /Excluded\s+Market.+intended activity.+directly serves.+non-overridable/is,
+  );
+  assert.match(instructions, /missing evidence.+Exclusion\s+Gate.+unresolved/is);
+  assert.match(instructions, /Hard Constraint.+failed Exclusion\s+Gate.+rejected/is);
+  assert.match(
+    instructions,
+    /Elevated-Risk\s+Market.+shallow classification.+Opportunity-specific Research\s+Approval.+deep research.+recommendation/is,
+  );
+  assert.match(
+    instructions,
+    /refus.+unavailable.+unresolved.+ineligible.+not.+rejected/is,
+  );
+  assert.match(
+    instructions,
+    /Opportunity\s+Disposition.+gate state.+terminal role.+distinct/is,
+  );
+  assert.match(reference, /"command": "recordOpportunityExclusionGates"/);
+  assert.match(reference, /"supportingEvidenceEntryIds"/);
+  assert.match(reference, /"challengingEvidenceEntryIds"/);
+  assert.match(reference, /"evidenceGapIds"/);
+  assert.match(reference, /"contradictionIds"/);
+  assert.match(reference, /"access": "elevated-risk"/);
+  assert.match(reference, /"opportunityId"/);
+  assert.match(reference, /"researchDepth": "deep"/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

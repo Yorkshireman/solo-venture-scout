@@ -168,6 +168,8 @@ type PublicResearchReservation = {
   purpose: string;
   retrievalRoute: string;
   researchClass?: "deepening" | "open-world-discovery";
+  opportunityId?: string;
+  approvalId?: string;
 };
 
 type ReservePublicResearchCommand = {
@@ -449,7 +451,7 @@ type RecordDiscoveryTrancheCommand = {
   };
 };
 
-type CampaignDecision = {
+type FormationCampaignDecision = {
   type: "campaign-decision";
   id: string;
   kind: "opportunity-formation" | "breadth-gate";
@@ -461,6 +463,68 @@ type CampaignDecision = {
   confidence: EvidenceConfidence;
   limitations: string[];
   decidedAt: string;
+};
+
+type OpportunityGateDecision = {
+  type: "campaign-decision";
+  id: string;
+  kind: "exclusion-gate";
+  outcome: "passed" | "failed" | "unresolved";
+  opportunityId: string;
+  intakeVersion: number;
+  applicableRule: string;
+  supportingEvidenceEntryIds: string[];
+  challengingEvidenceEntryIds: string[];
+  evidenceGapIds: string[];
+  contradictionIds: string[];
+  rationale: string;
+  confidence: EvidenceConfidence;
+  limitations: string[];
+  decidedAt: string;
+};
+
+type CampaignDecision = FormationCampaignDecision | OpportunityGateDecision;
+
+type ExclusionGate = {
+  id: string;
+  state: "passed" | "failed" | "unresolved";
+  decision: OpportunityGateDecision;
+};
+
+type OpportunityExclusionAssessment = {
+  id: string;
+  opportunityId: string;
+  marketSafety: {
+    classification:
+      | "ordinary"
+      | "elevated-risk"
+      | "excluded-market"
+      | "unresolved";
+    intendedActivity: string;
+    excludedCategory: string | null;
+    directlyServesExcludedActivity: boolean | null;
+    gate: ExclusionGate;
+  };
+  hardConstraints: Array<{
+    hardConstraintId: string;
+    gate: ExclusionGate;
+  }>;
+};
+
+type OpportunityExclusionEvaluation = {
+  assessments: OpportunityExclusionAssessment[];
+};
+
+type RecordOpportunityExclusionGatesCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "recordOpportunityExclusionGates";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    recordedAt: string;
+    assessments: OpportunityExclusionAssessment[];
+  };
 };
 
 type OpportunityFormationAssessment = {
@@ -488,7 +552,7 @@ type OpportunityFormationAssessment = {
   result:
     | { kind: "opportunity"; opportunityId: string }
     | { kind: "exploration-thread"; evidenceGaps: EvidenceGap[] };
-  decision: CampaignDecision;
+  decision: FormationCampaignDecision;
 };
 
 type OpportunityFormation = {
@@ -531,7 +595,7 @@ type BreadthGate = {
     rationale: string;
   }>;
   decisionValuePriorities: DecisionValuePriority[];
-  decision: CampaignDecision;
+  decision: FormationCampaignDecision;
 };
 
 type PassBreadthGateCommand = {
@@ -548,8 +612,10 @@ type PassBreadthGateCommand = {
 
 type ResearchApprovalRequest = {
   id: string;
-  access: "restricted" | "paid" | "restricted-and-paid";
+  access: "restricted" | "paid" | "restricted-and-paid" | "elevated-risk";
   action: "read-source";
+  opportunityId?: string;
+  researchDepth?: "deep";
   purpose: string;
   source: {
     id: string;
@@ -559,7 +625,8 @@ type ResearchApprovalRequest = {
   accessMethod:
     | "developer-controlled-authenticated-read-only"
     | "developer-approved-paid-read-only"
-    | "developer-controlled-authenticated-and-paid-read-only";
+    | "developer-controlled-authenticated-and-paid-read-only"
+    | "public-read-only";
   data: {
     accessed: string[];
     retained: string[];
@@ -811,6 +878,30 @@ type WorkView = {
     behavioralProblemSignalObservationIds: string[];
     independentSourceLineages: string[][];
     decisionId: string;
+    marketSafety?: {
+      classification:
+        | "ordinary"
+        | "elevated-risk"
+        | "excluded-market"
+        | "unresolved";
+      intendedActivity: string;
+      excludedCategory: string | null;
+      directlyServesExcludedActivity: boolean | null;
+    };
+    exclusionGates?: Array<{
+      id: string;
+      kind: "market-safety" | "hard-constraint";
+      hardConstraintId?: string;
+      state: ExclusionGate["state"];
+      applicableRule: string;
+      decisionId: string;
+    }>;
+    disposition?: {
+      status: "active" | "rejected" | "unresolved";
+      decisionIds: string[];
+    };
+    eligibility?: "ineligible" | "pending-qualification";
+    terminalRole?: null;
   }>;
   researchAllocation?:
     | {
@@ -856,6 +947,7 @@ type AuthoritativeOperation =
   | "record-discovery-tranche"
   | "record-opportunity-formation"
   | "pass-breadth-gate"
+  | "record-opportunity-exclusion-gates"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"
@@ -1402,18 +1494,15 @@ function validatePublicResearchReservation(
 ): string[] {
   if (
     !isRecord(value) ||
-    !hasOnlyFields(
-      value,
-      value.researchClass === undefined
-        ? ["id", "sourceUnits", "purpose", "retrievalRoute"]
-        : [
-            "id",
-            "sourceUnits",
-            "purpose",
-            "retrievalRoute",
-            "researchClass",
-          ],
-    )
+    !hasOnlyFields(value, [
+      "id",
+      "sourceUnits",
+      "purpose",
+      "retrievalRoute",
+      ...(value.researchClass === undefined ? [] : ["researchClass"]),
+      ...(value.opportunityId === undefined ? [] : ["opportunityId"]),
+      ...(value.approvalId === undefined ? [] : ["approvalId"]),
+    ])
   ) {
     return [`${field} must contain id, sourceUnits, purpose, and retrievalRoute.`];
   }
@@ -1438,6 +1527,21 @@ function validatePublicResearchReservation(
     details.push(
       `${field}.researchClass must be deepening or open-world-discovery when present.`,
     );
+  }
+  for (const optionalIdentity of ["opportunityId", "approvalId"] as const) {
+    if (
+      value[optionalIdentity] !== undefined &&
+      (typeof value[optionalIdentity] !== "string" ||
+        value[optionalIdentity].trim() === "")
+    ) {
+      details.push(`${field}.${optionalIdentity} must be a non-empty string when present.`);
+    }
+  }
+  if (value.researchClass !== "deepening" && value.opportunityId !== undefined) {
+    details.push(`${field}.opportunityId is available only for Opportunity deepening.`);
+  }
+  if (value.opportunityId === undefined && value.approvalId !== undefined) {
+    details.push(`${field}.approvalId requires an Opportunity-specific reservation.`);
   }
   return details;
 }
@@ -2738,6 +2842,232 @@ function validatePassBreadthGateFields(command: Record<string, unknown>): string
   ];
 }
 
+function validateOpportunityGateDecision(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type",
+      "id",
+      "kind",
+      "outcome",
+      "opportunityId",
+      "intakeVersion",
+      "applicableRule",
+      "supportingEvidenceEntryIds",
+      "challengingEvidenceEntryIds",
+      "evidenceGapIds",
+      "contradictionIds",
+      "rationale",
+      "confidence",
+      "limitations",
+      "decidedAt",
+    ]) ||
+    value.type !== "campaign-decision" ||
+    value.kind !== "exclusion-gate"
+  ) {
+    return [`${field} must be a complete Exclusion Gate Campaign Decision.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id",
+    "opportunityId",
+    "applicableRule",
+    "rationale",
+  ]);
+  if (!["passed", "failed", "unresolved"].includes(String(value.outcome))) {
+    details.push(`${field}.outcome must be passed, failed, or unresolved.`);
+  }
+  if (!Number.isSafeInteger(value.intakeVersion) || Number(value.intakeVersion) <= 0) {
+    details.push(`${field}.intakeVersion must be a positive safe integer.`);
+  }
+  details.push(
+    ...validateEntryIdList(
+      value.supportingEvidenceEntryIds,
+      `${field}.supportingEvidenceEntryIds`,
+      value.outcome === "unresolved",
+    ),
+    ...validateEntryIdList(
+      value.challengingEvidenceEntryIds,
+      `${field}.challengingEvidenceEntryIds`,
+      true,
+    ),
+    ...validateEntryIdList(value.evidenceGapIds, `${field}.evidenceGapIds`, true),
+    ...validateEntryIdList(value.contradictionIds, `${field}.contradictionIds`, true),
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+    ...validateAssessmentLimitations(value.limitations, field),
+  );
+  if (!isIsoInstant(value.decidedAt) || value.decidedAt !== recordedAt) {
+    details.push(`${field}.decidedAt must equal the operation's recordedAt instant.`);
+  }
+  const terminal = value.outcome === "passed" || value.outcome === "failed";
+  if (
+    terminal &&
+    (!isRecord(value.confidence) ||
+      !["medium", "high"].includes(String(value.confidence.level)))
+  ) {
+    details.push(`${field} requires medium or high Evidence Confidence for a terminal gate state.`);
+  }
+  if (
+    terminal &&
+    ((Array.isArray(value.evidenceGapIds) && value.evidenceGapIds.length > 0) ||
+      (Array.isArray(value.contradictionIds) && value.contradictionIds.length > 0))
+  ) {
+    details.push(`${field} cannot reach a terminal gate state with a decision-changing gap or Contradiction.`);
+  }
+  return details;
+}
+
+function validateExclusionGate(
+  value: unknown,
+  opportunityId: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["id", "state", "decision"])
+  ) {
+    return [`${field} must be a complete Exclusion Gate.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id"]);
+  if (!["passed", "failed", "unresolved"].includes(String(value.state))) {
+    details.push(`${field}.state must be passed, failed, or unresolved.`);
+  }
+  details.push(
+    ...validateOpportunityGateDecision(value.decision, recordedAt, `${field}.decision`),
+  );
+  if (
+    isRecord(value.decision) &&
+    (value.decision.outcome !== value.state ||
+      value.decision.opportunityId !== opportunityId)
+  ) {
+    details.push(`${field}.decision must match the gate state and Opportunity.`);
+  }
+  return details;
+}
+
+function validateOpportunityExclusionAssessment(
+  value: unknown,
+  recordedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "id",
+      "opportunityId",
+      "marketSafety",
+      "hardConstraints",
+    ])
+  ) {
+    return [`${field} must be a complete Opportunity exclusion assessment.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["id", "opportunityId"]);
+  if (
+    !isRecord(value.marketSafety) ||
+    !hasOnlyFields(value.marketSafety, [
+      "classification",
+      "intendedActivity",
+      "excludedCategory",
+      "directlyServesExcludedActivity",
+      "gate",
+    ])
+  ) {
+    details.push(`${field}.marketSafety must record the intended-activity classification and gate.`);
+  } else {
+    const market = value.marketSafety;
+    details.push(
+      ...validateReasoningTextFields(market, `${field}.marketSafety`, ["intendedActivity"]),
+      ...validateExclusionGate(
+        market.gate,
+        value.opportunityId,
+        recordedAt,
+        `${field}.marketSafety.gate`,
+      ),
+    );
+    if (
+      !["ordinary", "elevated-risk", "excluded-market", "unresolved"].includes(
+        String(market.classification),
+      )
+    ) {
+      details.push(`${field}.marketSafety.classification is not supported.`);
+    }
+    if (
+      market.excludedCategory !== null &&
+      (typeof market.excludedCategory !== "string" || market.excludedCategory.trim() === "")
+    ) {
+      details.push(`${field}.marketSafety.excludedCategory must be null or a non-empty category.`);
+    }
+    const state = isRecord(market.gate) ? market.gate.state : undefined;
+    const matchesClassification =
+      (market.classification === "excluded-market" &&
+        market.directlyServesExcludedActivity === true &&
+        typeof market.excludedCategory === "string" &&
+        market.excludedCategory.trim() !== "" &&
+        state === "failed") ||
+      (["ordinary", "elevated-risk"].includes(String(market.classification)) &&
+        market.directlyServesExcludedActivity === false &&
+        market.excludedCategory === null &&
+        state === "passed") ||
+      (market.classification === "unresolved" &&
+        market.directlyServesExcludedActivity === null &&
+        state === "unresolved");
+    if (!matchesClassification) {
+      details.push(`${field}.marketSafety may fail only for affirmative direct service to a named excluded category; missing evidence must remain unresolved.`);
+    }
+  }
+  if (!Array.isArray(value.hardConstraints)) {
+    details.push(`${field}.hardConstraints must be an array.`);
+  } else {
+    for (const [index, constraint] of value.hardConstraints.entries()) {
+      const constraintField = `${field}.hardConstraints[${index}]`;
+      if (
+        !isRecord(constraint) ||
+        !hasOnlyFields(constraint, ["hardConstraintId", "gate"])
+      ) {
+        details.push(`${constraintField} must link one Hard Constraint and Exclusion Gate.`);
+        continue;
+      }
+      details.push(
+        ...validateReasoningTextFields(constraint, constraintField, ["hardConstraintId"]),
+        ...validateExclusionGate(
+          constraint.gate,
+          value.opportunityId,
+          recordedAt,
+          `${constraintField}.gate`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
+function validateRecordOpportunityExclusionGatesFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "recordedAt");
+  if (!Array.isArray(command.payload.assessments) || command.payload.assessments.length === 0) {
+    details.push("payload.assessments must contain every formed Opportunity.");
+  } else {
+    for (const [index, assessment] of command.payload.assessments.entries()) {
+      details.push(
+        ...validateOpportunityExclusionAssessment(
+          assessment,
+          command.payload.recordedAt,
+          `payload.assessments[${index}]`,
+        ),
+      );
+    }
+  }
+  return details;
+}
+
 function validateResearchApprovalTextList(
   value: unknown,
   field: string,
@@ -2767,6 +3097,8 @@ function validateResearchApprovalRequest(
       "id",
       "access",
       "action",
+      ...(value.opportunityId === undefined ? [] : ["opportunityId"]),
+      ...(value.researchDepth === undefined ? [] : ["researchDepth"]),
       "purpose",
       "source",
       "accessMethod",
@@ -2791,8 +3123,8 @@ function validateResearchApprovalRequest(
       ...validatePersistableText(value[textField], `${field}.${textField}`),
     );
   }
-  if (!( ["restricted", "paid", "restricted-and-paid"] as unknown[]).includes(value.access)) {
-    details.push(`${field}.access must be restricted, paid, or restricted-and-paid.`);
+  if (!( ["restricted", "paid", "restricted-and-paid", "elevated-risk"] as unknown[]).includes(value.access)) {
+    details.push(`${field}.access must be restricted, paid, restricted-and-paid, or elevated-risk.`);
   }
   if (value.action !== "read-source") {
     details.push(
@@ -2804,6 +3136,7 @@ function validateResearchApprovalRequest(
     paid: "developer-approved-paid-read-only",
     "restricted-and-paid":
       "developer-controlled-authenticated-and-paid-read-only",
+    "elevated-risk": "public-read-only",
   } as const;
   if (
     typeof value.access !== "string" ||
@@ -2813,6 +3146,22 @@ function validateResearchApprovalRequest(
     details.push(
       `${field}.accessMethod must be the read-only method matching its access type.`,
     );
+  }
+  if (value.access === "elevated-risk") {
+    if (
+      typeof value.opportunityId !== "string" ||
+      value.opportunityId.trim() === ""
+    ) {
+      details.push(`${field}.opportunityId must identify the Elevated-Risk Opportunity.`);
+    }
+    if (value.researchDepth !== "deep") {
+      details.push(`${field}.researchDepth must be deep for Elevated-Risk Opportunity research.`);
+    }
+  } else if (
+    value.opportunityId !== undefined ||
+    value.researchDepth !== undefined
+  ) {
+    details.push(`${field}.opportunityId and researchDepth are reserved for Elevated-Risk Opportunity approval.`);
   }
   if (
     !isRecord(value.source) ||
@@ -2903,8 +3252,11 @@ function validateResearchApprovalRequest(
     value.maximumCost.amount <= 0
   ) {
     details.push(`${field}.maximumCost.amount must be positive for paid access.`);
-  } else if (value.access === "restricted" && value.maximumCost.amount !== 0) {
-    details.push(`${field}.maximumCost.amount must be zero for restricted-only access.`);
+  } else if (
+    ["restricted", "elevated-risk"].includes(String(value.access)) &&
+    value.maximumCost.amount !== 0
+  ) {
+    details.push(`${field}.maximumCost.amount must be zero for non-paid access.`);
   }
   if (
     !isRecord(value.duration) ||
@@ -3248,6 +3600,7 @@ type AuthoritativeHistoryRebuild = {
   discoveryTranches: DiscoveryTranche[];
   opportunityFormations: OpportunityFormation[];
   breadthGates: BreadthGate[];
+  opportunityExclusionEvaluations: OpportunityExclusionEvaluation[];
   campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
@@ -3317,6 +3670,120 @@ function publicResearchAllocationViolation(
     Math.ceil(totalPostGateSourceUnits * maximumShare)
     ? "imbalanced"
     : undefined;
+}
+
+function elevatedRiskApprovalRequestViolation(
+  history: AuthoritativeHistoryRebuild,
+  request: ResearchApprovalRequest,
+): string | undefined {
+  if (request.access !== "elevated-risk") {
+    return undefined;
+  }
+  const assessment = history.opportunityExclusionEvaluations
+    .at(-1)
+    ?.assessments.find(
+      (candidate) => candidate.opportunityId === request.opportunityId,
+    );
+  if (assessment === undefined) {
+    return "the approval does not identify an assessed Opportunity";
+  }
+  if (assessment.marketSafety.classification !== "elevated-risk") {
+    return "the approval identifies an Opportunity that is not an Elevated-Risk Market";
+  }
+  const failedGate = [
+    assessment.marketSafety.gate,
+    ...assessment.hardConstraints.map((constraint) => constraint.gate),
+  ].find((gate) => gate.state === "failed");
+  return failedGate === undefined
+    ? undefined
+    : `the approval cannot override failed Exclusion Gate ${failedGate.id}`;
+}
+
+type OpportunityDeepeningViolation = "ineligible" | "required" | "scope";
+
+function opportunityDeepeningViolation(
+  history: AuthoritativeHistoryRebuild,
+  reservation: PublicResearchReservation,
+  reservedAt: string,
+): OpportunityDeepeningViolation | undefined {
+  if (
+    reservation.researchClass !== "deepening" ||
+    history.opportunityExclusionEvaluations.length === 0
+  ) {
+    return undefined;
+  }
+  const assessments = history.opportunityExclusionEvaluations.at(-1)!.assessments;
+  if (reservation.opportunityId === undefined) {
+    return "ineligible";
+  }
+  const assessment = assessments.find(
+    (candidate) => candidate.opportunityId === reservation.opportunityId,
+  );
+  if (assessment === undefined) {
+    return "ineligible";
+  }
+  const gates = [
+    assessment.marketSafety.gate,
+    ...assessment.hardConstraints.map((constraint) => constraint.gate),
+  ];
+  if (gates.some((gate) => gate.state !== "passed")) {
+    return "ineligible";
+  }
+  const targetsElevatedRisk =
+    assessment.marketSafety.classification === "elevated-risk";
+  if (!targetsElevatedRisk && reservation.approvalId === undefined) {
+    return undefined;
+  }
+  if (reservation.approvalId === undefined) {
+    return "required";
+  }
+  const approval = history.researchApprovals.find(
+    (candidate) => candidate.id === reservation.approvalId,
+  );
+  if (
+    approval === undefined ||
+    approval.scope.access !== "elevated-risk" ||
+    approval.scope.opportunityId !== reservation.opportunityId ||
+    approval.scope.researchDepth !== "deep" ||
+    approval.scope.purpose !== reservation.purpose ||
+    reservedAt < approval.approvedAt ||
+    reservedAt < approval.scope.duration.startsAt ||
+    reservedAt > approval.scope.duration.expiresAt
+  ) {
+    return "scope";
+  }
+  return undefined;
+}
+
+function hasElevatedRiskResearchApproval(
+  history: AuthoritativeHistoryRebuild,
+  opportunityId: string,
+): boolean {
+  return history.researchApprovals.some(
+    (approval) =>
+      approval.scope.access === "elevated-risk" &&
+      approval.scope.opportunityId === opportunityId &&
+      approval.scope.researchDepth === "deep",
+  );
+}
+
+function publicResearchApprovalScopeMismatch(
+  history: AuthoritativeHistoryRebuild,
+  reservationId: string,
+  source: PublicSource,
+): boolean {
+  const reservation = history.reservations.get(reservationId);
+  if (reservation?.approvalId === undefined) {
+    return false;
+  }
+  const approval = history.researchApprovals.find(
+    (candidate) => candidate.id === reservation.approvalId,
+  );
+  return (
+    approval === undefined ||
+    approval.scope.source.id !== source.id ||
+    approval.scope.source.url !== source.url
+  );
 }
 
 type ResearchExpenditurePolicyViolation =
@@ -4042,6 +4509,133 @@ function applyBreadthGate(
   return undefined;
 }
 
+function opportunityExclusionEvaluationViolation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityExclusionEvaluation,
+): string | undefined {
+  if (history.intake === undefined || history.breadthGates.length === 0) {
+    return "Opportunity Exclusion Gates require a passed Breadth Gate";
+  }
+  if (history.opportunityExclusionEvaluations.length > 0) {
+    return "Opportunity Exclusion Gates have already been recorded for the current Campaign Intake";
+  }
+  const opportunities = formedOpportunities(history);
+  const opportunityIds = new Set(opportunities.map((opportunity) => opportunity.id));
+  const assessedOpportunityIds = evaluation.assessments.map(
+    (assessment) => assessment.opportunityId,
+  );
+  if (
+    new Set(assessedOpportunityIds).size !== assessedOpportunityIds.length ||
+    assessedOpportunityIds.length !== opportunityIds.size ||
+    assessedOpportunityIds.some((opportunityId) => !opportunityIds.has(opportunityId))
+  ) {
+    return "every formed Opportunity must receive exactly one exclusion assessment";
+  }
+  const hardConstraintIds = history.intake.statements
+    .filter((statement) => statement.classification === "hard-constraint")
+    .map((statement) => statement.id);
+  const availableEvidenceIds = allReasoningEntryIds(history);
+  const invalidatedIds = invalidatedEvidenceIds(history);
+  const existingDecisionIds = new Set(
+    history.campaignDecisions.map((decision) => decision.id),
+  );
+  const assessmentIds = new Set<string>();
+  const gateIds = new Set<string>();
+  const decisionIds = new Set(existingDecisionIds);
+  for (const assessment of evaluation.assessments) {
+    if (assessmentIds.has(assessment.id)) {
+      return `Opportunity exclusion assessment identity ${assessment.id} is duplicated`;
+    }
+    assessmentIds.add(assessment.id);
+    const assessedHardConstraintIds = assessment.hardConstraints.map(
+      (constraint) => constraint.hardConstraintId,
+    );
+    if (
+      new Set(assessedHardConstraintIds).size !== assessedHardConstraintIds.length ||
+      assessedHardConstraintIds.length !== hardConstraintIds.length ||
+      assessedHardConstraintIds.some(
+        (hardConstraintId) => !hardConstraintIds.includes(hardConstraintId),
+      )
+    ) {
+      return `Opportunity ${assessment.opportunityId} must assess every confirmed Hard Constraint exactly once`;
+    }
+    const gates = [
+      assessment.marketSafety.gate,
+      ...assessment.hardConstraints.map((constraint) => constraint.gate),
+    ];
+    for (const gate of gates) {
+      const decision = gate.decision;
+      if (gateIds.has(gate.id)) {
+        return `Exclusion Gate identity ${gate.id} is duplicated`;
+      }
+      gateIds.add(gate.id);
+      if (decisionIds.has(decision.id)) {
+        return `Campaign Decision identity ${decision.id} is already present`;
+      }
+      decisionIds.add(decision.id);
+      if (decision.intakeVersion !== history.intake.version) {
+        return `Campaign Decision ${decision.id} does not use the current Campaign Intake version`;
+      }
+      const unavailableEvidenceId = [
+        ...decision.supportingEvidenceEntryIds,
+        ...decision.challengingEvidenceEntryIds,
+      ].find(
+        (entryId) =>
+          !availableEvidenceIds.has(entryId) || invalidatedIds.has(entryId),
+      );
+      if (unavailableEvidenceId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable evidence ${unavailableEvidenceId}`;
+      }
+      const unavailableGapId = decision.evidenceGapIds.find(
+        (gapId) =>
+          !history.evidenceGaps.some(
+            (gap) => gap.id === gapId && gap.status === "open",
+          ),
+      );
+      if (unavailableGapId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable open Evidence Gap ${unavailableGapId}`;
+      }
+      const unavailableContradictionId = decision.contradictionIds.find(
+        (contradictionId) =>
+          !history.contradictions.some(
+            (contradiction) =>
+              contradiction.id === contradictionId &&
+              contradiction.resolutionStatus !== "resolved",
+          ),
+      );
+      if (unavailableContradictionId !== undefined) {
+        return `Campaign Decision ${decision.id} links unavailable unresolved Contradiction ${unavailableContradictionId}`;
+      }
+      if (
+        gate.state === "unresolved" &&
+        decision.supportingEvidenceEntryIds.length === 0 &&
+        decision.evidenceGapIds.length === 0
+      ) {
+        return `unresolved Exclusion Gate ${gate.id} requires an explicit Evidence Gap when evidence is missing`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function applyOpportunityExclusionEvaluation(
+  history: AuthoritativeHistoryRebuild,
+  evaluation: OpportunityExclusionEvaluation,
+): string | undefined {
+  const violation = opportunityExclusionEvaluationViolation(history, evaluation);
+  if (violation !== undefined) {
+    return violation;
+  }
+  for (const assessment of evaluation.assessments) {
+    history.campaignDecisions.push(
+      assessment.marketSafety.gate.decision,
+      ...assessment.hardConstraints.map((constraint) => constraint.gate.decision),
+    );
+  }
+  history.opportunityExclusionEvaluations.push(evaluation);
+  return undefined;
+}
+
 const authoritativeOperationDescriptors = {
   "create-campaign": {
     outcome: "campaign-created",
@@ -4109,6 +4703,15 @@ const authoritativeOperationDescriptors = {
       if (publicResearchAllocationViolation(history, reservation) !== undefined) {
         invalidAuthoritativeRecord(outcomeSequence);
       }
+      if (
+        opportunityDeepeningViolation(
+          history,
+          reservation,
+          outcome.recordedAt as string,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
       history.reservations.set(reservation.id, reservation);
       history.reservationRecordedAt.set(
         reservation.id,
@@ -4138,6 +4741,11 @@ const authoritativeOperationDescriptors = {
         typeof outcome.recordedAt !== "string" ||
         source.accessedAt < history.reservationRecordedAt.get(reservationId)! ||
         outcome.recordedAt < history.reservationRecordedAt.get(reservationId)! ||
+        publicResearchApprovalScopeMismatch(
+          history,
+          reservationId,
+          source as unknown as PublicSource,
+        ) ||
         history.sources.some((existingSource) => existingSource.id === source.id) ||
         history.observations.some(
           (existingObservation) => existingObservation.id === observation.id,
@@ -4244,6 +4852,37 @@ const authoritativeOperationDescriptors = {
       }
     },
   },
+  "record-opportunity-exclusion-gates": {
+    outcome: "opportunity-exclusion-gates-recorded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      const evaluation = { assessments: outcome.assessments };
+      if (
+        history.intake === undefined ||
+        intent.assessmentId !==
+          (Array.isArray(outcome.assessments) && isRecord(outcome.assessments[0])
+            ? outcome.assessments[0].id
+            : undefined) ||
+        !Array.isArray(outcome.assessments) ||
+        outcome.assessments.length === 0 ||
+        validateRecordOpportunityExclusionGatesFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            recordedAt: outcome.recordedAt,
+            assessments: outcome.assessments,
+          },
+        }).length > 0 ||
+        applyOpportunityExclusionEvaluation(
+          history,
+          evaluation as OpportunityExclusionEvaluation,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
   "request-research-approval": {
     outcome: "research-approval-requested",
     position: "subsequent",
@@ -4265,6 +4904,10 @@ const authoritativeOperationDescriptors = {
           outcome.recordedAt,
           "pendingDecision.request",
         ).length > 0 ||
+        elevatedRiskApprovalRequestViolation(
+          history,
+          pendingDecision.request as unknown as ResearchApprovalRequest,
+        ) !== undefined ||
         history.researchApprovalDecisions.some(
           (decision) => decision.id === pendingDecision.id,
         ) ||
@@ -4667,6 +5310,25 @@ function breadthGateRecords(
   });
 }
 
+function opportunityExclusionGateRecords(
+  campaignId: string,
+  command: RecordOpportunityExclusionGatesCommand,
+  firstSequence: number,
+) {
+  return campaignRecordPair({
+    campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.recordedAt,
+    firstSequence,
+    operation: "record-opportunity-exclusion-gates",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      assessmentId: command.payload.assessments[0]!.id,
+    },
+    outcome: { assessments: command.payload.assessments },
+  });
+}
+
 function researchApprovalRequestRecords(
   campaignId: string,
   command: RequestResearchApprovalCommand,
@@ -4850,6 +5512,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     discoveryTranches: [],
     opportunityFormations: [],
     breadthGates: [],
+    opportunityExclusionEvaluations: [],
     campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
@@ -4934,6 +5597,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     discoveryTranches,
     opportunityFormations,
     breadthGates,
+    opportunityExclusionEvaluations,
     campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
@@ -5218,6 +5882,101 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       decisionValuePriorities: gate.decisionValuePriorities,
       decisionId: gate.decision.id,
     };
+  }
+  if (opportunityExclusionEvaluations.length > 0) {
+    const evaluation = opportunityExclusionEvaluations.at(-1)!;
+    const assessmentsByOpportunityId = new Map(
+      evaluation.assessments.map((assessment) => [
+        assessment.opportunityId,
+        assessment,
+      ]),
+    );
+    workView.completedWork.push(
+      `${evaluation.assessments.length} Opportunity exclusion assessment${evaluation.assessments.length === 1 ? "" : "s"} recorded`,
+    );
+    workView.nextPermittedActions = [
+      "reserve-public-research",
+      "record-evidence-reasoning",
+      "evaluate-qualification-gates",
+    ];
+    if (
+      evaluation.assessments.some(
+        (assessment) =>
+          assessment.marketSafety.classification === "elevated-risk" &&
+          !hasElevatedRiskResearchApproval(
+            authoritativeHistory,
+            assessment.opportunityId,
+          ),
+      )
+    ) {
+      workView.nextPermittedActions.push(
+        "request-elevated-risk-research-approval",
+      );
+    }
+    workView.opportunities = workView.opportunities!.map((opportunity) => {
+      const assessment = assessmentsByOpportunityId.get(opportunity.id)!;
+      const gates = [
+        {
+          id: assessment.marketSafety.gate.id,
+          kind: "market-safety" as const,
+          state: assessment.marketSafety.gate.state,
+          applicableRule:
+            assessment.marketSafety.gate.decision.applicableRule,
+          decisionId: assessment.marketSafety.gate.decision.id,
+        },
+        ...assessment.hardConstraints.map((constraint) => ({
+          id: constraint.gate.id,
+          kind: "hard-constraint" as const,
+          hardConstraintId: constraint.hardConstraintId,
+          state: constraint.gate.state,
+          applicableRule: constraint.gate.decision.applicableRule,
+          decisionId: constraint.gate.decision.id,
+        })),
+      ];
+      const failedGates = gates.filter((gate) => gate.state === "failed");
+      const unresolvedGates = gates.filter((gate) => gate.state === "unresolved");
+      const elevatedRiskApprovalUnavailable =
+        assessment.marketSafety.classification === "elevated-risk" &&
+        !hasElevatedRiskResearchApproval(
+          authoritativeHistory,
+          assessment.opportunityId,
+        );
+      const disposition =
+        failedGates.length > 0
+          ? {
+              status: "rejected" as const,
+              decisionIds: failedGates.map((gate) => gate.decisionId),
+            }
+          : unresolvedGates.length > 0 || elevatedRiskApprovalUnavailable
+            ? {
+                status: "unresolved" as const,
+                decisionIds:
+                  unresolvedGates.length > 0
+                    ? unresolvedGates.map((gate) => gate.decisionId)
+                    : [assessment.marketSafety.gate.decision.id],
+              }
+            : {
+                status: "active" as const,
+                decisionIds: gates.map((gate) => gate.decisionId),
+              };
+      return {
+        ...opportunity,
+        marketSafety: {
+          classification: assessment.marketSafety.classification,
+          intendedActivity: assessment.marketSafety.intendedActivity,
+          excludedCategory: assessment.marketSafety.excludedCategory,
+          directlyServesExcludedActivity:
+            assessment.marketSafety.directlyServesExcludedActivity,
+        },
+        exclusionGates: gates,
+        disposition,
+        eligibility:
+          disposition.status === "active"
+            ? ("pending-qualification" as const)
+            : ("ineligible" as const),
+        terminalRole: null,
+      };
+    });
   }
   const pendingDecision = activeResearchApprovalDecision({
     researchApprovalDecisions,
@@ -5718,6 +6477,7 @@ type CoordinatorCommand =
   | RecordDiscoveryTrancheCommand
   | RecordOpportunityFormationCommand
   | PassBreadthGateCommand
+  | RecordOpportunityExclusionGatesCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -6126,7 +6886,7 @@ async function reservePublicResearch(
     replayResult(_command, replayed) {
       return buildReservationResult(false, replayed);
     },
-    validateBeforeLease({ before }) {
+    validateBeforeLease({ before, rebuiltCampaign }) {
       const campaign = before!;
       if (
         campaign.intake === undefined ||
@@ -6194,6 +6954,30 @@ async function reservePublicResearch(
             "The ordinary Public Research Source cap has no unreserved capacity.",
           action:
             "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
+        };
+      }
+      const deepeningViolation =
+        opportunityDeepeningViolation(
+          rebuiltCampaign.authoritativeHistory,
+          command.payload.reservation,
+          command.payload.reservedAt,
+        );
+      if (deepeningViolation !== undefined) {
+        return {
+          code:
+            deepeningViolation === "ineligible"
+              ? "SVS-OPPORTUNITY-INELIGIBLE"
+              : deepeningViolation === "required"
+              ? "SVS-ELEVATED-RISK-APPROVAL-REQUIRED"
+              : "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+          message:
+            deepeningViolation === "ineligible"
+              ? "Deep research requires a named Opportunity with every current Exclusion Gate passed."
+              : deepeningViolation === "required"
+              ? "Deep research for an Elevated-Risk Market requires Opportunity-specific Research Approval."
+              : "The Research Approval does not match this Opportunity, purpose, depth, or time.",
+          action:
+            "Keep the Opportunity unresolved and ineligible; request explicit scoped approval or continue only shallow classification and independent permitted work.",
         };
       }
       const allocationViolation = publicResearchAllocationViolation(
@@ -6287,7 +7071,7 @@ async function requestResearchApproval(
     replayResult(_command, replayed) {
       return buildResult(false, replayed);
     },
-    validateBeforeLease({ before }) {
+    validateBeforeLease({ before, rebuiltCampaign }) {
       const campaign = before!;
       if (campaign.intake === undefined) {
         return {
@@ -6301,6 +7085,18 @@ async function requestResearchApproval(
           code: "SVS-PENDING-DECISION-ACTIVE",
           message: `Pending Decision ${campaign.pendingDecision.id} already requires an explicit response.`,
           action: "Answer, refuse, or ask about the active Pending Decision; do not replace it.",
+        };
+      }
+      const elevatedRiskViolation = elevatedRiskApprovalRequestViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.request,
+      );
+      if (elevatedRiskViolation !== undefined) {
+        return {
+          code: "SVS-ELEVATED-RISK-APPROVAL-SCOPE-INVALID",
+          message: `Elevated-Risk Research Approval is invalid: ${elevatedRiskViolation}.`,
+          action:
+            "Request approval only for deep research on the named surviving Elevated-Risk Opportunity; approval cannot override an Exclusion Gate.",
         };
       }
       if (currentTime > command.payload.request.duration.expiresAt) {
@@ -6849,6 +7645,21 @@ async function recordPublicResearchObservation(
         };
       }
       if (
+        publicResearchApprovalScopeMismatch(
+          rebuiltCampaign.authoritativeHistory,
+          command.payload.reservationId,
+          command.payload.source,
+        )
+      ) {
+        return {
+          code: "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+          message:
+            "The retrieved Source differs from the Source named in the Opportunity-specific Research Approval.",
+          action:
+            "Leave the reservation unsettled and use only the exact approved public Source, or request renewed approval for the changed scope.",
+        };
+      }
+      if (
         !isIsoInstant(reservationOutcome.recordedAt) ||
         command.payload.source.accessedAt < reservationOutcome.recordedAt ||
         command.payload.recordedAt < reservationOutcome.recordedAt
@@ -7270,6 +8081,103 @@ async function passBreadthGate(
   });
 }
 
+async function recordOpportunityExclusionGates(
+  command: RecordOpportunityExclusionGatesCommand,
+  currentTime: string,
+) {
+  const result = (recorded: boolean, campaign: LoadedCampaign) => ({
+    recorded,
+    assessments: command.payload.assessments,
+    workView: campaign.workView,
+    evidenceLedger: campaign.evidenceLedger,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not record Opportunity Exclusion Gates concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Opportunity Exclusion Gate request identity was already used with different input.",
+      action:
+        "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Opportunity Exclusion Gates could not be recorded against valid authoritative Campaign history.",
+      action:
+        "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["record-opportunity-exclusion-gates"]
+              .outcome &&
+          record.requestId === command.requestId &&
+          JSON.stringify(record.assessments) ===
+            JSON.stringify(command.payload.assessments),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      return rebuiltCampaign.authoritativeHistory.breadthGates.length === 0
+        ? {
+            code: "SVS-OPPORTUNITY-EXCLUSION-GATES-NOT-AVAILABLE",
+            message:
+              "Opportunity Exclusion Gates require formed Opportunities and a passed Breadth Gate.",
+            action:
+              "Complete formation and the Breadth Gate before recording the earliest fatal Opportunity decisions.",
+          }
+        : undefined;
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message:
+            "Opportunity Exclusion Gates require the active coordinator lease.",
+          action:
+            "Resume the Scouting Campaign with this coordinator before recording gate decisions.",
+        };
+      },
+    },
+    validateAfterLease({ rebuiltCampaign }) {
+      const evaluation = { assessments: command.payload.assessments };
+      const violation = opportunityExclusionEvaluationViolation(
+        rebuiltCampaign.authoritativeHistory,
+        evaluation,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+            message: `Opportunity Exclusion Gates violate a campaign invariant: ${violation}.`,
+            action:
+              "Assess every formed Opportunity against market safety and every confirmed Hard Constraint using traceable affirmative evidence or an explicit unresolved state.",
+          };
+    },
+    records({ before }) {
+      return opportunityExclusionGateRecords(
+        before!.campaign.id,
+        command,
+        before!.validation.recordCount + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
 async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -7475,6 +8383,7 @@ export async function executeCommand(
       "recordDiscoveryTranche",
       "recordOpportunityFormation",
       "passBreadthGate",
+      "recordOpportunityExclusionGates",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -7760,6 +8669,32 @@ export async function executeCommand(
     }
     return passBreadthGate(
       command as unknown as PassBreadthGateCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "recordOpportunityExclusionGates") {
+    const invalidFields = validateRecordOpportunityExclusionGatesFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-OPPORTUNITY-EXCLUSION-GATES-INVALID",
+          message: "Opportunity Exclusion Gate evidence is invalid.",
+          action:
+            "Correct the complete market-safety and Hard Constraint gate records, preserving unresolved decisions where evidence is missing.",
+          details: invalidFields,
+        },
+      };
+    }
+    return recordOpportunityExclusionGates(
+      command as unknown as RecordOpportunityExclusionGatesCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }
