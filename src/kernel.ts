@@ -3672,6 +3672,13 @@ function publicResearchAllocationViolation(
     : undefined;
 }
 
+function exclusionGatesFor(assessment: OpportunityExclusionAssessment) {
+  return [
+    assessment.marketSafety.gate,
+    ...assessment.hardConstraints.map((constraint) => constraint.gate),
+  ];
+}
+
 function elevatedRiskApprovalRequestViolation(
   history: AuthoritativeHistoryRebuild,
   request: ResearchApprovalRequest,
@@ -3690,27 +3697,30 @@ function elevatedRiskApprovalRequestViolation(
   if (assessment.marketSafety.classification !== "elevated-risk") {
     return "the approval identifies an Opportunity that is not an Elevated-Risk Market";
   }
-  const failedGate = [
-    assessment.marketSafety.gate,
-    ...assessment.hardConstraints.map((constraint) => constraint.gate),
-  ].find((gate) => gate.state === "failed");
+  const failedGate = exclusionGatesFor(assessment).find(
+    (gate) => gate.state === "failed",
+  );
   return failedGate === undefined
     ? undefined
     : `the approval cannot override failed Exclusion Gate ${failedGate.id}`;
 }
 
-type OpportunityDeepeningViolation = "ineligible" | "required" | "scope";
+type OpportunityDeepeningViolation =
+  | "gates-required"
+  | "ineligible"
+  | "required"
+  | "scope";
 
 function opportunityDeepeningViolation(
   history: AuthoritativeHistoryRebuild,
   reservation: PublicResearchReservation,
   reservedAt: string,
 ): OpportunityDeepeningViolation | undefined {
-  if (
-    reservation.researchClass !== "deepening" ||
-    history.opportunityExclusionEvaluations.length === 0
-  ) {
+  if (reservation.researchClass !== "deepening") {
     return undefined;
+  }
+  if (history.opportunityExclusionEvaluations.length === 0) {
+    return "gates-required";
   }
   const assessments = history.opportunityExclusionEvaluations.at(-1)!.assessments;
   if (reservation.opportunityId === undefined) {
@@ -3722,10 +3732,7 @@ function opportunityDeepeningViolation(
   if (assessment === undefined) {
     return "ineligible";
   }
-  const gates = [
-    assessment.marketSafety.gate,
-    ...assessment.hardConstraints.map((constraint) => constraint.gate),
-  ];
+  const gates = exclusionGatesFor(assessment);
   if (gates.some((gate) => gate.state !== "passed")) {
     return "ineligible";
   }
@@ -3758,12 +3765,16 @@ function opportunityDeepeningViolation(
 function hasElevatedRiskResearchApproval(
   history: AuthoritativeHistoryRebuild,
   opportunityId: string,
+  availableAt: string,
 ): boolean {
   return history.researchApprovals.some(
     (approval) =>
       approval.scope.access === "elevated-risk" &&
       approval.scope.opportunityId === opportunityId &&
-      approval.scope.researchDepth === "deep",
+      approval.scope.researchDepth === "deep" &&
+      approval.approvedAt <= availableAt &&
+      approval.scope.duration.startsAt <= availableAt &&
+      approval.scope.duration.expiresAt >= availableAt,
   );
 }
 
@@ -3875,6 +3886,18 @@ function allReasoningEntryIds(state: ReasoningState): Set<string> {
     ...state.inferences.map((inference) => inference.id),
     ...state.contradictions.map((contradiction) => contradiction.id),
     ...state.corrections.map((correction) => correction.id),
+  ]);
+}
+
+function availableAffirmativeEvidenceIds(state: ReasoningState): Set<string> {
+  const invalidatedIds = invalidatedEvidenceIds(state);
+  return new Set([
+    ...state.observations
+      .filter((observation) => !invalidatedIds.has(observation.id))
+      .map((observation) => observation.id),
+    ...state.inferences
+      .filter((inference) => !invalidatedIds.has(inference.id))
+      .map((inference) => inference.id),
   ]);
 }
 
@@ -4531,11 +4554,13 @@ function opportunityExclusionEvaluationViolation(
   ) {
     return "every formed Opportunity must receive exactly one exclusion assessment";
   }
-  const hardConstraintIds = history.intake.statements
+  const hardConstraintsById = new Map(
+    history.intake.statements
     .filter((statement) => statement.classification === "hard-constraint")
-    .map((statement) => statement.id);
-  const availableEvidenceIds = allReasoningEntryIds(history);
-  const invalidatedIds = invalidatedEvidenceIds(history);
+      .map((statement) => [statement.id, statement.text] as const),
+  );
+  const hardConstraintIds = [...hardConstraintsById.keys()];
+  const availableEvidenceIds = availableAffirmativeEvidenceIds(history);
   const existingDecisionIds = new Set(
     history.campaignDecisions.map((decision) => decision.id),
   );
@@ -4559,10 +4584,15 @@ function opportunityExclusionEvaluationViolation(
     ) {
       return `Opportunity ${assessment.opportunityId} must assess every confirmed Hard Constraint exactly once`;
     }
-    const gates = [
-      assessment.marketSafety.gate,
-      ...assessment.hardConstraints.map((constraint) => constraint.gate),
-    ];
+    for (const constraint of assessment.hardConstraints) {
+      if (
+        constraint.gate.decision.applicableRule !==
+        hardConstraintsById.get(constraint.hardConstraintId)
+      ) {
+        return `Hard Constraint gate ${constraint.gate.id} must use the exact confirmed Hard Constraint text`;
+      }
+    }
+    const gates = exclusionGatesFor(assessment);
     for (const gate of gates) {
       const decision = gate.decision;
       if (gateIds.has(gate.id)) {
@@ -4580,11 +4610,10 @@ function opportunityExclusionEvaluationViolation(
         ...decision.supportingEvidenceEntryIds,
         ...decision.challengingEvidenceEntryIds,
       ].find(
-        (entryId) =>
-          !availableEvidenceIds.has(entryId) || invalidatedIds.has(entryId),
+        (entryId) => !availableEvidenceIds.has(entryId),
       );
       if (unavailableEvidenceId !== undefined) {
-        return `Campaign Decision ${decision.id} links unavailable evidence ${unavailableEvidenceId}`;
+        return `Campaign Decision ${decision.id} links unavailable affirmative evidence ${unavailableEvidenceId}`;
       }
       const unavailableGapId = decision.evidenceGapIds.find(
         (gapId) =>
@@ -5609,6 +5638,11 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
   if (!isRecord(creationIntent) || manifest.createdAt !== creationIntent.recordedAt) {
     throw new Error("manifest creation time does not match authoritative history");
   }
+  const latestRecord = records.at(-1);
+  if (!isRecord(latestRecord) || !isIsoInstant(latestRecord.recordedAt)) {
+    throw new Error("latest authoritative record is invalid");
+  }
+  const workViewAsOf = latestRecord.recordedAt;
 
   const workView = initialWorkView(manifest.campaignId);
   workView.recordSequence = records.length;
@@ -5906,6 +5940,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
           !hasElevatedRiskResearchApproval(
             authoritativeHistory,
             assessment.opportunityId,
+            workViewAsOf,
           ),
       )
     ) {
@@ -5940,6 +5975,7 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
         !hasElevatedRiskResearchApproval(
           authoritativeHistory,
           assessment.opportunityId,
+          workViewAsOf,
         );
       const disposition =
         failedGates.length > 0
@@ -6048,10 +6084,6 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     throw new Error("authoritative coordinator lease is invalid");
   }
   const checkpointSequence = records.length;
-  const latestRecord = records.at(-1);
-  if (!isRecord(latestRecord) || !isIsoInstant(latestRecord.recordedAt)) {
-    throw new Error("latest authoritative record is invalid");
-  }
   const lease: CoordinatorLease = {
     coordinatorId: latestIntent.coordinatorId,
     acquiredAt: latestIntent.recordedAt,
@@ -6965,19 +6997,25 @@ async function reservePublicResearch(
       if (deepeningViolation !== undefined) {
         return {
           code:
-            deepeningViolation === "ineligible"
+            deepeningViolation === "gates-required"
+              ? "SVS-OPPORTUNITY-EXCLUSION-GATES-REQUIRED"
+              : deepeningViolation === "ineligible"
               ? "SVS-OPPORTUNITY-INELIGIBLE"
               : deepeningViolation === "required"
               ? "SVS-ELEVATED-RISK-APPROVAL-REQUIRED"
               : "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
           message:
-            deepeningViolation === "ineligible"
+            deepeningViolation === "gates-required"
+              ? "Deep research requires recorded Opportunity Exclusion Gates."
+              : deepeningViolation === "ineligible"
               ? "Deep research requires a named Opportunity with every current Exclusion Gate passed."
               : deepeningViolation === "required"
               ? "Deep research for an Elevated-Risk Market requires Opportunity-specific Research Approval."
               : "The Research Approval does not match this Opportunity, purpose, depth, or time.",
           action:
-            "Keep the Opportunity unresolved and ineligible; request explicit scoped approval or continue only shallow classification and independent permitted work.",
+            deepeningViolation === "gates-required"
+              ? "Record every formed Opportunity's market-safety and Hard Constraint Exclusion Gates before reserving deep research."
+              : "Keep the Opportunity unresolved and ineligible; request explicit scoped approval or continue only shallow classification and independent permitted work.",
         };
       }
       const allocationViolation = publicResearchAllocationViolation(
@@ -8134,7 +8172,7 @@ async function recordOpportunityExclusionGates(
             message:
               "Opportunity Exclusion Gates require formed Opportunities and a passed Breadth Gate.",
             action:
-              "Complete formation and the Breadth Gate before recording the earliest fatal Opportunity decisions.",
+              "Complete formation and the Breadth Gate before recording Opportunity Exclusion Gates.",
           }
         : undefined;
     },

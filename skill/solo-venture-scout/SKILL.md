@@ -228,7 +228,7 @@ it on ordinary discovery, shallow mining, or deepening. Give every later ordinar
 Source reservation a `researchClass` of `deepening` or `open-world-discovery`; the
 kernel enforces the cumulative eighty/twenty allocation.
 
-## Apply fatal Opportunity gates
+## Apply Opportunity Exclusion Gates
 
 Evaluate every formed Opportunity with `recordOpportunityExclusionGates` from
 [references/campaigns.md](references/campaigns.md) before deep research. An Excluded

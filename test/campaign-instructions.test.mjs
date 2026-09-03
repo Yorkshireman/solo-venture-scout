@@ -169,7 +169,7 @@ test("packaged Scout forms evidence-backed Opportunities and narrows only throug
   assert.match(reference, /"command": "passBreadthGate"/);
 });
 
-test("packaged Scout documents fatal Opportunity gates and Elevated-Risk approval", async () => {
+test("packaged Scout documents Opportunity Exclusion Gates and Elevated-Risk approval", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-exclusion-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
   const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");

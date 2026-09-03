@@ -1254,6 +1254,33 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
     11,
   );
 
+  const prematureDeepening = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-deepening-before-exclusion-gates",
+      payload: {
+        reservedAt: "2026-09-01T09:54:00.000Z",
+        reservation: {
+          id: "reservation-deepening-before-exclusion-gates",
+          purpose: "Attempt deep research before Opportunity Exclusion Gates",
+          researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(prematureDeepening.code, 3);
+  assert.equal(
+    prematureDeepening.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATES-REQUIRED",
+  );
+
+  const exclusions = await runKernel(
+    kernelPath,
+    opportunityExclusionGatesCommand(campaignPath),
+  );
+  assert.equal(exclusions.code, 0, exclusions.stderr);
+
   const unclassified = await runKernel(
     kernelPath,
     publicResearchReservationCommand(campaignPath, {
@@ -1284,6 +1311,7 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
             id: `reservation-deepening-${index + 1}`,
             purpose: "Deepen a comparison Opportunity",
             researchClass: "deepening",
+            opportunityId: "opportunity-dispatch-reconciliation",
           },
         },
       }),
@@ -1300,6 +1328,7 @@ test("supported evidence forms Opportunities and the complete Breadth Gate chang
           id: "reservation-deepening-5",
           purpose: "Attempt to consume the open-world discovery share",
           researchClass: "deepening",
+          opportunityId: "opportunity-dispatch-reconciliation",
         },
       },
     }),
@@ -1352,6 +1381,22 @@ test("affirmative direct-service evidence rejects an Excluded Market with tracea
     const response = await runKernel(kernelPath, command);
     assert.equal(response.code, 0, response.stderr);
   }
+
+  const unsupportedRejection = opportunityExclusionGatesCommand(campaignPath, {
+    dispatchClassification: "excluded-market",
+    dispatchEvidenceEntryIds: ["gap-rental-handoff-loss"],
+  });
+  unsupportedRejection.requestId = "reject-gap-as-affirmative-gate-support";
+  const unsupportedResult = await runKernel(kernelPath, unsupportedRejection);
+  assert.equal(unsupportedResult.code, 3);
+  assert.equal(
+    unsupportedResult.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(
+    unsupportedResult.response.error.message,
+    /links unavailable affirmative evidence gap-rental-handoff-loss/,
+  );
 
   const hypotheticalMisuse = opportunityExclusionGatesCommand(campaignPath, {
     dispatchClassification: "excluded-market",
@@ -1553,6 +1598,21 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
     level: "low",
     limitingFactors: ["The intended activity is not established."],
   };
+
+  const wrongConstraintRule = structuredClone(command);
+  wrongConstraintRule.requestId = "record-wrong-hard-constraint-rule";
+  wrongConstraintRule.payload.assessments[0].hardConstraints[0].gate.decision.applicableRule =
+    "A rule that was not confirmed in Campaign Intake.";
+  const wrongRuleResult = await runKernel(kernelPath, wrongConstraintRule);
+  assert.equal(wrongRuleResult.code, 3);
+  assert.equal(
+    wrongRuleResult.response.error.code,
+    "SVS-OPPORTUNITY-EXCLUSION-GATE-INVARIANT-VIOLATION",
+  );
+  assert.match(
+    wrongRuleResult.response.error.message,
+    /must use the exact confirmed Hard Constraint text/,
+  );
 
   const recorded = await runKernel(kernelPath, command);
 
@@ -1927,6 +1987,40 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
   assert.equal(
     wrongOpportunity.response.error.code,
     "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
+  );
+
+  const afterExpiry = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-evidence-after-elevated-approval-expiry",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2100-09-01T10:00:00.000Z",
+      entries: [
+        {
+          type: "evidence-gap",
+          id: "gap-after-elevated-approval-expiry",
+          question: "Is renewed Elevated-Risk Research Approval available?",
+          affectedDecisionIds: [scope.id],
+          resolutionCriteria:
+            "A new exact Opportunity-specific approval is explicitly granted.",
+          resolutionMethod:
+            "Request renewed approval only if the developer chooses to continue.",
+          status: "open",
+          resolution: null,
+        },
+      ],
+    },
+  });
+  assert.equal(afterExpiry.code, 0, afterExpiry.stderr);
+  const expiredOpportunity = afterExpiry.response.result.workView.opportunities[0];
+  assert.equal(expiredOpportunity.disposition.status, "unresolved");
+  assert.equal(expiredOpportunity.eligibility, "ineligible");
+  assert.ok(
+    afterExpiry.response.result.workView.nextPermittedActions.includes(
+      "request-elevated-risk-research-approval",
+    ),
   );
 });
 
