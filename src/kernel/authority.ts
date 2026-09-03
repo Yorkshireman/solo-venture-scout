@@ -45,6 +45,9 @@ import type {
   NoQualifyingOpportunityReport,
   NoQualifyingOpportunityContinuationCondition,
   ConcludeNoQualifyingOpportunityCommand,
+  OpportunityComparison,
+  OpportunityBrief,
+  ConcludeLeadingOpportunityCommand,
   OpportunityFormation,
   RecordOpportunityFormationCommand,
   BreadthGate,
@@ -72,6 +75,11 @@ import type {
 } from "./types.js";
 import { qualificationGateKinds } from "./types.js";
 import {
+  createLeadingOpportunityModule,
+  renderOpportunityBrief,
+} from "./leading-opportunity.js";
+export { renderOpportunityBrief } from "./leading-opportunity.js";
+import {
   hasOnlyFields,
   isIsoInstant,
   isRecord,
@@ -86,6 +94,7 @@ import {
   validateRecordOpportunityExclusionGatesFields,
   validateRecordOpportunityQualificationGatesFields,
   validateConcludeNoQualifyingOpportunityFields,
+  validateConcludeLeadingOpportunityFields,
   validateRecordOpportunityFormationFields,
   validateResearchApprovalRequest,
 } from "./validation.js";
@@ -234,6 +243,7 @@ export type AuthoritativeHistoryRebuild = {
   intake?: ConfirmedCampaignIntake;
   reservations: Map<string, PublicResearchReservation>;
   reservationRecordedAt: Map<string, string>;
+  reservationObservationIds: Map<string, string>;
   settledReservationIds: Set<string>;
   sources: PublicSource[];
   observations: PublicObservation[];
@@ -251,6 +261,8 @@ export type AuthoritativeHistoryRebuild = {
   opportunityExclusionEvaluations: OpportunityExclusionEvaluation[];
   opportunityQualificationEvaluations: OpportunityQualificationEvaluation[];
   noQualifyingOpportunityReports: NoQualifyingOpportunityReport[];
+  opportunityComparisons: OpportunityComparison[];
+  opportunityBriefs: OpportunityBrief[];
   campaignDecisions: CampaignDecision[];
   researchApprovalDecisions: PendingResearchApprovalDecision[];
   researchApprovalInformation: RecordedResearchApprovalInformation[];
@@ -297,6 +309,9 @@ export function publicResearchAllocationViolation(
   reservation: PublicResearchReservation,
 ): PublicResearchAllocationViolation | undefined {
   const breadthGatePassed = history.breadthGates.length > 0;
+  if (reservation.researchClass === "adversarial") {
+    return breadthGatePassed ? undefined : "not-available";
+  }
   if (breadthGatePassed && reservation.researchClass === undefined) {
     return "required";
   }
@@ -329,7 +344,11 @@ export function researchDecisionValueViolation(
   reservation: PublicResearchReservation,
 ): ResearchDecisionValueViolation | undefined {
   const evaluation = history.opportunityQualificationEvaluations.at(-1);
-  if (evaluation === undefined || reservation.researchClass === undefined) {
+  if (
+    evaluation === undefined ||
+    reservation.researchClass === undefined ||
+    reservation.researchClass === "adversarial"
+  ) {
     return undefined;
   }
   if (evaluation.researchDecision.outcome === "stop") {
@@ -448,6 +467,37 @@ export function opportunityDeepeningViolation(
     reservedAt > approval.scope.duration.expiresAt
   ) {
     return "scope";
+  }
+  return undefined;
+}
+
+export type AdversarialResearchViolation =
+  | "qualification-required"
+  | "ineligible";
+
+export function adversarialResearchViolation(
+  history: AuthoritativeHistoryRebuild,
+  reservation: PublicResearchReservation,
+  reservedAt: string,
+): AdversarialResearchViolation | undefined {
+  if (reservation.researchClass !== "adversarial") {
+    return undefined;
+  }
+  if (
+    history.opportunityQualificationEvaluations.at(-1)?.researchDecision
+      .stopReason !== "qualification-complete"
+  ) {
+    return "qualification-required";
+  }
+  if (
+    reservation.opportunityId === undefined ||
+    noQualifyingOpportunityDisposition(
+      history,
+      reservation.opportunityId,
+      reservedAt,
+    ).status !== "eligible"
+  ) {
+    return "ineligible";
   }
   return undefined;
 }
@@ -2026,10 +2076,9 @@ export function researchBudgetViewForHistory(
         : 0),
     0,
   );
-  const usedSourceUnits = [...history.reservations.values()].reduce(
-    (total, reservation) => total + reservation.sourceUnits,
-    0,
-  );
+  const usedOrdinarySourceUnits = [...history.reservations.values()]
+    .filter((reservation) => reservation.researchClass !== "adversarial")
+    .reduce((total, reservation) => total + reservation.sourceUnits, 0);
   const recordedPaidSpend = history.researchExpenditures.reduce(
     (total, expenditure) => total + expenditure.amount,
     0,
@@ -2040,7 +2089,12 @@ export function researchBudgetViewForHistory(
     ordinarySourceCap,
     reservedSourceUnits,
     settledSourceUnits,
-    remainingOrdinarySourceUnits: ordinarySourceCap - usedSourceUnits,
+    remainingOrdinarySourceUnits: ordinarySourceCap - usedOrdinarySourceUnits,
+    remainingAdversarialSourceUnits:
+      intake.researchBudget.adversarialSourceReserve -
+      [...history.reservations.values()].filter(
+        (reservation) => reservation.researchClass === "adversarial",
+      ).length,
     paidSpendCap: intake.researchBudget.paidSpendCap,
     recordedPaidSpend: {
       amount: recordedPaidSpend,
@@ -2226,7 +2280,10 @@ export function noQualifyingOpportunityViolation(
   ) {
     return "No Qualifying Opportunity requires completed Opportunity gates";
   }
-  if (history.noQualifyingOpportunityReports.length > 0) {
+  if (
+    history.noQualifyingOpportunityReports.length > 0 ||
+    history.opportunityBriefs.length > 0
+  ) {
     return "the Scouting Campaign already has a terminal report";
   }
   if (history.reservations.size !== history.settledReservationIds.size) {
@@ -2341,6 +2398,85 @@ export function applyNoQualifyingOpportunityReport(
   return undefined;
 }
 
+const leadingOpportunityModule = createLeadingOpportunityModule({
+  activeResearchApprovalDecision,
+  availableAffirmativeEvidenceIds,
+  formedOpportunities,
+  noQualifyingOpportunityDisposition,
+  supportingObservationIds,
+  researchBudgetViewForHistory,
+});
+
+export const leadingOpportunityViolation =
+  leadingOpportunityModule.leadingOpportunityViolation;
+export const buildLeadingOpportunityBrief =
+  leadingOpportunityModule.buildLeadingOpportunityBrief;
+
+export function leadingOpportunityRecords(
+  history: AuthoritativeHistoryRebuild,
+  command: ConcludeLeadingOpportunityCommand,
+  firstSequence: number,
+) {
+  const brief = buildLeadingOpportunityBrief(history, command);
+  return campaignRecordPair({
+    campaignId: history.campaignId,
+    requestId: command.requestId,
+    recordedAt: command.payload.concludedAt,
+    firstSequence,
+    operation: "conclude-leading-opportunity",
+    intent: {
+      coordinatorId: command.payload.coordinatorId,
+      comparisonId: command.payload.comparison.id,
+      briefId: command.payload.brief.id,
+    },
+    outcome: { comparison: command.payload.comparison, brief },
+  });
+}
+
+export function applyLeadingOpportunity(
+  history: AuthoritativeHistoryRebuild,
+  comparison: OpportunityComparison,
+  brief: OpportunityBrief,
+  concludedAt: string,
+): string | undefined {
+  const briefInput = {
+    id: brief.id,
+    buyerEconomics: brief.buyerEconomics,
+    customerAccess: brief.customerAccess,
+    alternatives: brief.alternatives,
+    risks: brief.risks,
+    valueHypothesis: brief.valueHypothesis,
+  };
+  const violation = leadingOpportunityViolation(
+    history,
+    comparison,
+    concludedAt,
+    briefInput,
+  );
+  if (violation !== undefined) {
+    return violation;
+  }
+  const expected = buildLeadingOpportunityBrief(history, {
+    envelopeVersion: contracts.commandEnvelope,
+    requestId: "authoritative-rebuild",
+    command: "concludeLeadingOpportunity",
+    payload: {
+      campaignPath: "/authoritative-rebuild",
+      coordinatorId: "authoritative-rebuild",
+      concludedAt,
+      comparison,
+      brief: briefInput,
+    },
+  });
+  if (JSON.stringify(brief) !== JSON.stringify(expected)) {
+    return "Opportunity Brief does not match authoritative Campaign history";
+  }
+  history.campaignDecisions.push(comparison.decision);
+  history.opportunityComparisons.push(comparison);
+  history.opportunityBriefs.push(brief);
+  return undefined;
+}
+
 function reportText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -2445,6 +2581,7 @@ export function renderNoQualifyingOpportunityReport(
   ].join("\n");
 }
 
+
 export const authoritativeOperationDescriptors = {
   "create-campaign": {
     outcome: "campaign-created",
@@ -2496,15 +2633,19 @@ export const authoritativeOperationDescriptors = {
         invalidAuthoritativeRecord(outcomeSequence);
       }
       const reservation = outcome.reservation as unknown as PublicResearchReservation;
-      const totalReserved =
-        [...history.reservations.values()].reduce(
-          (total, existing) => total + existing.sourceUnits,
-          0,
-        ) + reservation.sourceUnits;
-      const ordinarySourceCap =
-        history.intake.researchBudget.sourceCap -
-        history.intake.researchBudget.adversarialSourceReserve;
-      if (totalReserved > ordinarySourceCap) {
+      const sameClassReserved = [...history.reservations.values()]
+        .filter((existing) =>
+          reservation.researchClass === "adversarial"
+            ? existing.researchClass === "adversarial"
+            : existing.researchClass !== "adversarial",
+        )
+        .reduce((total, existing) => total + existing.sourceUnits, 0) +
+        reservation.sourceUnits;
+      const classCap = reservation.researchClass === "adversarial"
+        ? history.intake.researchBudget.adversarialSourceReserve
+        : history.intake.researchBudget.sourceCap -
+          history.intake.researchBudget.adversarialSourceReserve;
+      if (sameClassReserved > classCap) {
         throw new Error(
           `authoritative record ${outcomeSequence} exceeds the Research Budget`,
         );
@@ -2514,6 +2655,15 @@ export const authoritativeOperationDescriptors = {
       }
       if (
         opportunityDeepeningViolation(
+          history,
+          reservation,
+          outcome.recordedAt as string,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      if (
+        adversarialResearchViolation(
           history,
           reservation,
           outcome.recordedAt as string,
@@ -2563,6 +2713,10 @@ export const authoritativeOperationDescriptors = {
         invalidAuthoritativeRecord(outcomeSequence);
       }
       history.settledReservationIds.add(reservationId);
+      history.reservationObservationIds.set(
+        reservationId,
+        String(observation.id),
+      );
       history.sources.push(source as unknown as PublicSource);
       history.observations.push(observation as unknown as PublicObservation);
     },
@@ -2742,6 +2896,47 @@ export const authoritativeOperationDescriptors = {
         applyNoQualifyingOpportunityReport(
           history,
           outcome.report as unknown as NoQualifyingOpportunityReport,
+        ) !== undefined
+      ) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+    },
+  },
+  "conclude-leading-opportunity": {
+    outcome: "leading-opportunity-concluded",
+    position: "subsequent",
+    establishesLease: false,
+    validateAndApply({ intent, outcome, outcomeSequence, history }) {
+      if (!isRecord(outcome.comparison) || !isRecord(outcome.brief)) {
+        invalidAuthoritativeRecord(outcomeSequence);
+      }
+      const comparison = outcome.comparison as unknown as OpportunityComparison;
+      const brief = outcome.brief as unknown as OpportunityBrief;
+      const briefInput = {
+        id: brief.id,
+        buyerEconomics: brief.buyerEconomics,
+        customerAccess: brief.customerAccess,
+        alternatives: brief.alternatives,
+        risks: brief.risks,
+        valueHypothesis: brief.valueHypothesis,
+      };
+      if (
+        intent.comparisonId !== comparison.id ||
+        intent.briefId !== brief.id ||
+        validateConcludeLeadingOpportunityFields({
+          payload: {
+            campaignPath: "/authoritative-rebuild",
+            coordinatorId: intent.coordinatorId,
+            concludedAt: outcome.recordedAt,
+            comparison,
+            brief: briefInput,
+          },
+        }).length > 0 ||
+        applyLeadingOpportunity(
+          history,
+          comparison,
+          brief,
+          String(outcome.recordedAt),
         ) !== undefined
       ) {
         invalidAuthoritativeRecord(outcomeSequence);
@@ -3364,6 +3559,7 @@ export type CampaignManifest = {
     researchBudget?: "research-budget.json";
     evidenceLedger?: "evidence-ledger.json";
     noQualifyingOpportunityReport?: "no-qualifying-opportunity-report.md";
+    opportunityBrief?: "opportunity-brief.md";
   };
 };
 
@@ -3387,7 +3583,9 @@ export function parseCampaignManifest(value: unknown): CampaignManifest | undefi
       value.projections.evidenceLedger !== "evidence-ledger.json") ||
     (value.projections.noQualifyingOpportunityReport !== undefined &&
       value.projections.noQualifyingOpportunityReport !==
-        "no-qualifying-opportunity-report.md")
+        "no-qualifying-opportunity-report.md") ||
+    (value.projections.opportunityBrief !== undefined &&
+      value.projections.opportunityBrief !== "opportunity-brief.md")
   ) {
     return undefined;
   }
@@ -3412,6 +3610,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     campaignId: manifest.campaignId,
     reservations: new Map(),
     reservationRecordedAt: new Map(),
+    reservationObservationIds: new Map(),
     settledReservationIds: new Set(),
     sources: [],
     observations: [],
@@ -3429,6 +3628,8 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     opportunityExclusionEvaluations: [],
     opportunityQualificationEvaluations: [],
     noQualifyingOpportunityReports: [],
+    opportunityComparisons: [],
+    opportunityBriefs: [],
     campaignDecisions: [],
     researchApprovalDecisions: [],
     researchApprovalInformation: [],
@@ -3516,6 +3717,8 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     opportunityExclusionEvaluations,
     opportunityQualificationEvaluations,
     noQualifyingOpportunityReports,
+    opportunityComparisons,
+    opportunityBriefs,
     campaignDecisions,
     researchApprovalDecisions,
     researchApprovalInformation,
@@ -3969,6 +4172,35 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       concludedAt: report.concludedAt,
     };
   }
+  if (opportunityBriefs.length > 0) {
+    const brief = opportunityBriefs[0]!;
+    workView.phase = "terminal";
+    workView.publicResearchAvailable = false;
+    workView.completedWork.push(
+      `Opportunity Brief ${brief.id} produced for Leading Opportunity ${brief.opportunity.id}`,
+    );
+    workView.nextPermittedActions = [
+      "inspect-opportunity-brief",
+      "explain-leading-opportunity",
+      "optionally-invoke-wayfinder-separately",
+      "finish",
+    ];
+    workView.opportunities = workView.opportunities?.map((opportunity) => ({
+      ...opportunity,
+      terminalRole:
+        opportunity.id === brief.opportunity.id
+          ? ("leading-opportunity" as const)
+          : opportunity.terminalRole,
+    }));
+    workView.terminal = {
+      outcome: "leading-opportunity",
+      briefId: brief.id,
+      opportunityId: brief.opportunity.id,
+      artifactPath: "opportunity-brief.md",
+      immutable: true,
+      concludedAt: brief.concludedAt,
+    };
+  }
   const pendingDecision = activeResearchApprovalDecision({
     researchApprovalDecisions,
     researchApprovalResponses,
@@ -4088,10 +4320,19 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
           remainingOrdinarySourceUnits:
             intake.researchBudget.sourceCap -
             intake.researchBudget.adversarialSourceReserve -
-            [...reservations.values()].reduce(
-              (total, reservation) => total + reservation.sourceUnits,
-              0,
-            ),
+            [...reservations.values()]
+              .filter(
+                (reservation) => reservation.researchClass !== "adversarial",
+              )
+              .reduce(
+                (total, reservation) => total + reservation.sourceUnits,
+                0,
+              ),
+          remainingAdversarialSourceUnits:
+            intake.researchBudget.adversarialSourceReserve -
+            [...reservations.values()].filter(
+              (reservation) => reservation.researchClass === "adversarial",
+            ).length,
           ...(researchExpenditures.length === 0
             ? {}
             : {
@@ -4147,6 +4388,12 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       : {
           noQualifyingOpportunityReport:
             noQualifyingOpportunityReports[0],
+        }),
+    ...(opportunityBriefs.length === 0
+      ? {}
+      : {
+          opportunityComparison: opportunityComparisons[0],
+          opportunityBrief: opportunityBriefs[0],
         }),
   };
 }
@@ -4266,6 +4513,20 @@ export async function loadCampaign(campaignPath: string) {
       "No Qualifying Opportunity Report does not match authoritative history",
     );
   }
+  const opportunityBriefPath = path.join(
+    rebuiltCampaign.campaign.path,
+    "opportunity-brief.md",
+  );
+  if (rebuiltCampaign.opportunityBrief === undefined) {
+    if (await pathExists(opportunityBriefPath)) {
+      throw new Error("Opportunity Brief has no authoritative terminal record");
+    }
+  } else if (
+    (await readFile(opportunityBriefPath, "utf8")) !==
+    renderOpportunityBrief(rebuiltCampaign.opportunityBrief)
+  ) {
+    throw new Error("Opportunity Brief does not match authoritative history");
+  }
 
   return {
     campaign: rebuiltCampaign.campaign,
@@ -4299,6 +4560,12 @@ export async function loadCampaign(campaignPath: string) {
       : {
           noQualifyingOpportunityReport:
             rebuiltCampaign.noQualifyingOpportunityReport,
+        }),
+    ...(rebuiltCampaign.opportunityBrief === undefined
+      ? {}
+      : {
+          opportunityComparison: rebuiltCampaign.opportunityComparison,
+          opportunityBrief: rebuiltCampaign.opportunityBrief,
         }),
   };
 }
@@ -4345,6 +4612,12 @@ export async function persistDerivedCampaignState(
       renderNoQualifyingOpportunityReport(
         rebuiltCampaign.noQualifyingOpportunityReport,
       ),
+    );
+  }
+  if (rebuiltCampaign.opportunityBrief !== undefined) {
+    await replacePrivateText(
+      path.join(campaignPath, "opportunity-brief.md"),
+      renderOpportunityBrief(rebuiltCampaign.opportunityBrief),
     );
   }
 }

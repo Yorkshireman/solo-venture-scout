@@ -266,6 +266,31 @@ test("packaged Scout qualifies Opportunities and reports an honest no-qualifier 
   assert.match(reference, /no-qualifying-opportunity-report\.md/);
 });
 
+test("packaged Scout compares Eligible Opportunities and hands off only a defensible Leading Opportunity", async () => {
+  const { outputRoot } = await buildPackagedScout(
+    "solo-venture-scout-leading-opportunity-guide-",
+  );
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const instructions = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+  const reference = await readFile(
+    path.join(skillRoot, "references", "campaigns.md"),
+    "utf8",
+  );
+
+  assert.match(instructions, /Required Input.+Potential Output.+Outcome Uncertainty.+Input.Output Asymmetry/is);
+  assert.match(instructions, /without.+weighted totals.+probabilities/is);
+  assert.match(instructions, /dominance.+material.+evidence.+Non-Dominated Opportunities.+visible/is);
+  assert.match(instructions, /advantage over every alternative.+major Preference.+Risk Tolerance.+credible ranges/is);
+  assert.match(instructions, /adversarial.+reserve.+decision-changing gap.+Contradiction.+contender/is);
+  assert.match(instructions, /Value Hypothesis.+provisional.+not a product specification/is);
+  assert.match(instructions, /features.+interfaces.+architecture.+roadmap.+backlog.+estimates.+delivery design.+settled mechanism.+settled positioning/is);
+  assert.match(instructions, /Wayfinder.+optional.+separate.+human-invoked.+never start/is);
+  assert.match(instructions, /Markdown.+path.+never open/is);
+  assert.match(reference, /"researchClass": "adversarial"/);
+  assert.match(reference, /"command": "concludeLeadingOpportunity"/);
+  assert.match(reference, /opportunity-brief\.md/);
+});
+
 test("packaged Scout pauses safely at restricted and paid research boundaries", async () => {
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-approval-guide-");
   const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");

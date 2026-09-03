@@ -12,7 +12,7 @@
  *       sourceUnits: number;
  *       purpose: string;
  *       retrievalRoute: string;
- *       researchClass?: "deepening" | "open-world-discovery";
+ *       researchClass?: "deepening" | "open-world-discovery" | "adversarial";
  *       opportunityId?: string;
  *       approvalId?: string;
  *       decisionValuePriorityId?: string;

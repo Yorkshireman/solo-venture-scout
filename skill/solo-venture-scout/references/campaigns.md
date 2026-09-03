@@ -1106,6 +1106,192 @@ ordinary Source units, `no-permitted-positive-decision-value` when no lawful in-
 action can change a gate, and `qualification-complete` only when at least one Opportunity
 is eligible for later comparison.
 
+## Reserve the adversarial challenge
+
+After Qualification Gates complete with at least one Eligible Opportunity, reserve each
+protected adversarial Source unit against the apparent leader. Use the normal
+`recordPublicResearchObservation` loop to settle every reservation:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "reserve-adversarial-source-stable-request-id",
+  "command": "reservePublicResearch",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "reservedAt": "2026-08-31T11:05:00.000Z",
+    "reservation": {
+      "id": "stable-adversarial-reservation-1",
+      "sourceUnits": 1,
+      "purpose": "Challenge the apparent leader for decision-changing gaps, contradictions, or contenders",
+      "retrievalRoute": "public-web-search",
+      "researchClass": "adversarial",
+      "opportunityId": "stable-apparent-leader-id"
+    }
+  }
+}
+```
+
+Adversarial capacity is separate from the ordinary eighty/twenty allocation. It becomes
+available only after qualification completes, must name an Eligible Opportunity, and
+cannot exceed `adversarialSourceReserve`. A Leading Opportunity requires the complete
+reserve to be settled against the same apparent leader.
+
+## Conclude a Leading Opportunity
+
+Submit one strict, unscored comparison and the evidence-backed fields the kernel needs
+to derive the immutable Opportunity Brief:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "conclude-leading-opportunity-stable-request-id",
+  "command": "concludeLeadingOpportunity",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "concludedAt": "2026-08-31T11:30:00.000Z",
+    "comparison": {
+      "id": "stable-opportunity-comparison-id",
+      "profiles": [
+        {
+          "opportunityId": "stable-apparent-leader-id",
+          "requiredInput": {
+            "validation": { "summary": "Bounded validation input.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "initialDelivery": { "summary": "Bounded initial-delivery input.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "acquisition": { "summary": "Bounded acquisition input.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "operations": { "summary": "Bounded operating burden.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "time": { "summary": "Bounded time input.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "cash": { "summary": "Bounded cash input.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "irreversibleDownside": { "summary": "Bounded irreversible downside.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+            "opportunityCost": { "summary": "Bounded opportunity cost.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } }
+          },
+          "potentialOutput": {
+            "commercialHeadroom": { "summary": "Credible commercial headroom.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The range is uncertain."] } },
+            "scale": { "summary": "Credible bounded scale.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The range is uncertain."] } },
+            "durability": { "summary": "Credible bounded durability.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The range is uncertain."] } },
+            "strategicLeverage": { "summary": "Credible strategic leverage.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The range is uncertain."] } }
+          },
+          "outcomeUncertainty": { "summary": "Results remain high-variance within supported ranges.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["This is not a probability."] } },
+          "inputOutputAsymmetry": { "summary": "Low bounded input retains credible upside.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The ranges may change."] } },
+          "riskToleranceFit": { "fit": "within", "summary": "The bounded downside remains within the declared Risk Tolerance.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] } },
+          "preferences": [
+            {
+              "statementId": "stable-major-preference-id",
+              "effect": "advantage",
+              "materiality": "material",
+              "rationale": "The Opportunity fits the confirmed major Preference.",
+              "evidenceEntryIds": ["stable-leader-inference-id"],
+              "confidence": { "level": "medium", "limitingFactors": ["Fit is evidence-backed but bounded."] }
+            }
+          ],
+          "advantages": [
+            {
+              "statementId": "stable-confirmed-advantage-id",
+              "effect": "reduces-input",
+              "rationale": "Demonstrated leverage reduces validation input.",
+              "evidenceEntryIds": ["stable-leader-inference-id"],
+              "confidence": { "level": "medium", "limitingFactors": ["Leverage varies by customer."] }
+            }
+          ]
+        }
+      ],
+      "dominanceAssessments": [],
+      "nonDominatedOpportunityIds": ["stable-apparent-leader-id"],
+      "leadingAssessment": {
+        "opportunityId": "stable-apparent-leader-id",
+        "advantagesOverAlternatives": [],
+        "noMaterialDisadvantage": {
+          "established": true,
+          "summary": "No material disadvantage exists on another major Preference or declared Risk Tolerance.",
+          "evidenceEntryIds": ["stable-leader-inference-id"],
+          "confidence": { "level": "medium", "limitingFactors": ["The evidence is bounded."] }
+        },
+        "robustAcrossCredibleRanges": {
+          "established": true,
+          "summary": "The selection persists across the supported input and output ranges.",
+          "evidenceEntryIds": ["stable-leader-inference-id"],
+          "confidence": { "level": "medium", "limitingFactors": ["Future ranges may change."] }
+        },
+        "unresolvedContenderOpportunityIds": [],
+        "decisionChangingEvidenceGapIds": [],
+        "decisionChangingContradictionIds": [],
+        "adversarialChallenge": {
+          "reservationIds": [
+            "stable-adversarial-reservation-1",
+            "stable-adversarial-reservation-2",
+            "stable-adversarial-reservation-3",
+            "stable-adversarial-reservation-4",
+            "stable-adversarial-reservation-5",
+            "stable-adversarial-reservation-6"
+          ],
+          "outcome": "leader-remains-eligible",
+          "summary": "The complete protected challenge found no decision-changing result.",
+          "evidenceEntryIds": ["stable-adversarial-inference-id"],
+          "confidence": { "level": "medium", "limitingFactors": ["The challenge is bounded."] }
+        }
+      },
+      "decision": {
+        "type": "campaign-decision",
+        "id": "stable-leading-decision-id",
+        "kind": "opportunity-comparison",
+        "outcome": "leading-opportunity",
+        "leaderOpportunityId": "stable-apparent-leader-id",
+        "intakeVersion": 1,
+        "applicableRule": "Require a robust evidence-backed stand-out after adversarial challenge.",
+        "evidenceEntryIds": ["stable-leader-inference-id", "stable-adversarial-inference-id"],
+        "rationale": "The Opportunity retains its supported advantage across credible ranges.",
+        "confidence": { "level": "medium", "limitingFactors": ["Public Research is not market validation."] },
+        "limitations": ["The recommendation remains subject to separate validation."],
+        "decidedAt": "2026-08-31T11:30:00.000Z"
+      }
+    },
+    "brief": {
+      "id": "stable-leading-opportunity-brief-id",
+      "buyerEconomics": { "summary": "An identifiable buyer has supported reason and ability to pay.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["The range is bounded."] } },
+      "customerAccess": { "summary": "A plausible affordable route to customers exists.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["Access has not been externally validated."] } },
+      "alternatives": { "summary": "Current alternatives leave a supported competitive opening.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["Alternatives may change."] } },
+      "risks": [
+        { "summary": "Acquisition and operating ranges may widen.", "evidenceEntryIds": ["stable-leader-inference-id"], "confidence": { "level": "medium", "limitingFactors": ["External validation has not occurred."] } }
+      ],
+      "valueHypothesis": {
+        "status": "provisional-not-a-product-specification",
+        "customer": "Specific customer",
+        "situation": "Specific situation",
+        "smallestDesiredCustomerOutcome": "Smallest desired customer outcome",
+        "supportedReason": "Evidence supports testing this customer outcome.",
+        "confidence": { "level": "medium", "limitingFactors": ["No External Validation Action has occurred."] },
+        "supportingEvidenceEntryIds": ["stable-leader-inference-id"],
+        "challengingEvidenceEntryIds": [],
+        "assumptionIds": [],
+        "evidenceGapIds": [],
+        "disconfirmationConditions": ["The customer outcome does not occur in a separate approved validation effort."]
+      }
+    }
+  }
+}
+```
+
+For multiple Eligible Opportunities, include one profile per Opportunity, one directed
+dominance assessment for every ordered pair, and one material
+`advantagesOverAlternatives` entry for every alternative to the leader. A `dominates`
+result is valid only when all three criteria are true and `materiallyBetterOn` is
+non-empty and contains only a named comparison dimension. Every profile must represent
+every confirmed Preference and Advantage; use `effect: "not-demonstrated"` with no
+evidence IDs rather than omitting an Advantage, and record `riskToleranceFit.fit` explicitly.
+A major-Preference leader advantage must match a material `advantage` in the leader's
+profile that the alternative's profile does not share.
+The kernel derives the Non-Dominated set and the authoritative open gaps,
+Contradictions, and unresolved contenders. It rejects a hidden survivor, weak evidence,
+incomplete commercial-range coverage, an incomplete adversarial reserve, a point score,
+an unresolved contender, or a product-specification field.
+
+Success creates `opportunity-brief.md` with mode `0600` and returns its absolute path,
+`format: "markdown"`, and `immutable: true`. Report those values without opening the
+file. The brief's Wayfinder instruction is optional and records `invoked: false`; only
+the developer may start that separate effort.
+
 ## Conclude No Qualifying Opportunity
 
 When no Opportunity is eligible and the latest qualification-related Campaign Decision stopped

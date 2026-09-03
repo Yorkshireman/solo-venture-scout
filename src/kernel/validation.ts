@@ -1,5 +1,10 @@
 import path from "node:path";
-import { qualificationGateKinds } from "./types.js";
+import {
+  comparisonDimensions,
+  potentialOutputComparisonFields,
+  qualificationGateKinds,
+  requiredInputComparisonFields,
+} from "./types.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -567,12 +572,12 @@ export function validatePublicResearchReservation(
   }
   if (
     value.researchClass !== undefined &&
-    !["deepening", "open-world-discovery"].includes(
+    !["deepening", "open-world-discovery", "adversarial"].includes(
       String(value.researchClass),
     )
   ) {
     details.push(
-      `${field}.researchClass must be deepening or open-world-discovery when present.`,
+      `${field}.researchClass must be deepening, open-world-discovery, or adversarial when present.`,
     );
   }
   for (const optionalIdentity of [
@@ -588,8 +593,12 @@ export function validatePublicResearchReservation(
       details.push(`${field}.${optionalIdentity} must be a non-empty string when present.`);
     }
   }
-  if (value.researchClass !== "deepening" && value.opportunityId !== undefined) {
-    details.push(`${field}.opportunityId is available only for Opportunity deepening.`);
+  if (
+    value.researchClass !== "deepening" &&
+    value.researchClass !== "adversarial" &&
+    value.opportunityId !== undefined
+  ) {
+    details.push(`${field}.opportunityId is available only for Opportunity deepening or adversarial challenge.`);
   }
   if (value.opportunityId === undefined && value.approvalId !== undefined) {
     details.push(`${field}.approvalId requires an Opportunity-specific reservation.`);
@@ -2554,6 +2563,434 @@ export function validateConcludeNoQualifyingOpportunityFields(
           `${field}.evidenceGapIds`,
           true,
         ),
+      );
+    }
+  }
+  return details;
+}
+
+function containsFalsePrecision(value: string): boolean {
+  return /(?:\b\d+(?:\.\d+)?\s*%|\b(?:probability|chance|likelihood)\s+(?:of\s+)?\d|\b(?:score|rating)\s*(?:of|:)?\s*\d)/i.test(
+    value,
+  );
+}
+
+export function validateEvidenceBackedComparison(
+  value: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, ["summary", "evidenceEntryIds", "confidence"])
+  ) {
+    return [`${field} must contain a qualitative summary, evidence identities, and Evidence Confidence.`];
+  }
+  const details = [
+    ...validateReasoningTextFields(value, field, ["summary"]),
+    ...validateEntryIdList(value.evidenceEntryIds, `${field}.evidenceEntryIds`, false),
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+  ];
+  if (
+    typeof value.summary === "string" &&
+    containsFalsePrecision(value.summary)
+  ) {
+    details.push(`${field}.summary must not contain an invented probability or numeric score.`);
+  }
+  return details;
+}
+
+function validateNoFalsePrecision(value: unknown, field: string): string[] {
+  if (typeof value === "string") {
+    return containsFalsePrecision(value)
+      ? [`${field} must not contain an invented probability or numeric score.`]
+      : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) =>
+      validateNoFalsePrecision(entry, `${field}[${index}]`),
+    );
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).flatMap(([name, entry]) =>
+      name === "summary"
+        ? []
+        : validateNoFalsePrecision(entry, `${field}.${name}`),
+    );
+  }
+  return [];
+}
+
+function validateComparisonProfile(value: unknown, field: string): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "opportunityId",
+      "requiredInput",
+      "potentialOutput",
+      "outcomeUncertainty",
+      "inputOutputAsymmetry",
+      "riskToleranceFit",
+      "preferences",
+      "advantages",
+    ])
+  ) {
+    return [`${field} must contain the complete unscored Opportunity comparison profile.`];
+  }
+  const details = validateReasoningTextFields(value, field, ["opportunityId"]);
+  for (const [groupName, fields] of [
+    ["requiredInput", requiredInputComparisonFields],
+    ["potentialOutput", potentialOutputComparisonFields],
+  ] as const) {
+    const group = value[groupName];
+    if (!isRecord(group) || !hasOnlyFields(group, [...fields])) {
+      details.push(`${field}.${groupName} must contain every qualitative comparison dimension without a total.`);
+      continue;
+    }
+    for (const dimension of fields) {
+      details.push(
+        ...validateEvidenceBackedComparison(
+          group[dimension],
+          `${field}.${groupName}.${dimension}`,
+        ),
+      );
+    }
+  }
+  details.push(
+    ...validateEvidenceBackedComparison(
+      value.outcomeUncertainty,
+      `${field}.outcomeUncertainty`,
+    ),
+    ...validateEvidenceBackedComparison(
+      value.inputOutputAsymmetry,
+      `${field}.inputOutputAsymmetry`,
+    ),
+  );
+  if (
+    !isRecord(value.riskToleranceFit) ||
+    !hasOnlyFields(value.riskToleranceFit, [
+      "fit",
+      "summary",
+      "evidenceEntryIds",
+      "confidence",
+    ]) ||
+    !["within", "material-disadvantage"].includes(String(value.riskToleranceFit.fit))
+  ) {
+    details.push(`${field}.riskToleranceFit must record whether the Opportunity is within the declared Risk Tolerance.`);
+  } else {
+    const { fit: _fit, ...evidenceBacked } = value.riskToleranceFit;
+    details.push(
+      ...validateEvidenceBackedComparison(
+        evidenceBacked,
+        `${field}.riskToleranceFit`,
+      ),
+    );
+  }
+  for (const listName of ["preferences", "advantages"] as const) {
+    const entries = value[listName];
+    if (!Array.isArray(entries)) {
+      details.push(`${field}.${listName} must be an array.`);
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      const entryField = `${field}.${listName}[${index}]`;
+      const fields = listName === "preferences"
+        ? ["statementId", "effect", "materiality", "rationale", "evidenceEntryIds", "confidence"]
+        : ["statementId", "effect", "rationale", "evidenceEntryIds", "confidence"];
+      if (!isRecord(entry) || !hasOnlyFields(entry, fields)) {
+        details.push(`${entryField} must be a complete demonstrated ${listName === "preferences" ? "Preference fit" : "Advantage"}.`);
+        continue;
+      }
+      details.push(
+        ...validateReasoningTextFields(entry, entryField, ["statementId", "rationale"]),
+        ...validateEntryIdList(
+          entry.evidenceEntryIds,
+          `${entryField}.evidenceEntryIds`,
+          listName === "advantages" && entry.effect === "not-demonstrated",
+        ),
+        ...validateEvidenceConfidence(entry.confidence, `${entryField}.confidence`),
+      );
+      if (
+        listName === "preferences" &&
+        !["advantage", "neutral", "disadvantage"].includes(String(entry.effect))
+      ) {
+        details.push(`${entryField}.effect must be advantage, neutral, or disadvantage.`);
+      }
+      if (
+        listName === "preferences" &&
+        !["minor", "material"].includes(String(entry.materiality))
+      ) {
+        details.push(`${entryField}.materiality must be minor or material.`);
+      }
+      if (
+        listName === "advantages" &&
+        !["reduces-input", "increases-output", "improves-access", "reduces-risk", "not-demonstrated"].includes(String(entry.effect))
+      ) {
+        details.push(`${entryField}.effect must describe concrete leverage or explicitly record that it is not demonstrated.`);
+      }
+      if (
+        listName === "advantages" &&
+        entry.effect === "not-demonstrated" &&
+        Array.isArray(entry.evidenceEntryIds) &&
+        entry.evidenceEntryIds.length > 0
+      ) {
+        details.push(`${entryField}.evidenceEntryIds must be empty when the Advantage is not demonstrated.`);
+      }
+    }
+  }
+  return details;
+}
+
+function validateComparisonCampaignDecision(
+  value: unknown,
+  concludedAt: unknown,
+  field: string,
+): string[] {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      "type", "id", "kind", "outcome", "leaderOpportunityId",
+      "intakeVersion", "applicableRule", "evidenceEntryIds", "rationale",
+      "confidence", "limitations", "decidedAt",
+    ]) ||
+    value.type !== "campaign-decision" ||
+    value.kind !== "opportunity-comparison" ||
+    value.outcome !== "leading-opportunity"
+  ) {
+    return [`${field} must be a complete Leading Opportunity comparison Campaign Decision.`];
+  }
+  const details = validateReasoningTextFields(value, field, [
+    "id", "leaderOpportunityId", "applicableRule", "rationale",
+  ]);
+  if (!Number.isSafeInteger(value.intakeVersion) || Number(value.intakeVersion) <= 0) {
+    details.push(`${field}.intakeVersion must be a positive safe integer.`);
+  }
+  if (!isIsoInstant(value.decidedAt) || value.decidedAt !== concludedAt) {
+    details.push(`${field}.decidedAt must equal payload.concludedAt.`);
+  }
+  details.push(
+    ...validateEntryIdList(value.evidenceEntryIds, `${field}.evidenceEntryIds`, false),
+    ...validateEvidenceConfidence(value.confidence, `${field}.confidence`),
+    ...validateAssessmentLimitations(value.limitations, field),
+  );
+  return details;
+}
+
+export function validateConcludeLeadingOpportunityFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details = validatePublicResearchCommandBase(command.payload, "concludedAt");
+  const comparison = command.payload.comparison;
+  if (
+    !isRecord(comparison) ||
+    !hasOnlyFields(comparison, [
+      "id", "profiles", "dominanceAssessments", "nonDominatedOpportunityIds",
+      "leadingAssessment", "decision",
+    ])
+  ) {
+    details.push("payload.comparison must be a complete unscored Opportunity comparison.");
+    return details;
+  }
+  details.push(...validateReasoningTextFields(comparison, "payload.comparison", ["id"]));
+  details.push(
+    ...validateNoFalsePrecision(comparison, "payload.comparison"),
+  );
+  if (!Array.isArray(comparison.profiles) || comparison.profiles.length === 0) {
+    details.push("payload.comparison.profiles must contain every Eligible Opportunity.");
+  } else {
+    for (const [index, profile] of comparison.profiles.entries()) {
+      details.push(...validateComparisonProfile(profile, `payload.comparison.profiles[${index}]`));
+    }
+  }
+  if (!Array.isArray(comparison.dominanceAssessments)) {
+    details.push("payload.comparison.dominanceAssessments must be an array.");
+  } else {
+    for (const [index, assessment] of comparison.dominanceAssessments.entries()) {
+      const field = `payload.comparison.dominanceAssessments[${index}]`;
+      if (
+        !isRecord(assessment) ||
+        !hasOnlyFields(assessment, [
+          "challengerOpportunityId", "alternativeOpportunityId", "outcome",
+          "criteria", "rationale", "evidenceEntryIds", "confidence",
+        ]) ||
+        !isRecord(assessment.criteria) ||
+        !hasOnlyFields(assessment.criteria, [
+          "requiresNoMoreMaterialInput", "offersNoLessCredibleOutput",
+          "fitsDeveloperProfileAtLeastAsWell", "materiallyBetterOn",
+        ])
+      ) {
+        details.push(`${field} must be a complete pairwise dominance assessment.`);
+        continue;
+      }
+      details.push(
+        ...validateReasoningTextFields(assessment, field, ["challengerOpportunityId", "alternativeOpportunityId", "rationale"]),
+        ...validateEntryIdList(assessment.evidenceEntryIds, `${field}.evidenceEntryIds`, false),
+        ...validateEvidenceConfidence(assessment.confidence, `${field}.confidence`),
+      );
+      if (!["dominates", "does-not-dominate"].includes(String(assessment.outcome))) {
+        details.push(`${field}.outcome must be dominates or does-not-dominate.`);
+      }
+      for (const criterion of ["requiresNoMoreMaterialInput", "offersNoLessCredibleOutput", "fitsDeveloperProfileAtLeastAsWell"] as const) {
+        if (typeof assessment.criteria[criterion] !== "boolean") {
+          details.push(`${field}.criteria.${criterion} must be a boolean.`);
+        }
+      }
+      details.push(...validateEntryIdList(assessment.criteria.materiallyBetterOn, `${field}.criteria.materiallyBetterOn`, assessment.outcome !== "dominates"));
+      if (
+        Array.isArray(assessment.criteria.materiallyBetterOn) &&
+        assessment.criteria.materiallyBetterOn.some(
+          (dimension) =>
+            !(comparisonDimensions as readonly unknown[]).includes(dimension),
+        )
+      ) {
+        details.push(`${field}.criteria.materiallyBetterOn contains an unknown comparison dimension.`);
+      }
+    }
+  }
+  details.push(
+    ...validateEntryIdList(comparison.nonDominatedOpportunityIds, "payload.comparison.nonDominatedOpportunityIds", false),
+    ...validateComparisonCampaignDecision(comparison.decision, command.payload.concludedAt, "payload.comparison.decision"),
+  );
+  const leading = comparison.leadingAssessment;
+  if (
+    !isRecord(leading) ||
+    !hasOnlyFields(leading, [
+      "opportunityId", "advantagesOverAlternatives", "noMaterialDisadvantage",
+      "robustAcrossCredibleRanges", "unresolvedContenderOpportunityIds",
+      "decisionChangingEvidenceGapIds", "decisionChangingContradictionIds",
+      "adversarialChallenge",
+    ])
+  ) {
+    details.push("payload.comparison.leadingAssessment must contain the complete robust-leader contract.");
+  } else {
+    details.push(...validateReasoningTextFields(leading, "payload.comparison.leadingAssessment", ["opportunityId"]));
+    for (const emptyList of ["unresolvedContenderOpportunityIds", "decisionChangingEvidenceGapIds", "decisionChangingContradictionIds"] as const) {
+      if (!Array.isArray(leading[emptyList])) {
+        details.push(`payload.comparison.leadingAssessment.${emptyList} must be an array.`);
+      }
+    }
+    if (!Array.isArray(leading.advantagesOverAlternatives)) {
+      details.push("payload.comparison.leadingAssessment.advantagesOverAlternatives must be an array.");
+    } else {
+      for (const [index, advantage] of leading.advantagesOverAlternatives.entries()) {
+        const field = `payload.comparison.leadingAssessment.advantagesOverAlternatives[${index}]`;
+        if (!isRecord(advantage)) {
+          details.push(`${field} must be an object.`);
+          continue;
+        }
+        const expectedFields = ["alternativeOpportunityId", "basis", ...(advantage.preferenceStatementId === undefined ? [] : ["preferenceStatementId"]), "rationale", "evidenceEntryIds", "confidence"];
+        if (!hasOnlyFields(advantage, expectedFields)) {
+          details.push(`${field} must be a complete material advantage.`);
+          continue;
+        }
+        details.push(
+          ...validateReasoningTextFields(advantage, field, ["alternativeOpportunityId", "rationale", ...(advantage.preferenceStatementId === undefined ? [] : ["preferenceStatementId"])]),
+          ...validateEntryIdList(advantage.evidenceEntryIds, `${field}.evidenceEntryIds`, false),
+          ...validateEvidenceConfidence(advantage.confidence, `${field}.confidence`),
+        );
+        if (!["input-output-asymmetry", "major-preference"].includes(String(advantage.basis))) {
+          details.push(`${field}.basis must be input-output-asymmetry or major-preference.`);
+        }
+      }
+    }
+    for (const [name, assessment] of [
+      ["noMaterialDisadvantage", leading.noMaterialDisadvantage],
+      ["robustAcrossCredibleRanges", leading.robustAcrossCredibleRanges],
+    ] as const) {
+      if (!isRecord(assessment) || assessment.established !== true) {
+        details.push(`payload.comparison.leadingAssessment.${name}.established must be true.`);
+      } else {
+        const { established: _established, ...evidenceBacked } = assessment;
+        details.push(...validateEvidenceBackedComparison(evidenceBacked, `payload.comparison.leadingAssessment.${name}`));
+      }
+    }
+    const challenge = leading.adversarialChallenge;
+    if (
+      !isRecord(challenge) ||
+      challenge.outcome !== "leader-remains-eligible" ||
+      !Array.isArray(challenge.reservationIds)
+    ) {
+      details.push("payload.comparison.leadingAssessment.adversarialChallenge must record the completed protected challenge.");
+    } else {
+      const { reservationIds: _reservationIds, outcome: _outcome, ...evidenceBacked } = challenge;
+      details.push(
+        ...validateEntryIdList(challenge.reservationIds, "payload.comparison.leadingAssessment.adversarialChallenge.reservationIds", false),
+        ...validateEvidenceBackedComparison(evidenceBacked, "payload.comparison.leadingAssessment.adversarialChallenge"),
+      );
+    }
+  }
+  const brief = command.payload.brief;
+  if (
+    !isRecord(brief) ||
+    !hasOnlyFields(brief, ["id", "buyerEconomics", "customerAccess", "alternatives", "risks", "valueHypothesis"])
+  ) {
+    details.push("payload.brief must contain the complete Opportunity Brief input without product specification fields.");
+    return details;
+  }
+  details.push(...validateReasoningTextFields(brief, "payload.brief", ["id"]));
+  for (const field of ["buyerEconomics", "customerAccess", "alternatives"] as const) {
+    details.push(...validateEvidenceBackedComparison(brief[field], `payload.brief.${field}`));
+  }
+  if (!Array.isArray(brief.risks) || brief.risks.length === 0) {
+    details.push("payload.brief.risks must contain at least one evidence-backed risk or limitation.");
+  } else {
+    for (const [index, risk] of brief.risks.entries()) {
+      details.push(...validateEvidenceBackedComparison(risk, `payload.brief.risks[${index}]`));
+    }
+  }
+  const hypothesis = brief.valueHypothesis;
+  if (
+    !isRecord(hypothesis) ||
+    !hasOnlyFields(hypothesis, [
+      "status", "customer", "situation", "smallestDesiredCustomerOutcome",
+      "supportedReason", "confidence", "supportingEvidenceEntryIds",
+      "challengingEvidenceEntryIds", "assumptionIds", "evidenceGapIds",
+      "disconfirmationConditions",
+    ]) ||
+    hypothesis.status !== "provisional-not-a-product-specification"
+  ) {
+    details.push("payload.brief.valueHypothesis must be explicitly provisional and contain no product specification fields.");
+  } else {
+    details.push(
+      ...validateReasoningTextFields(hypothesis, "payload.brief.valueHypothesis", ["customer", "situation", "smallestDesiredCustomerOutcome", "supportedReason"]),
+      ...validateEvidenceConfidence(hypothesis.confidence, "payload.brief.valueHypothesis.confidence"),
+      ...validateEntryIdList(hypothesis.supportingEvidenceEntryIds, "payload.brief.valueHypothesis.supportingEvidenceEntryIds", false),
+      ...validateEntryIdList(hypothesis.challengingEvidenceEntryIds, "payload.brief.valueHypothesis.challengingEvidenceEntryIds", true),
+      ...validateEntryIdList(hypothesis.assumptionIds, "payload.brief.valueHypothesis.assumptionIds", true),
+      ...validateEntryIdList(hypothesis.evidenceGapIds, "payload.brief.valueHypothesis.evidenceGapIds", true),
+    );
+    if (!Array.isArray(hypothesis.disconfirmationConditions) || hypothesis.disconfirmationConditions.length === 0) {
+      details.push("payload.brief.valueHypothesis.disconfirmationConditions must not be empty.");
+    } else {
+      for (const [index, condition] of hypothesis.disconfirmationConditions.entries()) {
+        details.push(...validatePersistableText(condition, `payload.brief.valueHypothesis.disconfirmationConditions[${index}]`));
+      }
+    }
+    const productSpecificationLanguage =
+      /\b(?:features?|interfaces?|architecture|roadmap|backlog|estimates?|mvp|delivery design|settled mechanisms?|settled positioning)\b/i;
+    const hypothesisText = [
+      hypothesis.customer,
+      hypothesis.situation,
+      hypothesis.smallestDesiredCustomerOutcome,
+      hypothesis.supportedReason,
+      ...(Array.isArray(hypothesis.disconfirmationConditions)
+        ? hypothesis.disconfirmationConditions
+        : []),
+      ...(isRecord(hypothesis.confidence) &&
+      Array.isArray(hypothesis.confidence.limitingFactors)
+        ? hypothesis.confidence.limitingFactors
+        : []),
+    ];
+    if (
+      hypothesisText.some(
+        (value) =>
+          typeof value === "string" && productSpecificationLanguage.test(value),
+      )
+    ) {
+      details.push(
+        "payload.brief.valueHypothesis contains product specification language.",
       );
     }
   }

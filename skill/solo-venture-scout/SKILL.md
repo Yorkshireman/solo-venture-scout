@@ -301,6 +301,54 @@ Opportunities. Show discovery coverage, Breadth Gate state, Research Budget use,
 limitations, and traceable continuation conditions. Never send this report to Wayfinder
 or mutate the completed Campaign; a continuation requires separate developer authority.
 
+## Compare Eligible Opportunities and challenge the apparent leader
+
+Compare every Eligible Opportunity through the complete qualitative profile in
+[references/campaigns.md](references/campaigns.md): Required Input, Potential Output,
+Outcome Uncertainty, Input–Output Asymmetry, every confirmed Preference, and every
+demonstrated Advantage. Never use weighted totals, scores, rankings, or invented
+probabilities. Outcome Uncertainty describes real variation in supported results and
+must remain distinct from Evidence Confidence.
+
+Apply dominance pairwise and transparently, using material evidence only. Remove an
+Eligible Opportunity only when medium- or high-confidence evidence establishes that another requires no more material
+input, offers no less credible output, fits the Developer Profile at least as well, and
+is materially better somewhere. Keep all Non-Dominated Opportunities visible even when
+one appears strongest. An Advantage counts only when evidence shows that it reduces
+Required Input, increases Potential Output, improves access, or reduces risk.
+
+Treat the apparent leader as provisional. Use `reservePublicResearch` with
+`researchClass: "adversarial"` against that Opportunity, then settle the complete
+protected adversarial reserve through the ordinary read-only Observation loop. Search
+specifically for an eligibility failure, disconfirming evidence, a decision-changing
+Evidence Gap or Contradiction, and a stronger or unresolved contender. Do not use this
+capacity for supportive research or allow it to count against the ordinary allocation.
+
+Run `concludeLeadingOpportunity` only when one Non-Dominated Opportunity has a
+medium- or high-confidence material advantage over every alternative on Input–Output
+Asymmetry or a confirmed major Preference, has no material disadvantage on another
+major Preference or declared Risk Tolerance, and remains selected across credible ranges
+of input and output. The complete adversarial challenge must leave it eligible with no
+decision-changing gap, Contradiction, or unresolved contender. Otherwise do not force a
+Leading Opportunity.
+
+Represent every confirmed Preference and Advantage in every comparison profile. Mark a
+confirmed Advantage as `not-demonstrated` with no evidence IDs when it has no supported
+leverage for that Opportunity, and record the declared Risk Tolerance fit explicitly.
+The kernel derives the decision-changing gaps, Contradictions, and unresolved contenders
+from authoritative Campaign history; do not treat empty submitted arrays as proof.
+
+The resulting Opportunity Brief is immutable and covers the complete eligibility,
+economics, access, alternatives, Required Input, Potential Output, Outcome Uncertainty,
+Input–Output Asymmetry, risks, evidence limits, comparison context, and traceability
+contract. Its dedicated Value Hypothesis must be explicitly provisional and say
+`provisional—not a product specification` and contain only the smallest desired customer outcome, support,
+challenge, uncertainty, and disconfirmation conditions. It excludes features, interfaces, architecture, roadmap, backlog, estimates, delivery design, a settled mechanism, and settled positioning.
+
+Report the generated document as Markdown with its exact path. Never open the document
+in another application without the developer's choice. Offer its instruction for an
+optional, separate, human-invoked Wayfinder effort, but never start Wayfinder.
+
 ## Pause for Approved Research
 
 Public Research remains the autonomous baseline. Before any restricted access or paid

@@ -147,7 +147,7 @@ export type PublicResearchReservation = {
   sourceUnits: 1;
   purpose: string;
   retrievalRoute: string;
-  researchClass?: "deepening" | "open-world-discovery";
+  researchClass?: "deepening" | "open-world-discovery" | "adversarial";
   opportunityId?: string;
   approvalId?: string;
   decisionValuePriorityId?: string;
@@ -484,10 +484,26 @@ export type QualificationCampaignDecision = {
   decidedAt: string;
 };
 
+export type ComparisonCampaignDecision = {
+  type: "campaign-decision";
+  id: string;
+  kind: "opportunity-comparison";
+  outcome: "leading-opportunity";
+  leaderOpportunityId: string;
+  intakeVersion: number;
+  applicableRule: string;
+  evidenceEntryIds: string[];
+  rationale: string;
+  confidence: EvidenceConfidence;
+  limitations: string[];
+  decidedAt: string;
+};
+
 export type CampaignDecision =
   | FormationCampaignDecision
   | OpportunityGateDecision
-  | QualificationCampaignDecision;
+  | QualificationCampaignDecision
+  | ComparisonCampaignDecision;
 
 export type ExclusionGate = {
   id: string;
@@ -666,6 +682,242 @@ export type ConcludeNoQualifyingOpportunityCommand = {
     concludedAt: string;
     reportId: string;
     continuationConditions: NoQualifyingOpportunityContinuationCondition[];
+  };
+};
+
+export type EvidenceBackedComparison = {
+  summary: string;
+  evidenceEntryIds: string[];
+  confidence: EvidenceConfidence;
+};
+
+export const requiredInputComparisonFields = [
+  "validation",
+  "initialDelivery",
+  "acquisition",
+  "operations",
+  "time",
+  "cash",
+  "irreversibleDownside",
+  "opportunityCost",
+] as const;
+
+export const potentialOutputComparisonFields = [
+  "commercialHeadroom",
+  "scale",
+  "durability",
+  "strategicLeverage",
+] as const;
+
+export const comparisonDimensions = [
+  "validation",
+  "initial-delivery",
+  "acquisition",
+  "operations",
+  "time",
+  "cash",
+  "irreversible-downside",
+  "opportunity-cost",
+  "commercial-headroom",
+  "scale",
+  "durability",
+  "strategic-leverage",
+  "outcome-uncertainty",
+  "input-output-asymmetry",
+  "developer-profile-fit",
+] as const;
+
+export type ComparisonDimension = (typeof comparisonDimensions)[number];
+
+export type OpportunityComparisonProfile = {
+  opportunityId: string;
+  requiredInput: Record<
+    (typeof requiredInputComparisonFields)[number],
+    EvidenceBackedComparison
+  >;
+  potentialOutput: Record<
+    (typeof potentialOutputComparisonFields)[number],
+    EvidenceBackedComparison
+  >;
+  outcomeUncertainty: EvidenceBackedComparison;
+  inputOutputAsymmetry: EvidenceBackedComparison;
+  riskToleranceFit: EvidenceBackedComparison & {
+    fit: "within" | "material-disadvantage";
+  };
+  preferences: Array<{
+    statementId: string;
+    effect: "advantage" | "neutral" | "disadvantage";
+    materiality: "minor" | "material";
+    rationale: string;
+    evidenceEntryIds: string[];
+    confidence: EvidenceConfidence;
+  }>;
+  advantages: Array<{
+    statementId: string;
+    effect:
+      | "reduces-input"
+      | "increases-output"
+      | "improves-access"
+      | "reduces-risk"
+      | "not-demonstrated";
+    rationale: string;
+    evidenceEntryIds: string[];
+    confidence: EvidenceConfidence;
+  }>;
+};
+
+export type DominanceAssessment = {
+  challengerOpportunityId: string;
+  alternativeOpportunityId: string;
+  outcome: "dominates" | "does-not-dominate";
+  criteria: {
+    requiresNoMoreMaterialInput: boolean;
+    offersNoLessCredibleOutput: boolean;
+    fitsDeveloperProfileAtLeastAsWell: boolean;
+    materiallyBetterOn: ComparisonDimension[];
+  };
+  rationale: string;
+  evidenceEntryIds: string[];
+  confidence: EvidenceConfidence;
+};
+
+export type LeadingAssessment = {
+  opportunityId: string;
+  advantagesOverAlternatives: Array<{
+    alternativeOpportunityId: string;
+    basis: "input-output-asymmetry" | "major-preference";
+    preferenceStatementId?: string;
+    rationale: string;
+    evidenceEntryIds: string[];
+    confidence: EvidenceConfidence;
+  }>;
+  noMaterialDisadvantage: EvidenceBackedComparison & { established: true };
+  robustAcrossCredibleRanges: EvidenceBackedComparison & { established: true };
+  unresolvedContenderOpportunityIds: string[];
+  decisionChangingEvidenceGapIds: string[];
+  decisionChangingContradictionIds: string[];
+  adversarialChallenge: EvidenceBackedComparison & {
+    reservationIds: string[];
+    outcome: "leader-remains-eligible";
+  };
+};
+
+export type OpportunityComparison = {
+  id: string;
+  profiles: OpportunityComparisonProfile[];
+  dominanceAssessments: DominanceAssessment[];
+  nonDominatedOpportunityIds: string[];
+  leadingAssessment: LeadingAssessment;
+  decision: ComparisonCampaignDecision;
+};
+
+export type ValueHypothesis = {
+  status: "provisional-not-a-product-specification";
+  customer: string;
+  situation: string;
+  smallestDesiredCustomerOutcome: string;
+  supportedReason: string;
+  confidence: EvidenceConfidence;
+  supportingEvidenceEntryIds: string[];
+  challengingEvidenceEntryIds: string[];
+  assumptionIds: string[];
+  evidenceGapIds: string[];
+  disconfirmationConditions: string[];
+};
+
+export type LeadingOpportunityBriefInput = {
+  id: string;
+  buyerEconomics: EvidenceBackedComparison;
+  customerAccess: EvidenceBackedComparison;
+  alternatives: EvidenceBackedComparison;
+  risks: EvidenceBackedComparison[];
+  valueHypothesis: ValueHypothesis;
+};
+
+export type OpportunityBrief = {
+  briefVersion: string;
+  id: string;
+  kind: "opportunity-brief";
+  role: "scout-recommended-leading-opportunity";
+  campaignId: string;
+  concludedAt: string;
+  intakeVersion: number;
+  supersedes: null;
+  opportunity: OpportunityBriefOpportunity;
+  commercialOutcomeTarget: CommercialOutcomeTarget;
+  researchBudget: ResearchBudgetView;
+  coverage: NoQualifyingOpportunityReport["coverage"];
+  eligibility: Array<{
+    kind: "market-safety" | "hard-constraint" | QualificationGateKind;
+    state: "passed";
+    decisionId: string;
+    confidence: EvidenceConfidence;
+    supportingEvidenceEntryIds: string[];
+    challengingEvidenceEntryIds: string[];
+    evidenceGapIds: string[];
+    contradictionIds: string[];
+    rationale: string;
+  }>;
+  buyerEconomics: EvidenceBackedComparison;
+  customerAccess: EvidenceBackedComparison;
+  alternatives: EvidenceBackedComparison;
+  valueHypothesis: ValueHypothesis;
+  requiredInput: OpportunityComparisonProfile["requiredInput"];
+  potentialOutput: OpportunityComparisonProfile["potentialOutput"];
+  outcomeUncertainty: EvidenceBackedComparison;
+  inputOutputAsymmetry: EvidenceBackedComparison;
+  profileFit: Pick<
+    OpportunityComparisonProfile,
+    "preferences" | "advantages" | "riskToleranceFit"
+  >;
+  commercialRanges: CommercialPlausibilityRanges;
+  risks: EvidenceBackedComparison[];
+  evidenceLimits: {
+    limitations: string[];
+    assumptionIds: string[];
+    evidenceGapIds: string[];
+    contradictionIds: string[];
+    disconfirmingEvidenceEntryIds: string[];
+  };
+  comparisonContext: {
+    comparisonId: string;
+    eligibleOpportunityIds: string[];
+    nonDominatedOpportunityIds: string[];
+    dominanceAssessments: DominanceAssessment[];
+    selectionRationale: string;
+    decisionId: string;
+    adversarialReservationIds: string[];
+  };
+  traceability: {
+    authoritativeRecordsPath: "records.jsonl";
+    evidenceLedgerPath: "evidence-ledger.json";
+    rows: Array<{ conclusion: string; entryIds: string[] }>;
+  };
+  wayfinderHandoff: {
+    optional: true;
+    invoked: false;
+    briefPath: "opportunity-brief.md";
+    instruction: string;
+  };
+};
+
+type OpportunityBriefOpportunity = {
+  id: string;
+  customer: string;
+  situation: string;
+  costlyProblem: OpportunityFormationAssessment["costlyProblem"];
+};
+
+export type ConcludeLeadingOpportunityCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "concludeLeadingOpportunity";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    concludedAt: string;
+    comparison: OpportunityComparison;
+    brief: LeadingOpportunityBriefInput;
   };
 };
 
@@ -923,6 +1175,7 @@ export type ResearchBudgetView = {
   reservedSourceUnits: number;
   settledSourceUnits: number;
   remainingOrdinarySourceUnits: number;
+  remainingAdversarialSourceUnits: number;
   paidSpendCap?: { amount: number; currency: string };
   recordedPaidSpend?: { amount: number; currency: string };
   remainingPaidSpend?: { amount: number; currency: string };
@@ -1067,7 +1320,7 @@ export type WorkView = {
       decisionIds: string[];
     };
     eligibility?: "ineligible" | "pending-qualification" | "eligible";
-    terminalRole?: null;
+    terminalRole?: null | "leading-opportunity";
   }>;
   researchAllocation?:
     | {
@@ -1101,13 +1354,22 @@ export type WorkView = {
     stopReason: QualificationCampaignDecision["stopReason"];
     decisionId: string;
   };
-  terminal?: {
-    outcome: "no-qualifying-opportunity";
-    reportId: string;
-    artifactPath: "no-qualifying-opportunity-report.md";
-    immutable: true;
-    concludedAt: string;
-  };
+  terminal?:
+    | {
+        outcome: "no-qualifying-opportunity";
+        reportId: string;
+        artifactPath: "no-qualifying-opportunity-report.md";
+        immutable: true;
+        concludedAt: string;
+      }
+    | {
+        outcome: "leading-opportunity";
+        briefId: string;
+        opportunityId: string;
+        artifactPath: "opportunity-brief.md";
+        immutable: true;
+        concludedAt: string;
+      };
 };
 
 export type CoordinatorLease = {
@@ -1129,6 +1391,7 @@ export type AuthoritativeOperation =
   | "record-opportunity-exclusion-gates"
   | "record-opportunity-qualification-gates"
   | "conclude-no-qualifying-opportunity"
+  | "conclude-leading-opportunity"
   | "request-research-approval"
   | "record-research-approval-information"
   | "respond-research-approval"

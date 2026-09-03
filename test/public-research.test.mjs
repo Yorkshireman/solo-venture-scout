@@ -127,6 +127,7 @@ test("a cited Public Research Observation survives a fresh-session resume", asyn
     reservedSourceUnits: 1,
     settledSourceUnits: 0,
     remainingOrdinarySourceUnits: 23,
+    remainingAdversarialSourceUnits: 6,
   });
 
   const executionMarkerPath = path.join(storagePath, "retrieved-instruction-executed");

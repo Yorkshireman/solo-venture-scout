@@ -15,6 +15,7 @@ import type {
   RecordOpportunityExclusionGatesCommand,
   RecordOpportunityQualificationGatesCommand,
   ConcludeNoQualifyingOpportunityCommand,
+  ConcludeLeadingOpportunityCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -46,6 +47,8 @@ import {
   opportunityQualificationGateRecords,
   noQualifyingOpportunityRecords,
   noQualifyingOpportunityViolation,
+  leadingOpportunityRecords,
+  leadingOpportunityViolation,
   opportunityFormationRecords,
   opportunityFormationViolation,
   opportunityDeepeningViolation,
@@ -66,6 +69,7 @@ import {
   researchExpenditurePolicyViolation,
   writePrivateJson,
   elevatedRiskApprovalRequestViolation,
+  adversarialResearchViolation,
 } from "./authority.js";
 import type { CoordinatorOperationLock } from "./authority.js";
 
@@ -81,6 +85,7 @@ export type CoordinatorCommand =
   | RecordOpportunityExclusionGatesCommand
   | RecordOpportunityQualificationGatesCommand
   | ConcludeNoQualifyingOpportunityCommand
+  | ConcludeLeadingOpportunityCommand
   | RequestResearchApprovalCommand
   | RecordResearchApprovalInformationCommand
   | RespondResearchApprovalCommand
@@ -211,12 +216,13 @@ export async function runCoordinatorOperation<
 
     if (
       rebuiltCampaign.authoritativeHistory.noQualifyingOpportunityReports.length >
-      0
+        0 ||
+      rebuiltCampaign.authoritativeHistory.opportunityBriefs.length > 0
     ) {
       return coordinatorOperationFailure(command, {
         code: "SVS-CAMPAIGN-TERMINAL",
         message:
-          "The Scouting Campaign has an immutable No Qualifying Opportunity terminal record.",
+          "The Scouting Campaign has an immutable terminal record.",
         action:
           "Inspect or explain the terminal report; begin a separately authorised continuation rather than mutating this Campaign.",
       });
@@ -561,8 +567,22 @@ export async function reservePublicResearch(
         };
       }
       if (
+        command.payload.reservation.researchClass === "adversarial" &&
+        campaign.researchBudget!.remainingAdversarialSourceUnits <
+          command.payload.reservation.sourceUnits
+      ) {
+        return {
+          code: "SVS-ADVERSARIAL-RESEARCH-BUDGET-EXHAUSTED",
+          message:
+            "The protected adversarial Source reserve has no unreserved capacity.",
+          action:
+            "Do not retrieve another adversarial Source; complete the reserved challenge and compare the Eligible Opportunities.",
+        };
+      }
+      if (
+        command.payload.reservation.researchClass !== "adversarial" &&
         campaign.researchBudget!.remainingOrdinarySourceUnits <
-        command.payload.reservation.sourceUnits
+          command.payload.reservation.sourceUnits
       ) {
         return {
           code: "SVS-RESEARCH-BUDGET-EXHAUSTED",
@@ -571,6 +591,25 @@ export async function reservePublicResearch(
           action:
             "Do not retrieve another ordinary Source; preserve the adversarial reserve.",
         };
+      }
+      if (command.payload.reservation.researchClass === "adversarial") {
+        const adversarialViolation = adversarialResearchViolation(
+          rebuiltCampaign.authoritativeHistory,
+          command.payload.reservation,
+          command.payload.reservedAt,
+        );
+        if (adversarialViolation !== undefined) {
+          return {
+            code:
+              adversarialViolation === "qualification-required"
+                ? "SVS-ADVERSARIAL-RESEARCH-NOT-AVAILABLE"
+                : "SVS-OPPORTUNITY-INELIGIBLE",
+            message:
+              "Adversarial research requires a named Eligible Opportunity after qualification completes.",
+            action:
+              "Finish Qualification Gates, then reserve the protected capacity against the apparent leader.",
+          };
+        }
       }
       const deepeningViolation =
         opportunityDeepeningViolation(
@@ -2020,6 +2059,104 @@ export async function concludeNoQualifyingOpportunity(
   });
 }
 
+export async function concludeLeadingOpportunity(
+  command: ConcludeLeadingOpportunityCommand,
+  currentTime: string,
+) {
+  const result = (completed: boolean, campaign: LoadedCampaign) => ({
+    completed,
+    terminalOutcome: "leading-opportunity" as const,
+    comparison: campaign.opportunityComparison,
+    brief: campaign.opportunityBrief,
+    artifact: {
+      path: path.join(campaign.campaign.path, "opportunity-brief.md"),
+      format: "markdown" as const,
+      immutable: true as const,
+    },
+    workView: campaign.workView,
+  });
+  return runCoordinatorOperation(command, currentTime, {
+    async locateCampaign(command) {
+      return path.resolve(command.payload.campaignPath);
+    },
+    lockedAction:
+      "Do not conclude the Leading Opportunity concurrently; retry after the active operation finishes.",
+    requestConflict: {
+      code: "SVS-CAMPAIGN-REQUEST-CONFLICT",
+      message:
+        "Leading Opportunity request identity was already used with different input.",
+      action: "Reuse the original request payload or provide a new stable request identity.",
+    },
+    invalidCampaign: {
+      code: "SVS-CAMPAIGN-INVALID",
+      message:
+        "Leading Opportunity could not be concluded against valid authoritative Campaign history.",
+      action: "Preserve the Campaign contents and inspect its Work View before retrying.",
+    },
+    loadBeforeValidation: true,
+    isReplay({ rebuiltCampaign }) {
+      return rebuiltCampaign.records.some(
+        (record) =>
+          isRecord(record) &&
+          record.type ===
+            authoritativeOperationDescriptors["conclude-leading-opportunity"].outcome &&
+          record.requestId === command.requestId &&
+          isRecord(record.comparison) &&
+          isRecord(record.brief) &&
+          JSON.stringify(record.comparison) ===
+            JSON.stringify(command.payload.comparison) &&
+          JSON.stringify({
+            id: record.brief.id,
+            buyerEconomics: record.brief.buyerEconomics,
+            customerAccess: record.brief.customerAccess,
+            alternatives: record.brief.alternatives,
+            risks: record.brief.risks,
+            valueHypothesis: record.brief.valueHypothesis,
+          }) === JSON.stringify(command.payload.brief),
+      );
+    },
+    replayResult(_command, campaign) {
+      return result(false, campaign);
+    },
+    validateBeforeLease({ rebuiltCampaign }) {
+      const violation = leadingOpportunityViolation(
+        rebuiltCampaign.authoritativeHistory,
+        command.payload.comparison,
+        command.payload.concludedAt,
+        command.payload.brief,
+      );
+      return violation === undefined
+        ? undefined
+        : {
+            code: "SVS-LEADING-OPPORTUNITY-NOT-DEFENSIBLE",
+            message: `Leading Opportunity violates a campaign invariant: ${violation}.`,
+            action:
+              "Preserve every Eligible Non-Dominated Opportunity, complete the reserved adversarial challenge, and recommend only a robust evidence-backed stand-out.",
+          };
+    },
+    lease: {
+      mode: "active",
+      failure() {
+        return {
+          code: "SVS-CAMPAIGN-LEASE-NOT-HELD",
+          message: "Leading Opportunity conclusion requires the active coordinator lease.",
+          action: "Resume the Scouting Campaign with this coordinator before concluding it.",
+        };
+      },
+    },
+    records({ rebuiltCampaign }) {
+      return leadingOpportunityRecords(
+        rebuiltCampaign.authoritativeHistory,
+        command,
+        rebuiltCampaign.records.length + 1,
+      );
+    },
+    successResult(_command, campaign) {
+      return result(true, campaign);
+    },
+  });
+}
+
 export async function createCampaign(command: CreateCampaignCommand) {
   const campaignPath = path.resolve(command.payload.campaignPath);
   if (await pathExists(campaignPath)) {
@@ -2099,6 +2236,7 @@ export async function createCampaign(command: CreateCampaignCommand) {
         evidenceLedger: "evidence-ledger.json",
         noQualifyingOpportunityReport:
           "no-qualifying-opportunity-report.md",
+        opportunityBrief: "opportunity-brief.md",
       },
     };
 

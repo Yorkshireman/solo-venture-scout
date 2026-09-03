@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { cp, mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1301,6 +1301,227 @@ function passingOpportunityQualificationGatesCommand(campaignPath) {
     decidedAt: command.payload.recordedAt,
   };
   return command;
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ */
+async function recordPassingQualificationEvidence(kernelPath, campaignPath) {
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-passing-qualification-evidence",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: [
+        ...[
+          [
+            "freshness-dispatch-occupation",
+            "source-occupation-map",
+            "observation-coordination-workaround",
+          ],
+          [
+            "freshness-dispatch-study",
+            "source-dispatch-study",
+            "observation-dispatch-time-loss",
+          ],
+          [
+            "freshness-tender-procurement",
+            "source-procurement-map",
+            "observation-procurement-escalation",
+          ],
+          [
+            "freshness-tender-study",
+            "source-supplier-study",
+            "observation-supplier-review-spend",
+          ],
+        ].map(([id, sourceId, observationId]) => ({
+          type: "source-freshness",
+          id,
+          sourceId,
+          observationId,
+          intendedUse: "Assess a current time-sensitive Qualification Gate claim.",
+          assessment: "high",
+          timeSensitivity:
+            "Buyer behavior, market conditions, and feasibility may change.",
+          rationale: "The evidence was published within the current quarter.",
+          limitations: ["The next material market change requires reassessment."],
+        })),
+        {
+          type: "inference",
+          id: "inference-dispatch-qualification-evidence",
+          text:
+            "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.",
+          scope: "opportunity-dispatch-reconciliation",
+          reasoning:
+            "Two independently originated Sources report committed behavior and material consequences in the current workflow.",
+          supportingEntryIds: [
+            "observation-coordination-workaround",
+            "observation-dispatch-time-loss",
+          ],
+          challengingEntryIds: [],
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The sample is bounded."],
+          },
+        },
+        {
+          type: "inference",
+          id: "inference-tender-qualification-evidence",
+          text:
+            "Independent current behavior evidence supports the tender Opportunity's qualification requirements and bounded commercial ranges.",
+          scope: "opportunity-specialist-tender-review",
+          reasoning:
+            "Two independently originated Sources report committed buyer expenditure and consequences in the current workflow.",
+          supportingEntryIds: [
+            "observation-procurement-escalation",
+            "observation-supplier-review-spend",
+          ],
+          challengingEntryIds: [],
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The sample is bounded."],
+          },
+        },
+      ],
+    },
+  });
+  assert.equal(result.code, 0, result.stderr);
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ * @param {Array<Record<string, unknown>>} [statements]
+ */
+async function prepareEligibleCampaign(kernelPath, campaignPath, statements = []) {
+  await createDiscoveryCampaign(
+    kernelPath,
+    campaignPath,
+    statements,
+    true,
+  );
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath),
+  ]) {
+    const result = await runKernel(kernelPath, command);
+    assert.equal(result.code, 0, result.stderr);
+  }
+  await recordPassingQualificationEvidence(kernelPath, campaignPath);
+  const qualification = await runKernel(
+    kernelPath,
+    passingOpportunityQualificationGatesCommand(campaignPath),
+  );
+  assert.equal(qualification.code, 0, qualification.stderr);
+}
+
+/**
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ */
+async function completeAdversarialResearch(kernelPath, campaignPath) {
+  for (let index = 1; index <= 6; index += 1) {
+    const reservationId = `reservation-adversarial-${index}`;
+    const sourceId = `source-adversarial-${index}`;
+    const observationId = `observation-adversarial-${index}`;
+    const reservation = await runKernel(
+      kernelPath,
+      publicResearchReservationCommand(campaignPath, {
+        requestId: `reserve-adversarial-source-${index}`,
+        payload: {
+          reservedAt: `2026-09-01T10:${String(index).padStart(2, "0")}:00.000Z`,
+          reservation: {
+            id: reservationId,
+            purpose:
+              "Challenge the apparent leader for decision-changing gaps, contradictions, or contenders",
+            researchClass: "adversarial",
+            opportunityId: "opportunity-dispatch-reconciliation",
+          },
+        },
+      }),
+    );
+    assert.equal(reservation.code, 0, reservation.stderr);
+    const observation = await runKernel(kernelPath, {
+      envelopeVersion: "0.1.0",
+      requestId: `record-adversarial-source-${index}`,
+      command: "recordPublicResearchObservation",
+      payload: {
+        campaignPath,
+        coordinatorId: "coordinator-primary",
+        recordedAt: `2026-09-01T10:${String(index + 10).padStart(2, "0")}:00.000Z`,
+        reservationId,
+        source: {
+          id: sourceId,
+          retrievalMode: "public-web",
+          url: `https://challenge.example.com/source-${index}`,
+          publisher: `Independent Challenge Publisher ${index}`,
+          originator: null,
+          publishedAt: "2026-08-15",
+          updatedAt: null,
+          accessedAt: `2026-09-01T10:${String(index + 5).padStart(2, "0")}:00.000Z`,
+          exactLocator: `Challenge finding ${index}`,
+        },
+        observation: {
+          id: observationId,
+          text:
+            "The adversarial review found no decision-changing contradiction, eligibility failure, or stronger contender in its bounded sample.",
+          sourceId,
+          exactLocator: `Challenge finding ${index}`,
+        },
+      },
+    });
+    assert.equal(observation.code, 0, observation.stderr);
+  }
+  const reasoning = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-adversarial-conclusion",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T10:20:00.000Z",
+      entries: [
+        {
+          type: "inference",
+          id: "inference-adversarial-leader-survives",
+          text:
+            "The reserved adversarial challenge found no decision-changing gap, contradiction, eligibility failure, or stronger contender.",
+          scope: "opportunity-dispatch-reconciliation",
+          reasoning:
+            "Six protected Source examinations challenged the apparent leader across eligibility and comparison dimensions without finding a decision-changing result.",
+          supportingEntryIds: Array.from(
+            { length: 6 },
+            (_, index) => `observation-adversarial-${index + 1}`,
+          ),
+          challengingEntryIds: [],
+          confidence: {
+            level: "medium",
+            limitingFactors: ["The challenge remains bounded by the quick profile."],
+          },
+        },
+      ],
+    },
+  });
+  assert.equal(reasoning.code, 0, reasoning.stderr);
+}
+
+/** @param {string} summary @param {string} evidenceEntryId */
+function comparisonDimension(summary, evidenceEntryId) {
+  return {
+    summary,
+    evidenceEntryIds: [evidenceEntryId],
+    confidence: {
+      level: "medium",
+      limitingFactors: ["The evidence supports a bounded qualitative comparison."],
+    },
+  };
 }
 
 /**
@@ -3272,6 +3493,630 @@ test("market Qualification Gates require independent behavior evidence, current 
   assert.deepEqual(recorded.response.result.workView.nextPermittedActions, [
     "compare-eligible-opportunities",
   ]);
+});
+
+test("the protected adversarial reserve can challenge an apparent leader after qualification", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-adversarial-research-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "adversarial-research-campaign");
+  await prepareEligibleCampaign(kernelPath, campaignPath);
+
+  for (let index = 1; index <= 6; index += 1) {
+    const reservation = await runKernel(
+      kernelPath,
+      publicResearchReservationCommand(campaignPath, {
+        requestId: `reserve-adversarial-source-${index}`,
+        payload: {
+          reservedAt: `2026-09-01T10:${String(index).padStart(2, "0")}:00.000Z`,
+          reservation: {
+            id: `reservation-adversarial-${index}`,
+            purpose:
+              "Challenge the apparent leader for decision-changing gaps, contradictions, or contenders",
+            researchClass: "adversarial",
+            opportunityId: "opportunity-dispatch-reconciliation",
+          },
+        },
+      }),
+    );
+    assert.equal(
+      reservation.code,
+      0,
+      `${reservation.stderr}\n${JSON.stringify(reservation.response)}`,
+    );
+    assert.equal(
+      reservation.response.result.researchBudget.remainingAdversarialSourceUnits,
+      6 - index,
+    );
+  }
+
+  const exhausted = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-adversarial-source-over-cap",
+      payload: {
+        reservedAt: "2026-09-01T10:07:00.000Z",
+        reservation: {
+          id: "reservation-adversarial-over-cap",
+          purpose: "Attempt to exceed the adversarial reserve",
+          researchClass: "adversarial",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(exhausted.code, 3);
+  assert.equal(exhausted.response.error.code, "SVS-ADVERSARIAL-RESEARCH-BUDGET-EXHAUSTED");
+});
+
+test("a robust comparison produces one immutable Leading Opportunity Brief", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-leading-opportunity-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-storage-"),
+  );
+  const campaignPath = path.join(storagePath, "leading-opportunity-campaign");
+  await prepareEligibleCampaign(kernelPath, campaignPath, [
+    {
+      id: "preference-low-operating-burden",
+      text: "Prefer low ongoing operating burden.",
+      classification: "preference",
+      importance: "major",
+    },
+    {
+      id: "advantage-operations-domain",
+      text: "Existing access to operations workflow expertise.",
+      classification: "advantage",
+      rationale: "The expertise can reduce validation and acquisition effort.",
+    },
+  ]);
+  await completeAdversarialResearch(kernelPath, campaignPath);
+
+  /** @param {string} evidenceEntryId @param {boolean} dispatch */
+  const dimensions = (evidenceEntryId, dispatch) => ({
+    requiredInput: {
+      validation: comparisonDimension(
+        dispatch ? "Bounded public validation is available." : "Specialist validation takes more effort.",
+        evidenceEntryId,
+      ),
+      initialDelivery: comparisonDimension(
+        dispatch ? "A narrow customer outcome is feasible." : "Document variance increases initial delivery effort.",
+        evidenceEntryId,
+      ),
+      acquisition: comparisonDimension(
+        dispatch ? "Existing workflow access reduces acquisition effort." : "Buyers require specialist procurement access.",
+        evidenceEntryId,
+      ),
+      operations: comparisonDimension(
+        dispatch ? "The operating burden remains bounded." : "Tender cycles create a material support burden.",
+        evidenceEntryId,
+      ),
+      time: comparisonDimension(dispatch ? "Fits fifteen hours per week." : "Requires more irregular specialist time.", evidenceEntryId),
+      cash: comparisonDimension("The evidence supports low initial cash exposure.", evidenceEntryId),
+      irreversibleDownside: comparisonDimension("No material irreversible commitment is required.", evidenceEntryId),
+      opportunityCost: comparisonDimension(dispatch ? "The bounded test preserves other options." : "Long tender cycles delay other tests.", evidenceEntryId),
+    },
+    potentialOutput: {
+      commercialHeadroom: comparisonDimension(dispatch ? "The supported range clears the target with headroom." : "The supported range can clear the target.", evidenceEntryId),
+      scale: comparisonDimension(dispatch ? "The workflow can serve a broader customer base." : "The specialist segment is narrower.", evidenceEntryId),
+      durability: comparisonDimension("Recurring workflow consequences support durable demand.", evidenceEntryId),
+      strategicLeverage: comparisonDimension(dispatch ? "Workflow expertise compounds access leverage." : "Specialist knowledge offers bounded leverage.", evidenceEntryId),
+    },
+    outcomeUncertainty: comparisonDimension("Commercial outcomes remain materially variable across the supported ranges.", evidenceEntryId),
+    inputOutputAsymmetry: comparisonDimension(dispatch ? "Low bounded input retains credible high output." : "Credible output requires materially more operating input.", evidenceEntryId),
+    riskToleranceFit: {
+      fit: "within",
+      ...comparisonDimension("The bounded downside remains within the declared risk tolerance.", evidenceEntryId),
+    },
+  });
+  /** @type {any} */
+  const command = {
+    envelopeVersion: "0.1.0",
+    requestId: "conclude-leading-opportunity-1",
+    command: "concludeLeadingOpportunity",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      concludedAt: "2026-09-01T10:30:00.000Z",
+      comparison: {
+        id: "comparison-leading-1",
+        profiles: [
+          {
+            opportunityId: "opportunity-dispatch-reconciliation",
+            ...dimensions("inference-dispatch-qualification-evidence", true),
+            preferences: [
+              {
+                statementId: "preference-low-operating-burden",
+                effect: "advantage",
+                materiality: "material",
+                rationale: "The bounded operating model fits the confirmed major Preference.",
+                evidenceEntryIds: ["inference-dispatch-qualification-evidence"],
+                confidence: { level: "medium", limitingFactors: ["Operating evidence is bounded."] },
+              },
+            ],
+            advantages: [
+              {
+                statementId: "advantage-operations-domain",
+                effect: "reduces-input",
+                rationale: "Existing expertise reduces validation and acquisition input.",
+                evidenceEntryIds: ["inference-dispatch-qualification-evidence"],
+                confidence: { level: "medium", limitingFactors: ["Leverage varies by customer."] },
+              },
+            ],
+          },
+          {
+            opportunityId: "opportunity-specialist-tender-review",
+            ...dimensions("inference-tender-qualification-evidence", false),
+            preferences: [
+              {
+                statementId: "preference-low-operating-burden",
+                effect: "disadvantage",
+                materiality: "material",
+                rationale: "Irregular review cycles conflict with the confirmed major Preference.",
+                evidenceEntryIds: ["inference-tender-qualification-evidence"],
+                confidence: { level: "medium", limitingFactors: ["Workload varies by tender."] },
+              },
+            ],
+            advantages: [
+              {
+                statementId: "advantage-operations-domain",
+                effect: "not-demonstrated",
+                rationale: "The confirmed domain Advantage is not demonstrated for this Opportunity.",
+                evidenceEntryIds: [],
+                confidence: { level: "unknown", limitingFactors: ["No evidence links the Advantage to this Opportunity."] },
+              },
+            ],
+          },
+        ],
+        dominanceAssessments: [
+          {
+            challengerOpportunityId: "opportunity-dispatch-reconciliation",
+            alternativeOpportunityId: "opportunity-specialist-tender-review",
+            outcome: "does-not-dominate",
+            criteria: {
+              requiresNoMoreMaterialInput: true,
+              offersNoLessCredibleOutput: false,
+              fitsDeveloperProfileAtLeastAsWell: true,
+              materiallyBetterOn: ["input-output-asymmetry", "developer-profile-fit"],
+            },
+            rationale: "Tender review retains distinct specialist durability, so it remains Non-Dominated.",
+            evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence"],
+            confidence: { level: "medium", limitingFactors: ["Output ranges overlap."] },
+          },
+          {
+            challengerOpportunityId: "opportunity-specialist-tender-review",
+            alternativeOpportunityId: "opportunity-dispatch-reconciliation",
+            outcome: "does-not-dominate",
+            criteria: {
+              requiresNoMoreMaterialInput: false,
+              offersNoLessCredibleOutput: false,
+              fitsDeveloperProfileAtLeastAsWell: false,
+              materiallyBetterOn: ["durability"],
+            },
+            rationale: "The specialist durability advantage does not overcome higher material input.",
+            evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence"],
+            confidence: { level: "medium", limitingFactors: ["Output ranges overlap."] },
+          },
+        ],
+        nonDominatedOpportunityIds: [
+          "opportunity-dispatch-reconciliation",
+          "opportunity-specialist-tender-review",
+        ],
+        leadingAssessment: {
+          opportunityId: "opportunity-dispatch-reconciliation",
+          advantagesOverAlternatives: [
+            {
+              alternativeOpportunityId: "opportunity-specialist-tender-review",
+              basis: "major-preference",
+              preferenceStatementId: "preference-low-operating-burden",
+              rationale: "Lower operating input materially fits the confirmed major Preference.",
+              evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence"],
+              confidence: { level: "medium", limitingFactors: ["The ranges overlap at their edges."] },
+            },
+          ],
+          noMaterialDisadvantage: {
+            established: true,
+            summary: "No alternative has a material advantage on another major Preference or declared Risk Tolerance.",
+            evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence"],
+            confidence: { level: "medium", limitingFactors: ["Evidence is bounded."] },
+          },
+          robustAcrossCredibleRanges: {
+            established: true,
+            summary: "The selection persists at the credible edges of every recorded input and output range.",
+            evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence"],
+            confidence: { level: "medium", limitingFactors: ["Future ranges may change."] },
+          },
+          unresolvedContenderOpportunityIds: [],
+          decisionChangingEvidenceGapIds: [],
+          decisionChangingContradictionIds: [],
+          adversarialChallenge: {
+            reservationIds: Array.from({ length: 6 }, (_, index) => `reservation-adversarial-${index + 1}`),
+            outcome: "leader-remains-eligible",
+            summary: "The complete protected reserve found no decision-changing challenge.",
+            evidenceEntryIds: ["inference-adversarial-leader-survives"],
+            confidence: { level: "medium", limitingFactors: ["The challenge was bounded."] },
+          },
+        },
+        decision: {
+          type: "campaign-decision",
+          id: "decision-leading-opportunity-1",
+          kind: "opportunity-comparison",
+          outcome: "leading-opportunity",
+          leaderOpportunityId: "opportunity-dispatch-reconciliation",
+          intakeVersion: 1,
+          applicableRule: "Select only a robust evidence-backed stand-out after adversarial challenge.",
+          evidenceEntryIds: ["inference-dispatch-qualification-evidence", "inference-tender-qualification-evidence", "inference-adversarial-leader-survives"],
+          rationale: "The dispatch Opportunity retains a material major-Preference advantage across credible ranges.",
+          confidence: { level: "medium", limitingFactors: ["Public Research is not market validation."] },
+          limitations: ["The recommendation remains subject to external validation."],
+          decidedAt: "2026-09-01T10:30:00.000Z",
+        },
+      },
+      brief: {
+        id: "opportunity-brief-leading-1",
+        buyerEconomics: comparisonDimension("An identifiable operations buyer has reason and supported ability to pay.", "inference-dispatch-qualification-evidence"),
+        customerAccess: comparisonDimension("Existing workflow expertise provides a plausible affordable route to customers.", "inference-dispatch-qualification-evidence"),
+        alternatives: comparisonDimension("Manual reconciliation and general scheduling tools remain the current alternatives.", "inference-dispatch-qualification-evidence"),
+        risks: [comparisonDimension("Acquisition and operating ranges may widen during external validation.", "inference-dispatch-qualification-evidence")],
+        valueHypothesis: {
+          status: "provisional-not-a-product-specification",
+          customer: "Independent dispatch coordinators",
+          situation: "Assigning urgent field work across changing schedules",
+          smallestDesiredCustomerOutcome: "Reduce paid reconciliation effort while preserving assignment accuracy.",
+          supportedReason: "Current behavior evidence shows recurring paid effort and a feasible bounded outcome.",
+          confidence: { level: "medium", limitingFactors: ["No External Validation Action has occurred."] },
+          supportingEvidenceEntryIds: ["inference-dispatch-qualification-evidence"],
+          challengingEvidenceEntryIds: [],
+          assumptionIds: [],
+          evidenceGapIds: [],
+          disconfirmationConditions: ["Customers do not reduce paid reconciliation effort in a separate approved validation effort."],
+        },
+      },
+    },
+  };
+
+  const weighted = structuredClone(command);
+  weighted.requestId = "reject-weighted-comparison";
+  weighted.payload.comparison.weightedTotal = 91;
+  const weightedResult = await runKernel(kernelPath, weighted);
+  assert.equal(weightedResult.code, 3);
+  assert.equal(weightedResult.response.error.code, "SVS-LEADING-OPPORTUNITY-INVALID");
+  assert.match(weightedResult.response.error.details.join(" "), /unscored/i);
+
+  const probability = structuredClone(command);
+  probability.requestId = "reject-invented-probability";
+  probability.payload.comparison.profiles[0].outcomeUncertainty.summary =
+    "There is a 72% probability of reaching the target.";
+  const probabilityResult = await runKernel(kernelPath, probability);
+  assert.equal(probabilityResult.code, 3);
+  assert.equal(probabilityResult.response.error.code, "SVS-LEADING-OPPORTUNITY-INVALID");
+  assert.match(probabilityResult.response.error.details.join(" "), /invented probability/i);
+
+  const hiddenNonDominated = structuredClone(command);
+  hiddenNonDominated.requestId = "reject-hidden-non-dominated-opportunity";
+  hiddenNonDominated.payload.comparison.nonDominatedOpportunityIds.pop();
+  const hiddenResult = await runKernel(kernelPath, hiddenNonDominated);
+  assert.equal(hiddenResult.code, 3);
+  assert.equal(hiddenResult.response.error.code, "SVS-LEADING-OPPORTUNITY-NOT-DEFENSIBLE");
+  assert.match(hiddenResult.response.error.message, /Non-Dominated Opportunity/i);
+
+  const unresolvedContender = structuredClone(command);
+  unresolvedContender.requestId = "reject-unresolved-contender";
+  unresolvedContender.payload.comparison.leadingAssessment.unresolvedContenderOpportunityIds = [
+    "opportunity-specialist-tender-review",
+  ];
+  const contenderResult = await runKernel(kernelPath, unresolvedContender);
+  assert.equal(contenderResult.code, 3);
+  assert.equal(contenderResult.response.error.code, "SVS-LEADING-OPPORTUNITY-NOT-DEFENSIBLE");
+  assert.match(contenderResult.response.error.message, /unresolved contender/i);
+
+  const omittedAdvantage = structuredClone(command);
+  omittedAdvantage.requestId = "reject-omitted-confirmed-advantage";
+  omittedAdvantage.payload.comparison.profiles[1].advantages = [];
+  const omittedAdvantageResult = await runKernel(kernelPath, omittedAdvantage);
+  assert.equal(omittedAdvantageResult.code, 3);
+  assert.match(omittedAdvantageResult.response.error.message, /every confirmed Advantage/i);
+
+  const majorPreferenceDisadvantage = structuredClone(command);
+  majorPreferenceDisadvantage.requestId = "reject-leader-major-preference-disadvantage";
+  majorPreferenceDisadvantage.payload.comparison.profiles[0].preferences[0].effect =
+    "disadvantage";
+  const majorPreferenceResult = await runKernel(kernelPath, majorPreferenceDisadvantage);
+  assert.equal(majorPreferenceResult.code, 3);
+  assert.match(
+    majorPreferenceResult.response.error.message,
+    /major-Preference leader advantage must match.+leader profile/i,
+  );
+
+  const riskToleranceDisadvantage = structuredClone(command);
+  riskToleranceDisadvantage.requestId = "reject-leader-risk-tolerance-disadvantage";
+  riskToleranceDisadvantage.payload.comparison.profiles[0].riskToleranceFit.fit =
+    "material-disadvantage";
+  const riskToleranceResult = await runKernel(kernelPath, riskToleranceDisadvantage);
+  assert.equal(riskToleranceResult.code, 3);
+  assert.match(riskToleranceResult.response.error.message, /material disadvantage.+Risk Tolerance/i);
+
+  const incompleteRangeChallenge = structuredClone(command);
+  incompleteRangeChallenge.requestId = "reject-incomplete-credible-range-challenge";
+  incompleteRangeChallenge.payload.comparison.leadingAssessment.robustAcrossCredibleRanges.evidenceEntryIds = [
+    "inference-dispatch-qualification-evidence",
+  ];
+  const incompleteRangeResult = await runKernel(kernelPath, incompleteRangeChallenge);
+  assert.equal(incompleteRangeResult.code, 3);
+  assert.match(incompleteRangeResult.response.error.message, /every Eligible Opportunity.+commercial ranges/i);
+
+  const oneSidedDominance = structuredClone(command);
+  oneSidedDominance.requestId = "reject-one-sided-dominance-evidence";
+  oneSidedDominance.payload.comparison.dominanceAssessments[0].evidenceEntryIds = [
+    "inference-dispatch-qualification-evidence",
+  ];
+  const oneSidedDominanceResult = await runKernel(kernelPath, oneSidedDominance);
+  assert.equal(oneSidedDominanceResult.code, 3);
+  assert.match(oneSidedDominanceResult.response.error.message, /Opportunity-scoped Inference.+opportunity-specialist-tender-review/i);
+
+  const oneSidedAdvantage = structuredClone(command);
+  oneSidedAdvantage.requestId = "reject-one-sided-leader-advantage";
+  oneSidedAdvantage.payload.comparison.leadingAssessment.advantagesOverAlternatives[0].evidenceEntryIds = [
+    "inference-dispatch-qualification-evidence",
+  ];
+  const oneSidedAdvantageResult = await runKernel(kernelPath, oneSidedAdvantage);
+  assert.equal(oneSidedAdvantageResult.code, 3);
+  assert.match(oneSidedAdvantageResult.response.error.message, /Opportunity-scoped Inference.+opportunity-specialist-tender-review/i);
+
+  const contradictedPreferenceAdvantage = structuredClone(command);
+  contradictedPreferenceAdvantage.requestId =
+    "reject-contradicted-major-preference-advantage";
+  contradictedPreferenceAdvantage.payload.comparison.profiles[0].preferences[0].effect =
+    "neutral";
+  const contradictedPreferenceResult = await runKernel(
+    kernelPath,
+    contradictedPreferenceAdvantage,
+  );
+  assert.equal(contradictedPreferenceResult.code, 3);
+  assert.match(
+    contradictedPreferenceResult.response.error.message,
+    /major-Preference leader advantage must match.+leader profile/i,
+  );
+
+  const sharedPreferenceAdvantage = structuredClone(command);
+  sharedPreferenceAdvantage.requestId = "reject-shared-major-preference-advantage";
+  sharedPreferenceAdvantage.payload.comparison.profiles[1].preferences[0].effect =
+    "advantage";
+  const sharedPreferenceResult = await runKernel(
+    kernelPath,
+    sharedPreferenceAdvantage,
+  );
+  assert.equal(sharedPreferenceResult.code, 3);
+  assert.match(
+    sharedPreferenceResult.response.error.message,
+    /alternative profile does not share/i,
+  );
+
+  const unknownDimension = structuredClone(command);
+  unknownDimension.requestId = "reject-unknown-comparison-dimension";
+  unknownDimension.payload.comparison.dominanceAssessments[0].criteria.materiallyBetterOn = [
+    "founder-vibes",
+  ];
+  const unknownDimensionResult = await runKernel(kernelPath, unknownDimension);
+  assert.equal(unknownDimensionResult.code, 3);
+  assert.match(unknownDimensionResult.response.error.details.join(" "), /unknown comparison dimension/i);
+
+  const falsePrecision = structuredClone(command);
+  falsePrecision.requestId = "reject-false-precision-in-comparison-rationale";
+  falsePrecision.payload.comparison.decision.rationale =
+    "The leader has a 72% chance of success.";
+  const falsePrecisionResult = await runKernel(kernelPath, falsePrecision);
+  assert.equal(falsePrecisionResult.code, 3);
+  assert.match(falsePrecisionResult.response.error.details.join(" "), /invented probability/i);
+
+  const decisionGapCampaignPath = path.join(storagePath, "leading-opportunity-gap-campaign");
+  await cp(campaignPath, decisionGapCampaignPath, { recursive: true });
+  assert.equal(
+    (
+      await runKernel(kernelPath, {
+        envelopeVersion: "0.1.0",
+        requestId: "record-leading-decision-gap",
+        command: "recordEvidenceReasoning",
+        payload: {
+          campaignPath: decisionGapCampaignPath,
+          coordinatorId: "coordinator-primary",
+          recordedAt: "2026-09-01T10:29:00.000Z",
+          entries: [
+            {
+              type: "evidence-gap",
+              id: "gap-leading-decision",
+              question: "Does the leader remain selected under the unresolved boundary case?",
+              affectedDecisionIds: ["decision-leading-opportunity-1"],
+              resolutionCriteria: "Resolve the boundary case with affirmative evidence.",
+              resolutionMethod: "Perform bounded Public Research.",
+              status: "open",
+              resolution: null,
+            },
+          ],
+        },
+      })
+    ).code,
+    0,
+  );
+  const omittedDecisionGap = structuredClone(command);
+  omittedDecisionGap.requestId = "reject-omitted-authoritative-decision-gap";
+  omittedDecisionGap.payload.campaignPath = decisionGapCampaignPath;
+  const omittedDecisionGapResult = await runKernel(kernelPath, omittedDecisionGap);
+  assert.equal(omittedDecisionGapResult.code, 3);
+  assert.match(omittedDecisionGapResult.response.error.message, /derive every decision-changing Evidence Gap/i);
+
+  const contradictionCampaignPath = path.join(
+    storagePath,
+    "leading-opportunity-contradiction-campaign",
+  );
+  await cp(campaignPath, contradictionCampaignPath, { recursive: true });
+  assert.equal(
+    (
+      await runKernel(kernelPath, {
+        envelopeVersion: "0.1.0",
+        requestId: "record-leading-contradiction",
+        command: "recordEvidenceReasoning",
+        payload: {
+          campaignPath: contradictionCampaignPath,
+          coordinatorId: "coordinator-primary",
+          recordedAt: "2026-09-01T10:29:00.000Z",
+          entries: [
+            {
+              type: "contradiction",
+              id: "contradiction-leading-evidence",
+              entryIds: [
+                "inference-dispatch-qualification-evidence",
+                "inference-tender-qualification-evidence",
+              ],
+              disputedProposition: "The dispatch Opportunity remains preferable across credible ranges.",
+              disputedScope: "opportunity-dispatch-reconciliation",
+              attemptedReconciliation: "The range-edge evidence does not yet reconcile the conflict.",
+              resolutionStatus: "unresolved",
+              resolution: null,
+            },
+          ],
+        },
+      })
+    ).code,
+    0,
+  );
+  const omittedContradiction = structuredClone(command);
+  omittedContradiction.requestId = "reject-omitted-authoritative-contradiction";
+  omittedContradiction.payload.campaignPath = contradictionCampaignPath;
+  const omittedContradictionResult = await runKernel(
+    kernelPath,
+    omittedContradiction,
+  );
+  assert.equal(omittedContradictionResult.code, 3);
+  assert.match(
+    omittedContradictionResult.response.error.message,
+    /derive every decision-changing Evidence Gap, Contradiction/i,
+  );
+
+  const productSpecification = structuredClone(command);
+  productSpecification.requestId = "reject-product-specification-field";
+  productSpecification.payload.brief.valueHypothesis.features = ["dashboard"];
+  const productResult = await runKernel(kernelPath, productSpecification);
+  assert.equal(productResult.code, 3);
+  assert.equal(productResult.response.error.code, "SVS-LEADING-OPPORTUNITY-INVALID");
+  assert.match(productResult.response.error.details.join(" "), /product specification/i);
+
+  const productLanguage = structuredClone(command);
+  productLanguage.requestId = "reject-product-specification-language";
+  productLanguage.payload.brief.valueHypothesis.smallestDesiredCustomerOutcome =
+    "Receive a dashboard interface with a settled delivery design.";
+  const productLanguageResult = await runKernel(kernelPath, productLanguage);
+  assert.equal(productLanguageResult.code, 3);
+  assert.equal(productLanguageResult.response.error.code, "SVS-LEADING-OPPORTUNITY-INVALID");
+  assert.match(productLanguageResult.response.error.details.join(" "), /product specification language/i);
+
+  const productLanguageInUncertainty = structuredClone(command);
+  productLanguageInUncertainty.requestId =
+    "reject-product-specification-language-in-value-hypothesis-uncertainty";
+  productLanguageInUncertainty.payload.brief.valueHypothesis.confidence.limitingFactors = [
+    "The feature roadmap remains uncertain.",
+  ];
+  const uncertaintyLanguageResult = await runKernel(
+    kernelPath,
+    productLanguageInUncertainty,
+  );
+  assert.equal(uncertaintyLanguageResult.code, 3);
+  assert.match(
+    uncertaintyLanguageResult.response.error.details.join(" "),
+    /product specification language/i,
+  );
+
+  const completed = await runKernel(kernelPath, command);
+
+  assert.equal(completed.code, 0, `${completed.stderr}\n${JSON.stringify(completed.response)}`);
+  assert.equal(completed.response.result.terminalOutcome, "leading-opportunity");
+  assert.deepEqual(completed.response.result.comparison.nonDominatedOpportunityIds, [
+    "opportunity-dispatch-reconciliation",
+    "opportunity-specialist-tender-review",
+  ]);
+  assert.equal(completed.response.result.brief.role, "scout-recommended-leading-opportunity");
+  assert.equal(completed.response.result.brief.valueHypothesis.status, "provisional-not-a-product-specification");
+  assert.equal(completed.response.result.brief.wayfinderHandoff.invoked, false);
+  assert.deepEqual(completed.response.result.artifact, {
+    path: path.join(campaignPath, "opportunity-brief.md"),
+    format: "markdown",
+    immutable: true,
+  });
+  assert.equal(completed.response.result.workView.phase, "terminal");
+  assert.equal(
+    completed.response.result.workView.opportunities.find(
+      (/** @type {any} */ opportunity) =>
+        opportunity.id === "opportunity-dispatch-reconciliation",
+    ).terminalRole,
+    "leading-opportunity",
+  );
+  const artifact = await readFile(
+    path.join(campaignPath, "opportunity-brief.md"),
+    "utf8",
+  );
+  assert.match(artifact, /^# Opportunity Brief/m);
+  assert.match(artifact, /Scout-recommended Leading Opportunity/);
+  assert.match(artifact, /Required Input/);
+  assert.match(artifact, /Potential Output/);
+  assert.match(artifact, /Outcome Uncertainty/);
+  assert.match(artifact, /Input.Output Asymmetry/);
+  assert.match(artifact, /Declared Risk Tolerance/);
+  assert.match(artifact, /Value Hypothesis/);
+  assert.match(artifact, /provisional.not a product specification/i);
+  assert.match(artifact, /Wayfinder/);
+  assert.match(artifact, /not been started/i);
+  assert.match(artifact, /Required Input validation.+inference-dispatch-qualification-evidence/is);
+  assert.match(artifact, /Potential Output durability.+inference-dispatch-qualification-evidence/is);
+  assert.match(artifact, /Adversarial conclusion.+inference-adversarial-leader-survives/is);
+  assert.match(artifact, /opportunity-dispatch-reconciliation → opportunity-specialist-tender-review: does-not-dominate/i);
+  assert.match(artifact, /Operating evidence is bounded/);
+  assert.match(artifact, /The challenge was bounded/);
+  assert.equal((await stat(path.join(campaignPath, "opportunity-brief.md"))).mode & 0o777, 0o600);
+
+  const replay = await runKernel(kernelPath, command);
+  assert.equal(replay.code, 0, replay.stderr);
+  assert.equal(replay.response.result.completed, false);
+  assert.equal(await readFile(path.join(campaignPath, "opportunity-brief.md"), "utf8"), artifact);
+
+  const changedReplay = structuredClone(command);
+  changedReplay.payload.comparison.profiles[0].requiredInput.time.summary =
+    "Changed comparison input under a reused request identity.";
+  const conflict = await runKernel(kernelPath, changedReplay);
+  assert.equal(conflict.code, 3);
+  assert.equal(conflict.response.error.code, "SVS-CAMPAIGN-TERMINAL");
+
+  const inspected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-leading-opportunity-campaign",
+    command: "inspectCampaign",
+    payload: { campaignPath },
+  });
+  assert.equal(inspected.code, 0, inspected.stderr);
+  assert.deepEqual(inspected.response.result.opportunityBrief, completed.response.result.brief);
+  assert.deepEqual(inspected.response.result.opportunityComparison, completed.response.result.comparison);
+
+  const postTerminalResearch = await runKernel(
+    kernelPath,
+    publicResearchReservationCommand(campaignPath, {
+      requestId: "reserve-after-leading-opportunity",
+      payload: {
+        reservedAt: "2026-09-01T10:31:00.000Z",
+        reservation: {
+          id: "reservation-after-leading-opportunity",
+          purpose: "Attempt to mutate a terminal Campaign",
+          researchClass: "adversarial",
+          opportunityId: "opportunity-dispatch-reconciliation",
+        },
+      },
+    }),
+  );
+  assert.equal(postTerminalResearch.code, 3);
+  assert.equal(postTerminalResearch.response.error.code, "SVS-CAMPAIGN-TERMINAL");
+  assert.equal(await readFile(path.join(campaignPath, "opportunity-brief.md"), "utf8"), artifact);
 });
 
 test("no eligible Opportunity is a successful immutable terminal outcome", async () => {

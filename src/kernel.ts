@@ -19,6 +19,7 @@ import type {
   RecordOpportunityExclusionGatesCommand,
   RecordOpportunityQualificationGatesCommand,
   ConcludeNoQualifyingOpportunityCommand,
+  ConcludeLeadingOpportunityCommand,
   RecordOpportunityFormationCommand,
   PassBreadthGateCommand,
   RequestResearchApprovalCommand,
@@ -38,6 +39,7 @@ import {
   validateRecordOpportunityExclusionGatesFields,
   validateRecordOpportunityQualificationGatesFields,
   validateConcludeNoQualifyingOpportunityFields,
+  validateConcludeLeadingOpportunityFields,
   validateRecordOpportunityFormationFields,
   validateRecordPublicResearchObservationFields,
   validateRecordResearchApprovalInformationFields,
@@ -57,6 +59,7 @@ import {
   recordOpportunityExclusionGates,
   recordOpportunityQualificationGates,
   concludeNoQualifyingOpportunity,
+  concludeLeadingOpportunity,
   recordOpportunityFormation,
   recordPublicResearchObservation,
   recordResearchApprovalInformation,
@@ -151,6 +154,7 @@ export async function executeCommand(
       "recordOpportunityExclusionGates",
       "recordOpportunityQualificationGates",
       "concludeNoQualifyingOpportunity",
+      "concludeLeadingOpportunity",
       "requestResearchApproval",
       "recordResearchApprovalInformation",
       "respondResearchApproval",
@@ -517,6 +521,32 @@ export async function executeCommand(
     }
     return concludeNoQualifyingOpportunity(
       command as unknown as ConcludeNoQualifyingOpportunityCommand,
+      effects.now?.() ?? new Date().toISOString(),
+    );
+  }
+
+  if (command.command === "concludeLeadingOpportunity") {
+    const invalidFields = validateConcludeLeadingOpportunityFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-LEADING-OPPORTUNITY-INVALID",
+          message: "Leading Opportunity comparison or Opportunity Brief input is invalid.",
+          action:
+            "Correct every unscored comparison dimension, dominance assessment, leader condition, adversarial result, and provisional handoff field before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return concludeLeadingOpportunity(
+      command as unknown as ConcludeLeadingOpportunityCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
   }
