@@ -3834,7 +3834,9 @@ function workViewAtInspectionTime(
     const elevatedRiskApprovalUnavailable =
       opportunity.marketSafety.classification === "elevated-risk" &&
       !hasElevatedRiskResearchApproval(approvals, opportunity.id, inspectedAt);
-    renewalAvailable ||= elevatedRiskApprovalUnavailable;
+    renewalAvailable ||=
+      elevatedRiskApprovalUnavailable &&
+      opportunity.exclusionGates.every((gate) => gate.state !== "failed");
     return {
       ...opportunity,
       ...opportunityDispositionFor(
@@ -3846,7 +3848,7 @@ function workViewAtInspectionTime(
   const nextPermittedActions = workView.nextPermittedActions.filter(
     (action) => action !== "request-elevated-risk-research-approval",
   );
-  if (renewalAvailable) {
+  if (renewalAvailable && workView.pause === null) {
     nextPermittedActions.push("request-elevated-risk-research-approval");
   }
   return { ...workView, nextPermittedActions, opportunities };
@@ -6025,6 +6027,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
       evaluation.assessments.some(
         (assessment) =>
           assessment.marketSafety.classification === "elevated-risk" &&
+          exclusionGatesFor(assessment).every(
+            (gate) => gate.state !== "failed",
+          ) &&
           !hasElevatedRiskResearchApproval(
             researchApprovals,
             assessment.opportunityId,
@@ -6108,7 +6113,9 @@ async function rebuildCampaignFromAuthority(campaignPath: string) {
     workView.nextPermittedActions = [
       "respond-research-approval",
       "explain-research-approval",
-      ...workView.nextPermittedActions,
+      ...workView.nextPermittedActions.filter(
+        (action) => action !== "request-elevated-risk-research-approval",
+      ),
     ];
   }
   for (const response of researchApprovalResponses) {

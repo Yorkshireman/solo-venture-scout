@@ -1599,6 +1599,7 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
       "observation-dispatch-time-loss",
     ),
   ];
+  command.payload.assessments[0].marketSafety.classification = "elevated-risk";
   command.payload.assessments[1].hardConstraints = [
     hardConstraintGate(
       "opportunity-specialist-tender-review",
@@ -1688,6 +1689,12 @@ test("Hard Constraint violations reject while missing exclusion evidence remains
       (/** @type {any} */ gate) => gate.kind === "hard-constraint",
     ).state,
     "failed",
+  );
+  assert.equal(
+    recorded.response.result.workView.nextPermittedActions.includes(
+      "request-elevated-risk-research-approval",
+    ),
+    false,
   );
   assert.deepEqual(unresolved.disposition, {
     status: "unresolved",
@@ -2044,6 +2051,40 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
     "SVS-ELEVATED-RISK-APPROVAL-SCOPE-MISMATCH",
   );
 
+  const pendingRestrictedScope = {
+    ...scope,
+    id: "approval-decision-pending-restricted-source",
+    access: "restricted",
+    opportunityId: undefined,
+    researchDepth: undefined,
+    purpose: "Inspect a restricted source while preserving the active decision",
+    source: {
+      id: "source-pending-restricted",
+      description: "Restricted read-only industry report",
+      url: "https://example.com/restricted-industry-report",
+    },
+    accessMethod: "developer-controlled-authenticated-read-only",
+    risks: ["The source requires developer-controlled authenticated access."],
+    duration: {
+      startsAt: "2026-09-01T10:02:00.000Z",
+      expiresAt: "2101-09-01T10:30:00.000Z",
+    },
+  };
+  delete pendingRestrictedScope.opportunityId;
+  delete pendingRestrictedScope.researchDepth;
+  const pendingRestricted = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "request-pending-restricted-source",
+    command: "requestResearchApproval",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      requestedAt: "2026-09-01T10:02:00.000Z",
+      request: pendingRestrictedScope,
+    },
+  });
+  assert.equal(pendingRestricted.code, 0, pendingRestricted.stderr);
+
   const afterExpiry = await runKernelAt(
     kernelPath,
     {
@@ -2062,8 +2103,14 @@ test("Opportunity-specific approval permits only its scoped Elevated-Risk deep r
   assert.equal(expiredOpportunity.eligibility, "ineligible");
   assert.ok(
     afterExpiry.response.result.workView.nextPermittedActions.includes(
+      "respond-research-approval",
+    ),
+  );
+  assert.equal(
+    afterExpiry.response.result.workView.nextPermittedActions.includes(
       "request-elevated-risk-research-approval",
     ),
+    false,
   );
 });
 
