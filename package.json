@@ -1,6 +1,6 @@
 {
   "name": "solo-venture-scout",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "license": "MIT",
   "repository": "github:Yorkshireman/solo-venture-scout",
@@ -14,7 +14,14 @@
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "validate:packages": "node scripts/validate-packages.mjs",
-    "verify:release": "npm run typecheck && npm test && npm run package && npm run validate:packages"
+    "acceptance:controlled": "node scripts/run-controlled-scenarios.mjs && node scripts/assemble-behavioral-evidence.mjs",
+    "acceptance:live": "node scripts/run-live-retrieval-acceptance.mjs && node scripts/assemble-live-retrieval-evidence.mjs",
+    "acceptance:deterministic": "npm run build && node scripts/run-deterministic-acceptance.mjs",
+    "acceptance:packaging": "node scripts/run-packaging-acceptance.mjs",
+    "acceptance:compatibility": "node scripts/run-compatibility-acceptance.mjs",
+    "acceptance:version": "node scripts/write-version-evidence.mjs",
+    "acceptance:qualify": "node scripts/qualify-release.mjs",
+    "verify:release": "npm run typecheck && npm run acceptance:deterministic && npm test && npm run acceptance:packaging && npm run validate:packages && npm run acceptance:compatibility && npm run acceptance:version && npm run acceptance:qualify"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

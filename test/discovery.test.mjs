@@ -41,7 +41,7 @@ async function runKernelAt(kernelPath, command, now) {
  * @param {boolean} [includeFormationEvidence]
  * @param {Record<string, string>} [observationTextOverrides]
  */
-async function createDiscoveryCampaign(
+export async function createDiscoveryCampaign(
   kernelPath,
   campaignPath,
   statements = [],
@@ -1390,7 +1390,7 @@ async function recordPassingQualificationEvidence(kernelPath, campaignPath) {
  * @param {string} campaignPath
  * @param {Array<Record<string, unknown>>} [statements]
  */
-async function prepareEligibleCampaign(kernelPath, campaignPath, statements = []) {
+export async function prepareEligibleCampaign(kernelPath, campaignPath, statements = []) {
   await createDiscoveryCampaign(
     kernelPath,
     campaignPath,
@@ -1419,7 +1419,7 @@ async function prepareEligibleCampaign(kernelPath, campaignPath, statements = []
  * @param {string} kernelPath
  * @param {string} campaignPath
  */
-async function completeAdversarialResearch(kernelPath, campaignPath) {
+export async function completeAdversarialResearch(kernelPath, campaignPath) {
   for (let index = 1; index <= 6; index += 1) {
     const reservationId = `reservation-adversarial-${index}`;
     const sourceId = `source-adversarial-${index}`;
@@ -1564,7 +1564,7 @@ function inconclusiveComparisonProfile(evidenceEntryId, label) {
 }
 
 /** @param {string} campaignPath */
-function concludeInconclusiveComparisonCommand(campaignPath) {
+export function concludeInconclusiveComparisonCommand(campaignPath) {
   return {
     envelopeVersion: "0.1.0",
     requestId: "conclude-inconclusive-comparison-1",
@@ -1689,7 +1689,7 @@ function concludeInconclusiveComparisonCommand(campaignPath) {
  * @param {string} campaignPath
  * @param {NodeJS.ProcessEnv} [environment]
  */
-async function enterInconclusiveComparison(
+export async function enterInconclusiveComparison(
   kernelPath,
   campaignPath,
   environment,
@@ -1735,7 +1735,7 @@ async function enterInconclusiveComparison(
 }
 
 /** @param {string} opportunityId */
-function developerSelection(opportunityId) {
+export function developerSelection(opportunityId) {
   const dispatch = opportunityId === "opportunity-dispatch-reconciliation";
   const evidenceEntryId = dispatch
     ? "inference-dispatch-qualification-evidence"
@@ -1797,6 +1797,156 @@ function developerSelection(opportunityId) {
 }
 
 /**
+ * Builds the deterministic terminal fixture used to test post-brief behavior.
+ * The model under test receives a copy, so this setup is not counted as a model decision.
+ *
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ */
+export async function prepareDeveloperSelectedCampaign(kernelPath, campaignPath) {
+  await enterInconclusiveComparison(kernelPath, campaignPath);
+  const selected = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "select-inconclusive-opportunities-1",
+    command: "respondInconclusiveComparison",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      respondedAt: "2026-09-01T10:32:00.000Z",
+      reportId: "inconclusive-comparison-report-1",
+      response: {
+        kind: "select",
+        selections: [
+          developerSelection("opportunity-dispatch-reconciliation"),
+          developerSelection("opportunity-specialist-tender-review"),
+        ],
+      },
+    },
+  });
+  assert.equal(selected.code, 0, `${selected.stderr}\n${JSON.stringify(selected.response)}`);
+}
+
+/**
+ * Builds the deterministic pre-terminal fixture for the No Qualifying Opportunity
+ * scenario: one rejected Opportunity, one unresolved Opportunity, and no permitted
+ * research with positive Decision Value.
+ *
+ * @param {string} kernelPath
+ * @param {string} campaignPath
+ */
+export async function prepareNoQualifierCampaign(kernelPath, campaignPath) {
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+  for (const command of [
+    discoveryTrancheCommand(campaignPath),
+    secondDiscoveryTrancheCommand(campaignPath),
+    opportunityFormationCommand(campaignPath),
+    passBreadthGateCommand(campaignPath),
+    opportunityExclusionGatesCommand(campaignPath),
+  ]) {
+    const response = await runKernel(kernelPath, command);
+    assert.equal(response.code, 0, response.stderr);
+  }
+
+  const capacityEvidence = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-solo-capacity-inference-1",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:59:00.000Z",
+      entries: [{
+        type: "inference",
+        id: "inference-dispatch-solo-capacity",
+        text: "The current operating burden exceeds the developer's solo capacity.",
+        scope: "opportunity-dispatch-reconciliation",
+        reasoning: "The bounded workflow evidence implies more ongoing work than the confirmed capacity permits.",
+        supportingEntryIds: ["inference-dispatch-market-classification"],
+        challengingEntryIds: [],
+        confidence: {
+          level: "medium",
+          limitingFactors: ["Automation could change the operating burden."],
+        },
+      }],
+    },
+  });
+  assert.equal(capacityEvidence.code, 0, capacityEvidence.stderr);
+
+  const qualification = opportunityQualificationGatesCommand(campaignPath);
+  qualification.requestId = "record-terminal-qualification-gates";
+  qualification.payload.evaluation.id = "qualification-evaluation-terminal";
+  const rejectedGate = qualification.payload.evaluation.assessments[0].gates.find(
+    (/** @type {any} */ gate) => gate.kind === "solo-feasibility",
+  );
+  rejectedGate.state = "failed";
+  rejectedGate.decision.outcome = "failed";
+  rejectedGate.decision.supportingEvidenceEntryIds = [
+    "inference-dispatch-solo-capacity",
+  ];
+  rejectedGate.decision.evidenceGapIds = [];
+  rejectedGate.decision.rationale =
+    "Affirmative evidence establishes that the required operation exceeds the Solo Developer's capacity.";
+  rejectedGate.decision.confidence = {
+    level: "medium",
+    limitingFactors: ["The assessment uses the confirmed capacity snapshot."],
+  };
+  const gapEntries = qualification.payload.evaluation.assessments.flatMap(
+    (/** @type {any} */ assessment) =>
+      assessment.gates
+        .filter((/** @type {any} */ gate) => gate !== rejectedGate)
+        .map((/** @type {any} */ gate) => ({
+          type: "evidence-gap",
+          id: gate.decision.evidenceGapIds[0],
+          question: `What affirmative evidence resolves ${gate.kind} for ${assessment.opportunityId}?`,
+          affectedDecisionIds: [gate.decision.id],
+          resolutionCriteria:
+            "Current independent evidence establishes the required condition.",
+          resolutionMethod:
+            "Reopen only if a permitted public Source has positive Decision Value.",
+          status: "open",
+          resolution: null,
+        })),
+  );
+  qualification.payload.evaluation.researchDecision = {
+    type: "campaign-decision",
+    id: "decision-stop-qualification-research",
+    kind: "qualification-research",
+    outcome: "stop",
+    intakeVersion: 1,
+    applicableRule:
+      "Continue only while budget remains and a permitted action has positive Decision Value.",
+    evidenceEntryIds: [
+      "gap-qualification-costly-problem-opportunity-specialist-tender-review",
+    ],
+    decisionValuePriorities: [],
+    stopReason: "no-permitted-positive-decision-value",
+    rationale:
+      "No remaining lawful Public Research action has positive Decision Value for an unresolved gate.",
+    confidence: {
+      level: "medium",
+      limitingFactors: ["External Validation Actions remain outside Campaign Research."],
+    },
+    limitations: ["Several Qualification Gates remain unresolved."],
+    decidedAt: qualification.payload.recordedAt,
+  };
+  const gaps = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-terminal-qualification-gaps",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: gapEntries,
+    },
+  });
+  assert.equal(gaps.code, 0, gaps.stderr);
+  const evaluated = await runKernel(kernelPath, qualification);
+  assert.equal(evaluated.code, 0, evaluated.stderr);
+  return { qualification, rejectedGate };
+}
+
+/**
  * @param {Partial<Record<string, unknown>>} [overrides]
  * @returns {any}
  */
@@ -1832,6 +1982,10 @@ function elevatedRiskApprovalScope(overrides = {}) {
   };
 }
 
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 test("a Discovery Tranche records diverse coverage and equal shallow allowances", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-discovery-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
@@ -5072,113 +5226,16 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
     path.join(tmpdir(), "solo-venture-scout-storage-"),
   );
   const campaignPath = path.join(storagePath, "no-qualifier-campaign");
-  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
-  for (const command of [
-    discoveryTrancheCommand(campaignPath),
-    secondDiscoveryTrancheCommand(campaignPath),
-    opportunityFormationCommand(campaignPath),
-    passBreadthGateCommand(campaignPath),
-    opportunityExclusionGatesCommand(campaignPath),
-  ]) {
-    const response = await runKernel(kernelPath, command);
-    assert.equal(response.code, 0, response.stderr);
-  }
-
-  const capacityEvidence = await runKernel(kernelPath, {
-    envelopeVersion: "0.1.0",
-    requestId: "record-solo-capacity-inference-1",
-    command: "recordEvidenceReasoning",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      recordedAt: "2026-09-01T09:59:00.000Z",
-      entries: [{
-        type: "inference",
-        id: "inference-dispatch-solo-capacity",
-        text: "The current operating burden exceeds the developer's solo capacity.",
-        scope: "opportunity-dispatch-reconciliation",
-        reasoning: "The bounded workflow evidence implies more ongoing work than the confirmed capacity permits.",
-        supportingEntryIds: ["inference-dispatch-market-classification"],
-        challengingEntryIds: [],
-        confidence: {
-          level: "medium",
-          limitingFactors: ["Automation could change the operating burden."],
-        },
-      }],
-    },
-  });
-  assert.equal(capacityEvidence.code, 0, capacityEvidence.stderr);
-
-  const qualification = opportunityQualificationGatesCommand(campaignPath);
-  qualification.requestId = "record-terminal-qualification-gates";
-  qualification.payload.evaluation.id = "qualification-evaluation-terminal";
-  const rejectedGate = qualification.payload.evaluation.assessments[0].gates.find(
-    (/** @type {any} */ gate) => gate.kind === "solo-feasibility",
+  const { qualification, rejectedGate } = await prepareNoQualifierCampaign(
+    kernelPath,
+    campaignPath,
   );
-  rejectedGate.state = "failed";
-  rejectedGate.decision.outcome = "failed";
-  rejectedGate.decision.supportingEvidenceEntryIds = [
-    "inference-dispatch-solo-capacity",
-  ];
-  rejectedGate.decision.evidenceGapIds = [];
-  rejectedGate.decision.rationale =
-    "Affirmative evidence establishes that the required operation exceeds the Solo Developer's capacity.";
-  rejectedGate.decision.confidence = {
-    level: "medium",
-    limitingFactors: ["The assessment uses the confirmed capacity snapshot."],
-  };
-  const gapEntries = qualification.payload.evaluation.assessments.flatMap(
-    (/** @type {any} */ assessment) =>
-      assessment.gates
-        .filter((/** @type {any} */ gate) => gate !== rejectedGate)
-        .map((/** @type {any} */ gate) => ({
-          type: "evidence-gap",
-          id: gate.decision.evidenceGapIds[0],
-          question: `What affirmative evidence resolves ${gate.kind} for ${assessment.opportunityId}?`,
-          affectedDecisionIds: [gate.decision.id],
-          resolutionCriteria:
-            "Current independent evidence establishes the required condition.",
-          resolutionMethod:
-            "Reopen only if a permitted public Source has positive Decision Value.",
-          status: "open",
-          resolution: null,
-        })),
-  );
-  qualification.payload.evaluation.researchDecision = {
-    type: "campaign-decision",
-    id: "decision-stop-qualification-research",
-    kind: "qualification-research",
-    outcome: "stop",
-    intakeVersion: 1,
-    applicableRule:
-      "Continue only while budget remains and a permitted action has positive Decision Value.",
-    evidenceEntryIds: [
-      "gap-qualification-costly-problem-opportunity-specialist-tender-review",
-    ],
-    decisionValuePriorities: [],
-    stopReason: "no-permitted-positive-decision-value",
-    rationale:
-      "No remaining lawful Public Research action has positive Decision Value for an unresolved gate.",
-    confidence: {
-      level: "medium",
-      limitingFactors: ["External Validation Actions remain outside Campaign Research."],
-    },
-    limitations: ["Several Qualification Gates remain unresolved."],
-    decidedAt: qualification.payload.recordedAt,
-  };
-  const gaps = await runKernel(kernelPath, {
+  const evaluated = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
-    requestId: "record-terminal-qualification-gaps",
-    command: "recordEvidenceReasoning",
-    payload: {
-      campaignPath,
-      coordinatorId: "coordinator-primary",
-      recordedAt: "2026-09-01T09:58:00.000Z",
-      entries: gapEntries,
-    },
+    requestId: "inspect-no-qualifier-precondition",
+    command: "inspectCampaign",
+    payload: { campaignPath },
   });
-  assert.equal(gaps.code, 0, gaps.stderr);
-  const evaluated = await runKernel(kernelPath, qualification);
   assert.equal(evaluated.code, 0, evaluated.stderr);
   assert.deepEqual(
     evaluated.response.result.workView.opportunities.map(
@@ -5892,3 +5949,4 @@ test("Discovery Tranches are sequential, idempotent, and bounded by the sweep ca
     "SVS-DISCOVERY-INVARIANT-VIOLATION",
   );
 });
+}

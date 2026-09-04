@@ -1,0 +1,10 @@
+Solo Venture Scout
+Copyright (c) 2026 Yorkshireman
+
+Solo Venture Scout is released under the MIT License included with this distribution.
+
+The shipped skill and bundled Campaign State Kernel have no third-party runtime
+dependencies. The dependency inventory accompanying each release lists the pinned
+build-time dependencies used to typecheck, test, and bundle the project; those tools
+are not bundled runtime dependencies. No third-party source code has been deliberately
+copied or adapted into this distribution.

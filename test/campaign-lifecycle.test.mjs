@@ -14,7 +14,7 @@ import test from "node:test";
 import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
 
 const contracts = {
-  release: "0.1.0",
+  release: "1.0.0",
   campaignFormat: "0.2.0",
   records: "0.2.0",
   commandEnvelope: "0.1.0",

@@ -55,6 +55,7 @@ const pluginRoot = path.join(outputRoot, "plugin", "solo-venture-scout");
 const manifestDirectory = path.join(pluginRoot, ".codex-plugin");
 await mkdir(manifestDirectory, { recursive: true });
 await cp(path.join(standaloneSkill, "LICENSE"), path.join(pluginRoot, "LICENSE"));
+await cp(path.join(standaloneSkill, "NOTICE"), path.join(pluginRoot, "NOTICE"));
 await writeFile(
   path.join(manifestDirectory, "plugin.json"),
   `${JSON.stringify(

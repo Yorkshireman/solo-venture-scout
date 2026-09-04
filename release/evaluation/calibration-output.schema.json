@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cases"],
+  "properties": {
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "overall", "failedInvariants", "rationale"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "overall": {"enum": ["unacceptable", "acceptable", "strong", "exceptional"]},
+          "failedInvariants": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "rationale": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

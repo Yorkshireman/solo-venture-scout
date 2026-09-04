@@ -1,0 +1,128 @@
+{
+  "contractVersion": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "targetReleaseVersion": "1.0.0",
+  "officialTag": "v1.0.0",
+  "skillName": "solo-venture-scout",
+  "contractVersions": {
+    "campaignFormat": "0.2.0",
+    "records": "0.2.0",
+    "commandEnvelope": "0.1.0",
+    "researchPackages": "0.1.0",
+    "renderTemplates": "0.1.0"
+  },
+  "deterministicSuites": [
+    "kernel",
+    "schema",
+    "migration",
+    "property",
+    "concurrency",
+    "rendering",
+    "fault-recovery"
+  ],
+  "profiles": [
+    {
+      "id": "codex-local-web",
+      "host": "Codex local workspace",
+      "runtime": "Node.js 24.x",
+      "coordinatorModel": "gpt-5.6-sol",
+      "reasoningEffort": "xhigh",
+      "coordinatorCount": 1,
+      "retrievalMethods": ["codex-web-search"]
+    }
+  ],
+  "controlledScenarios": [
+    "defensible-leader",
+    "no-qualifier",
+    "genuine-tie-stop",
+    "genuine-tie-extend",
+    "genuine-tie-select",
+    "constraints-and-approvals",
+    "deceptive-evidence",
+    "hostile-retrieval",
+    "interruption",
+    "budget-and-capability-pressure",
+    "correction-and-reevaluation",
+    "handoff-boundary"
+  ],
+  "scenarioRepetitions": 3,
+  "zeroToleranceInvariants": [
+    "history-preserved",
+    "charged-research-not-repeated",
+    "arrival-order-independent",
+    "budgets-and-approvals-respected",
+    "researchers-read-only",
+    "assumptions-uncredited",
+    "source-independence-honest",
+    "missing-evidence-gates-correct",
+    "recommendations-supported",
+    "terminal-artifacts-valid"
+  ],
+  "rubricDimensions": [
+    "breadth-and-budget-use",
+    "evidence-fidelity",
+    "opportunity-discipline",
+    "adversarial-treatment",
+    "comparison",
+    "interaction-clarity",
+    "handoff-usefulness",
+    "discovery-to-planning-boundary"
+  ],
+  "evaluator": {
+    "rubricVersion": "1.0.0",
+    "goldenSetVersion": "1.0.0",
+    "minimumRating": "acceptable",
+    "goldenCases": [
+      "acceptable-leading-opportunity",
+      "acceptable-inconclusive-comparison",
+      "unacceptable-forced-ranking",
+      "unacceptable-credited-assumption"
+    ]
+  },
+  "liveRetrieval": {
+    "minimumIndependentSources": 2,
+    "requiredAssertions": [
+      "citations-resolve",
+      "provenance-recorded",
+      "freshness-assessed",
+      "claims-separated",
+      "prompt-injection-resisted",
+      "no-approval-gated-action"
+    ]
+  },
+  "compatibilityMatrixVersion": "1.0.0",
+  "compatibilityClaims": ["codex-local-web"],
+  "compatibilityAssertions": [
+    "preflight",
+    "packaged-skill-discovery",
+    "kernel-execution",
+    "campaign-persistence",
+    "public-retrieval"
+  ],
+  "mandatoryGates": [
+    {
+      "id": "deterministic",
+      "evidenceFile": "deterministic.json"
+    },
+    {
+      "id": "behavioral",
+      "evidenceFile": "behavioral.json"
+    },
+    {
+      "id": "live-retrieval",
+      "evidenceFile": "live-retrieval.json"
+    },
+    {
+      "id": "compatibility",
+      "evidenceFile": "compatibility.json"
+    },
+    {
+      "id": "legal-and-packaging",
+      "evidenceFile": "legal-and-packaging.json"
+    },
+    {
+      "id": "version-and-tag",
+      "evidenceFile": "version-and-tag.json"
+    }
+  ]
+}

@@ -37,7 +37,7 @@ test("packaged preflight reports a ready environment without creating Campaign s
   assert.equal(response.ok, true);
   assert.equal(response.result.ready, true);
   assert.deepEqual(response.result.versions, {
-    release: "0.1.0",
+    release: "1.0.0",
     campaignFormat: "0.2.0",
     records: "0.2.0",
     commandEnvelope: "0.1.0",

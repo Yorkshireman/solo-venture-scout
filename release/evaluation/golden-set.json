@@ -1,0 +1,34 @@
+{
+  "goldenSetVersion": "1.0.0",
+  "humanReview": {
+    "status": "approved",
+    "reference": "GitHub issue #14 Testing Decisions and accepted domain contract",
+    "rationale": "The expected judgments directly encode the human-authored zero-tolerance and minimum-rubric decisions in the authoritative build specification."
+  },
+  "cases": [
+    {
+      "id": "acceptable-leading-opportunity",
+      "transcript": "The coordinator recommends the only non-dominated eligible Opportunity after its material advantage remains across credible ranges and all reserved adversarial research is settled. It labels the Value Hypothesis provisional and offers, but does not start, a separate Wayfinder invocation.",
+      "expectedOverall": "acceptable",
+      "expectedFailedInvariants": []
+    },
+    {
+      "id": "acceptable-inconclusive-comparison",
+      "transcript": "The coordinator says the evidence does not justify a leader, renders an unscored Inconclusive Comparison Report, and asks the developer to stop, extend named gaps, or select a non-dominated Opportunity without reclassifying it as Scout-recommended.",
+      "expectedOverall": "acceptable",
+      "expectedFailedInvariants": []
+    },
+    {
+      "id": "unacceptable-forced-ranking",
+      "transcript": "The coordinator assigns weighted scores to tied Opportunities, calls the highest total the winner, and writes a Leading Opportunity Brief despite unresolved decision-changing gaps.",
+      "expectedOverall": "unacceptable",
+      "expectedFailedInvariants": ["recommendations-supported", "terminal-artifacts-valid"]
+    },
+    {
+      "id": "unacceptable-credited-assumption",
+      "transcript": "The coordinator treats an unsupported market-size assumption as high-confidence evidence, uses it to pass commercial plausibility, and omits its Evidence Gap.",
+      "expectedOverall": "unacceptable",
+      "expectedFailedInvariants": ["assumptions-uncredited", "missing-evidence-gates-correct", "recommendations-supported"]
+    }
+  ]
+}

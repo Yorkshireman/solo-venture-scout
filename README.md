@@ -317,13 +317,15 @@ tree, invoke the bundled kernel as a subprocess, and assert on its public JSON r
 and persisted Campaign. They do not call private transition helpers. Instruction tests
 separately inspect the packaged `SKILL.md` and references for user-visible behavioral
 contracts such as privacy warnings, approval pauses, evidence rules, and terminal
-choices.
+choices. Release qualification additionally runs the generated skill in controlled
+single-coordinator Codex sessions and sends each transcript plus its persisted Campaign
+to a separate calibrated evaluator.
 
 That gives the project two complementary behavioral seams: deterministic state
-behavior at the command boundary and coordinator behavior at the packaged instruction
-boundary. The latter cannot prove that every model run will be identical, but it can
-prevent critical constraints from disappearing from the artifact the host actually
-loads.
+behavior at the command boundary and independently repeated coordinator behavior at
+the packaged instruction boundary. Model runs need not use identical wording, but all
+forced outcomes and zero-tolerance invariants must hold and every rubric dimension must
+remain at least acceptable.
 
 ### Recovery and compatibility
 
@@ -384,7 +386,7 @@ Run one behavioral test file while working:
 node --test test/preflight.test.mjs
 ```
 
-Run the supported checks and build stages:
+Run the supported development checks and build stages:
 
 ```bash
 npm run typecheck
@@ -394,15 +396,62 @@ npm run package
 npm run validate:packages
 ```
 
-`validate:packages` expects generated archives, so run `npm run package` first. Before
-release, run the complete pipeline:
+`validate:packages` expects generated archives, so run `npm run package` first.
+
+### 1.0.0 release qualification
+
+The only certified 1.0.0 profile is `codex-local-web`: one coordinator using
+`gpt-5.6-sol` at Extra High in a local Codex workspace on macOS arm64, Node.js 24.x,
+and the `codex-web-search` public-retrieval method. Claude Code packaging is
+structural-only, not behaviorally certified. Other hosts and retrieval methods are not
+implied by the standalone layout; see
+[`release/compatibility-matrix.json`](release/compatibility-matrix.json).
+
+Build the candidate, then record the model-backed gates once:
+
+```bash
+npm run build
+npm run acceptance:controlled
+npm run acceptance:live
+```
+
+`acceptance:controlled` calibrates the separate evaluator and records three independent runs
+of every controlled scenario. Each coordinator run uses the exact generated skill;
+the harness deterministically prepares the Campaign immediately before the boundary under
+test, and its evaluator receives the hidden expected boundary and persisted Campaign only
+after the run. Runs use bounded concurrency (three by default; set
+`SVS_ACCEPTANCE_CONCURRENCY` from 1 through 8). The JSONL ledger is append-only, including
+process failures. A rerun does not erase a genuine failure, and an existing
+scenario/repetition cannot be replaced. A failed release needs a new suite or release
+version rather than selective deletion.
+
+The live gate checks every claimed retrieval method with multiple independent public
+Sources, resolving citations, provenance, freshness, claim separation, hostile-content
+resistance, and no approval-gated action. An outage is inconclusive and must be rerun
+only under a new suite or release version: the current append-only ledger records the
+failed attempt and never converts it into a pass.
+
+After those one-time ledgers exist, run the complete deterministic and artifact
+pipeline:
 
 ```bash
 npm run verify:release
 ```
 
-That command typechecks, runs the full test suite, rebuilds both distributions,
-creates both archives, and validates the artifacts that would ship.
+That command typechecks, records the deterministic suites, runs the full test suite,
+builds each archive twice, validates compatibility against the live result, writes the
+version policy evidence, and emits `dist/release/acceptance-report.json` plus
+`dist/release/ACCEPTANCE.md`. It fails closed if any evidence is missing, malformed,
+failed, duplicated, stale, or mismatched.
+
+The release companions are `CHECKSUMS.sha256`, `dependency-inventory.json`, `LICENSE`,
+`NOTICE`, `compatibility-matrix.json`, and `release-manifest.json`. They sit beside the
+standalone and plugin archives under `dist/`.
+
+Candidate metadata saying `1.0.0` is not an official release. Do not create or publish
+the annotated `v1.0.0` tag until every non-tag gate passes on a clean commit. Attach the
+tag to that exact commit, rerun `npm run acceptance:qualify`, and publish only when the
+official report says `qualified: true`. Never move or replace the official tag.
 
 ## License
 

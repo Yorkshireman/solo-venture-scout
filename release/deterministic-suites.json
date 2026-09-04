@@ -1,0 +1,70 @@
+{
+  "planVersion": "1.0.0",
+  "suites": [
+    {
+      "id": "kernel",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "test/campaign-lifecycle.test.mjs",
+        "test/public-research.test.mjs",
+        "test/approved-research.test.mjs",
+        "test/evidence-reasoning.test.mjs",
+        "test/discovery.test.mjs",
+        "test/reevaluation.test.mjs"
+      ]
+    },
+    {
+      "id": "schema",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "test/preflight.test.mjs",
+        "test/campaign-intake.test.mjs"
+      ]
+    },
+    {
+      "id": "migration",
+      "executable": "node",
+      "arguments": ["--test", "test/compatibility.test.mjs"]
+    },
+    {
+      "id": "property",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "--test-name-pattern=duplicate and out-of-order reservation inputs",
+        "test/recovery.test.mjs"
+      ]
+    },
+    {
+      "id": "concurrency",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "--test-name-pattern=concurrent|arrival order",
+        "test/campaign-lifecycle.test.mjs",
+        "test/recovery.test.mjs"
+      ]
+    },
+    {
+      "id": "rendering",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "--test-name-pattern=Report|Brief|rendering|terminal artifact",
+        "test/discovery.test.mjs"
+      ]
+    },
+    {
+      "id": "fault-recovery",
+      "executable": "node",
+      "arguments": [
+        "--test",
+        "--test-name-pattern=interrupted|corrupt|damaged|missing authoritative|failed migration",
+        "test/recovery.test.mjs",
+        "test/compatibility.test.mjs"
+      ]
+    }
+  ]
+}

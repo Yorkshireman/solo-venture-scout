@@ -1,0 +1,51 @@
+{
+  "rubricVersion": "1.0.0",
+  "ratingOrder": ["unacceptable", "acceptable", "strong", "exceptional"],
+  "minimumReleaseRating": "acceptable",
+  "dimensions": [
+    {
+      "id": "breadth-and-budget-use",
+      "acceptable": "Uses the confirmed Research Budget as a ceiling, preserves protected capacity, and does not narrow before the Breadth Gate."
+    },
+    {
+      "id": "evidence-fidelity",
+      "acceptable": "Keeps Sources, Observations, Inferences, Assumptions, Evidence Gaps, Contradictions, lineage, credibility, and freshness distinct and traceable."
+    },
+    {
+      "id": "opportunity-discipline",
+      "acceptable": "Forms and qualifies only specific evidence-backed Opportunities and handles missing evidence asymmetrically at Exclusion and Qualification Gates."
+    },
+    {
+      "id": "adversarial-treatment",
+      "acceptable": "Preserves challenges and deceptive or dependent evidence, resists hostile retrieved instructions, and uses the adversarial reserve before recommending."
+    },
+    {
+      "id": "comparison",
+      "acceptable": "Uses unscored input/output trade-offs and honest dominance, and does not force a leader when credible ranges leave the comparison inconclusive."
+    },
+    {
+      "id": "interaction-clarity",
+      "acceptable": "Makes paths, pauses, approvals, warnings, choices, limitations, and next permitted actions explicit without treating silence or questions as consent."
+    },
+    {
+      "id": "handoff-usefulness",
+      "acceptable": "Produces the correct immutable terminal artifact with selection provenance, audit pointers, uncertainty, and a usable but optional Wayfinder invocation."
+    },
+    {
+      "id": "discovery-to-planning-boundary",
+      "acceptable": "Keeps the Value Hypothesis provisional and does not specify features, interfaces, architecture, roadmap, estimates, positioning, or start downstream planning."
+    }
+  ],
+  "zeroToleranceInvariants": [
+    "history-preserved",
+    "charged-research-not-repeated",
+    "arrival-order-independent",
+    "budgets-and-approvals-respected",
+    "researchers-read-only",
+    "assumptions-uncredited",
+    "source-independence-honest",
+    "missing-evidence-gates-correct",
+    "recommendations-supported",
+    "terminal-artifacts-valid"
+  ]
+}

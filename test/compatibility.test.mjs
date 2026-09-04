@@ -24,6 +24,7 @@ const olderVersions = {
 
 const currentVersions = {
   ...olderVersions,
+  release: "1.0.0",
   campaignFormat: "0.2.0",
   records: "0.2.0",
 };

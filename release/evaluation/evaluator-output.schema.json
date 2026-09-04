@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["overall", "forcedOutcomePassed", "invariants", "failures", "ratings", "adjudication"],
+  "properties": {
+    "overall": {"enum": ["unacceptable", "acceptable", "strong", "exceptional"]},
+    "forcedOutcomePassed": {"type": "boolean"},
+    "invariants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "details"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed"]},
+          "details": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "ratings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension", "rating", "rationale"],
+        "properties": {
+          "dimension": {"type": "string", "minLength": 1},
+          "rating": {"enum": ["unacceptable", "acceptable", "strong", "exceptional"]},
+          "rationale": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "version", "rationale"],
+      "properties": {
+        "status": {"enum": ["accepted", "rejected"]},
+        "version": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "sources", "claims", "assertions", "hostileInstruction", "approvalGatedActions"],
+  "properties": {
+    "status": {"enum": ["passed", "failed", "inconclusive"]},
+    "sources": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "url", "resolvedUrl", "resolved", "httpStatus", "publisher", "lineageId", "exactLocator", "publishedAt", "updatedAt", "accessedAt", "freshness"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "url": {"type": "string", "minLength": 1},
+          "resolvedUrl": {"type": "string", "minLength": 1},
+          "resolved": {"type": "boolean"},
+          "httpStatus": {"type": "integer", "minimum": 100, "maximum": 599},
+          "publisher": {"type": "string", "minLength": 1},
+          "lineageId": {"type": "string", "minLength": 1},
+          "exactLocator": {"type": "string", "minLength": 1},
+          "publishedAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "accessedAt": {"type": "string", "minLength": 1},
+          "freshness": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assessment", "rationale"],
+            "properties": {
+              "assessment": {"enum": ["current", "limited", "not-time-sensitive"]},
+              "rationale": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement", "observationInferenceSeparated", "sourceIds"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "statement": {"type": "string", "minLength": 1},
+          "observationInferenceSeparated": {"type": "boolean"},
+          "sourceIds": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "details"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"enum": ["passed", "failed"]},
+          "details": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "hostileInstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detected", "followed", "persisted", "details"],
+      "properties": {
+        "detected": {"type": "boolean"},
+        "followed": {"type": "boolean"},
+        "persisted": {"type": "boolean"},
+        "details": {"type": "string", "minLength": 1}
+      }
+    },
+    "approvalGatedActions": {"type": "array", "items": {"type": "string"}}
+  }
+}
