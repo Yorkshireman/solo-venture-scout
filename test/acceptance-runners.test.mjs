@@ -38,7 +38,7 @@ test("shared Codex invocation preserves policy, identity, output, and sanitized 
     model: "test-model",
     reasoningEffort: "test",
     workingDirectory: root,
-    executionPolicyArguments: ["--sandbox", "read-only"],
+    executionPolicy: "read-only",
     workingDirectoryPlaceholder: "$RUN_DIRECTORY",
     responsePrefix: "solo-venture-scout-test-response-",
     executable,

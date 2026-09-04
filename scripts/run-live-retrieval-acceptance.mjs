@@ -1,6 +1,7 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { appendOnlyJsonl } from "./lib/append-only-jsonl.mjs";
 import { repositoryRoot } from "./lib/release-paths.mjs";
 
 const contractPath = path.resolve(
@@ -32,25 +33,6 @@ const artifactsDirectory = path.resolve(
   process.env.SVS_LIVE_RETRIEVAL_ARTIFACTS_DIR ??
     path.join(path.dirname(ledgerPath), "live-retrieval-artifacts"),
 );
-
-/** @returns {Promise<Array<Record<string, any>>>} */
-async function readLedger() {
-  try {
-    return (await readFile(ledgerPath, "utf8"))
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-/** @param {Record<string, any>} record */
-async function appendRecord(record) {
-  await mkdir(path.dirname(ledgerPath), { recursive: true });
-  await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, { flag: "a" });
-}
 
 /** @param {Record<string, any>} source */
 function isVerifiedHttpsSource(source) {
@@ -154,7 +136,8 @@ function inspectObservableSafety(result) {
 }
 
 await mkdir(artifactsDirectory, { recursive: true });
-const records = await readLedger();
+const ledger = appendOnlyJsonl(ledgerPath, { label: "live-retrieval run ledger" });
+const records = await ledger.read();
 let failed = false;
 for (const profile of contract.profiles) {
   for (const methodId of profile.retrievalMethods) {
@@ -367,7 +350,7 @@ for (const profile of contract.profiles) {
         safetyEvaluation,
         failures: [],
       };
-      await appendRecord(record);
+      await ledger.append(record);
       records.push(record);
       if (status !== "passed") failed = true;
     } catch (error) {
@@ -421,7 +404,7 @@ for (const profile of contract.profiles) {
         },
         failures: [message.slice(0, 16_000)],
       };
-      await appendRecord(record);
+      await ledger.append(record);
       records.push(record);
       failed = true;
     }

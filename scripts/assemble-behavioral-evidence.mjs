@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { readJsonLines } from "./lib/append-only-jsonl.mjs";
 import { sha256, treeSha256 } from "./lib/artifact-identity.mjs";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
@@ -29,18 +30,7 @@ const skillRoot = path.resolve(
 const skillVersions = JSON.parse(
   await readFile(path.join(skillRoot, "references", "versions.json"), "utf8"),
 );
-const records = (await readFile(ledgerPath, "utf8"))
-  .split("\n")
-  .filter((line) => line.trim().length > 0)
-  .map((line, index) => {
-    try {
-      return JSON.parse(line);
-    } catch (error) {
-      throw new Error(`invalid behavioral ledger JSON at line ${index + 1}`, {
-        cause: error,
-      });
-    }
-  });
+const records = await readJsonLines(ledgerPath, { label: "behavioral ledger" });
 const hostVersion =
   process.env.SVS_CODEX_VERSION ??
   (await execFileAsync("codex", ["--version"])).stdout.trim();

@@ -14,7 +14,7 @@ import path from "node:path";
  *   reasoningEffort: string;
  *   workingDirectory: string;
  *   readableSkillRoot?: string;
- *   executionPolicyArguments?: string[];
+ *   executionPolicy?: "approval-managed" | "read-only";
  *   responsePrefix?: string;
  *   workingDirectoryPlaceholder?: string;
  *   executable?: string;
@@ -27,11 +27,18 @@ export async function invokeCodex({
   reasoningEffort,
   workingDirectory,
   readableSkillRoot,
-  executionPolicyArguments = ["--approve-for-me"],
+  executionPolicy = "approval-managed",
   responsePrefix = "solo-venture-scout-codex-response-",
   workingDirectoryPlaceholder = "$WORKING_DIRECTORY",
   executable = process.env.SVS_CODEX_EXECUTABLE ?? "codex",
 }) {
+  if (!["approval-managed", "read-only"].includes(executionPolicy)) {
+    throw new Error(`unsupported Codex execution policy: ${executionPolicy}`);
+  }
+  const executionPolicyArguments =
+    executionPolicy === "read-only"
+      ? ["--sandbox", "read-only"]
+      : ["--approve-for-me"];
   const responseDirectory = await mkdtemp(path.join(tmpdir(), responsePrefix));
   const responsePath = path.join(responseDirectory, "response.json");
   const arguments_ = [

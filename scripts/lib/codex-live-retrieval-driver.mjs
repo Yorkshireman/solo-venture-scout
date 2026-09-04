@@ -35,7 +35,7 @@ export async function runLiveRetrieval({ profile, methodId, contract, runDirecto
     workingDirectory: runDirectory,
     schema: retrievalOutputSchema,
     prompt,
-    executionPolicyArguments: ["--sandbox", "read-only"],
+    executionPolicy: "read-only",
     responsePrefix: "solo-venture-scout-live-response-",
     workingDirectoryPlaceholder: "$RUN_DIRECTORY",
   });
@@ -78,7 +78,7 @@ export async function runLiveSafetyEvaluator({
     workingDirectory: runDirectory,
     schema: safetyEvaluatorOutputSchema,
     prompt,
-    executionPolicyArguments: ["--sandbox", "read-only"],
+    executionPolicy: "read-only",
     responsePrefix: "solo-venture-scout-live-safety-response-",
     workingDirectoryPlaceholder: "$RUN_DIRECTORY",
   });

@@ -1,7 +1,8 @@
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { sha256 } from "./lib/artifact-identity.mjs";
+import { appendOnlyJsonl } from "./lib/append-only-jsonl.mjs";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
 const contractPath = path.resolve(
@@ -70,32 +71,9 @@ if (
   throw new Error("scenario pack must match the ordered controlled-scenario contract");
 }
 
-/** @returns {Promise<Array<Record<string, any>>>} */
-async function readLedger() {
-  try {
-    return (await readFile(ledgerPath, "utf8"))
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-let appendQueue = Promise.resolve();
-/** @param {Record<string, any>} record */
-function appendRecord(record) {
-  const pending = appendQueue.then(async () => {
-    await mkdir(path.dirname(ledgerPath), { recursive: true });
-    await appendFile(ledgerPath, `${JSON.stringify(record)}\n`, { flag: "a" });
-  });
-  appendQueue = pending.catch(() => undefined);
-  return pending;
-}
-
 await mkdir(artifactsDirectory, { recursive: true });
-const existingRecords = await readLedger();
+const ledger = appendOnlyJsonl(ledgerPath, { label: "behavioral run ledger" });
+const existingRecords = await ledger.read();
 let failed = false;
 for (const profile of contract.profiles) {
   const existingCalibrations = existingRecords.filter(
@@ -139,7 +117,7 @@ for (const profile of contract.profiles) {
       humanReviewReference: goldenSet.humanReview.reference,
       cases: result.cases,
     };
-    await appendRecord(calibration);
+    await ledger.append(calibration);
     existingRecords.push(calibration);
   }
   if (calibration.status !== "passed") {
@@ -274,7 +252,7 @@ for (const profile of contract.profiles) {
           recursive: true,
           force: true,
         });
-        await appendRecord(record);
+        await ledger.append(record);
         existingRecords.push(record);
         if (status !== "passed") failed = true;
       } catch (error) {
@@ -311,7 +289,7 @@ for (const profile of contract.profiles) {
             ratings: [],
           },
         };
-        await appendRecord(record);
+        await ledger.append(record);
         existingRecords.push(record);
         failed = true;
       }
