@@ -766,7 +766,57 @@ test("search discovery does not reinterpret a manual version edit as a newer con
   assert.deepEqual(result.response.error.details, [
     "manifest integrity digest does not match",
   ]);
-  assert.equal((await readdir(campaignPath)).includes(".coordinator-locks"), false);
+  assert.equal(
+    (await readdir(campaignPath)).includes(".coordinator-locks"),
+    false,
+  );
+});
+
+test("search discovery keeps a structurally damaged Campaign manifest discoverable", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-search-damaged-manifest-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-search-reconciliation-"),
+  );
+  const campaignPath = path.join(storagePath, "damaged-manifest");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-search-damaged-manifest-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-search-damaged-manifest",
+      coordinatorId: "coordinator-original",
+      createdAt: "2025-09-04T11:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T11:30:00.000Z",
+    },
+  });
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  await writeFile(manifestPath, "{\"campaignId\":");
+  const damagedManifest = await readFile(manifestPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-search-damaged-manifest-1",
+    command: "resumeCampaign",
+    payload: {
+      searchPath: storagePath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2025-09-04T12:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T12:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(result.response.error.details, [
+    "manifest is not valid JSON",
+  ]);
+  assert.deepEqual(await readFile(manifestPath), damagedManifest);
 });
 
 test("a deleted authoritative tail is detected and preserved", async () => {

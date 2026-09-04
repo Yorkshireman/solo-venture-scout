@@ -5786,12 +5786,27 @@ async function rebuildCampaignFromAuthorityUnchecked(
   expectedContracts: Record<string, string> = contracts,
 ) {
   const resolvedPath = path.resolve(campaignPath);
+  let manifestValue: unknown;
+  try {
+    manifestValue = await readJson(path.join(resolvedPath, "manifest.json"));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new CampaignAuthorityError(
+        "reconciliation",
+        "manifest is not valid JSON",
+      );
+    }
+    throw error;
+  }
   const manifest = parseCampaignManifest(
-    await readJson(path.join(resolvedPath, "manifest.json")),
+    manifestValue,
     expectedContracts,
   );
   if (manifest === undefined) {
-    throw new Error("manifest is missing identity or supported contract versions");
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest structure or contract versions do not match a supported Campaign",
+    );
   }
 
   const records = await readCampaignRecords(resolvedPath);
@@ -7429,14 +7444,24 @@ async function hasCampaignManifestMarker(campaignPath: string): Promise<boolean>
     if (!manifestFile.isFile()) {
       return false;
     }
-    const manifest = await readJson(manifestPath);
+    try {
+      const manifest = await readJson(manifestPath);
+      if (
+        isRecord(manifest) &&
+        typeof manifest.campaignId === "string" &&
+        isRecord(manifest.versions) &&
+        isRecord(manifest.authority) &&
+        manifest.authority.records === "records.jsonl"
+      ) {
+        return true;
+      }
+    } catch {
+      // A Campaign whose manifest was damaged still remains discoverable by
+      // its authoritative record file so validation can report reconciliation.
+    }
     return (
-      isRecord(manifest) &&
-      typeof manifest.campaignId === "string" &&
-      isRecord(manifest.versions) &&
-      isRecord(manifest.authority) &&
-      manifest.authority.records === "records.jsonl"
-    );
+      await lstat(path.join(campaignPath, "records.jsonl"))
+    ).isFile();
   } catch {
     return false;
   }
@@ -7576,7 +7601,7 @@ export async function inspectEvidence(command: InspectEvidenceCommand) {
           code: "SVS-EVIDENCE-INSPECTION-INVALID",
           message: "Requested Evidence Ledger entries could not be inspected.",
           action:
-            "Use stable entry identities from the validated Work View and preserve Campaign state when validation fails.",
+            "Use stable entry identities from the validated Work View and preserve the Scouting Campaign's authoritative history when validation fails.",
           details: [
             error instanceof Error ? error.message : "unknown validation error",
           ],

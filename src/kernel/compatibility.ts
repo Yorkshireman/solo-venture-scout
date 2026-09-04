@@ -59,6 +59,8 @@ export const campaignMigrationSteps = [
 type CampaignMigrationStep = (typeof campaignMigrationSteps)[number];
 type CampaignMigrationStepStatus = "pending" | "completed";
 
+class CampaignMigrationSourceChangedError extends Error {}
+
 type CampaignMigrationJournal = {
   journalVersion: string;
   requestId: string;
@@ -407,6 +409,7 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
   };
   let candidatePath: string | undefined;
   let snapshotCreated = false;
+  let authorityMutationStarted = false;
   try {
     const lockedPlan = await supportedCampaignMigrationPlan(campaignPath);
     if (
@@ -438,6 +441,23 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     );
     await writePrivateText(path.join(snapshotPath, "manifest.json"), manifestText);
     await writePrivateText(path.join(snapshotPath, "records.jsonl"), recordsText);
+    let snapshotPlan;
+    try {
+      snapshotPlan = await supportedCampaignMigrationPlan(snapshotPath);
+    } catch (error) {
+      throw new CampaignMigrationSourceChangedError(
+        `captured source authority is invalid: ${error instanceof Error ? error.message : "unknown validation error"}`,
+      );
+    }
+    if (
+      snapshotPlan === undefined ||
+      snapshotPlan.migration.sourceAuthorityDigest !==
+        command.payload.sourceAuthorityDigest
+    ) {
+      throw new CampaignMigrationSourceChangedError(
+        "captured source authority does not match the confirmed migration plan",
+      );
+    }
     snapshotCreated = true;
     journal = completedStep(journal, "snapshot-authoritative-artifacts");
     await replacePrivateJson(journalPath, journal);
@@ -489,6 +509,24 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     await replacePrivateJson(journalPath, journal);
     injectPersistenceFault("after-migration-validation");
 
+    let livePlan;
+    try {
+      livePlan = await supportedCampaignMigrationPlan(campaignPath);
+    } catch (error) {
+      throw new CampaignMigrationSourceChangedError(
+        `live source authority is invalid: ${error instanceof Error ? error.message : "unknown validation error"}`,
+      );
+    }
+    if (
+      livePlan === undefined ||
+      livePlan.migration.sourceAuthorityDigest !==
+        command.payload.sourceAuthorityDigest
+    ) {
+      throw new CampaignMigrationSourceChangedError(
+        "live source authority no longer matches the validated migration snapshot",
+      );
+    }
+    authorityMutationStarted = true;
     await replacePrivateText(
       path.join(campaignPath, "records.jsonl"),
       `${upgradedRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
@@ -524,7 +562,7 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     });
   } catch (error) {
     const failure = error instanceof Error ? error.message : "unknown migration error";
-    if (snapshotCreated) {
+    if (snapshotCreated && authorityMutationStarted) {
       await replacePrivateText(
         path.join(campaignPath, "records.jsonl"),
         await readFile(path.join(snapshotPath, "records.jsonl"), "utf8"),
@@ -536,6 +574,17 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     }
     journal = { ...journal, status: "failed", failure };
     await replacePrivateJson(journalPath, journal).catch(() => undefined);
+    if (error instanceof CampaignMigrationSourceChangedError) {
+      return migrationResponse(command, {
+        ok: false,
+        code: "SVS-CAMPAIGN-MIGRATION-SOURCE-CHANGED",
+        message:
+          "The Campaign authority does not match the migration plan that was confirmed.",
+        action:
+          "Preserve the Campaign and captured snapshot, then resume again to review and confirm the exact current source authority before migration.",
+        details: [failure],
+      });
+    }
     return migrationResponse(command, {
       ok: false,
       code: "SVS-CAMPAIGN-MIGRATION-FAILED",
