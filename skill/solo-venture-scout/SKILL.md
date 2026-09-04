@@ -465,6 +465,12 @@ When replacing gate decisions, pass the re-evaluation identity to the existing g
 command and submit only affected Opportunity assessments; retain unchanged gate
 decisions in the rebuilt current snapshot.
 
+Immediately after re-evaluation, inspect the authoritative Work View again. Report
+each affected Opportunity's current disposition, gate state, and eligibility exactly
+as returned, along with preserved terminal artifact paths and next permitted actions.
+Never carry forward a superseded status or label from the pre-correction Campaign or
+from conversation memory.
+
 A continued campaign retains its Scouting Campaign identity and complete evidence
 lineage. If the developer deliberately chooses an independent objective, create a new
 campaign with a new identity instead of using re-evaluation to broaden the old one.

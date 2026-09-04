@@ -1,8 +1,9 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sha256 } from "./lib/artifact-identity.mjs";
+import { sha256, treeSha256 } from "./lib/artifact-identity.mjs";
 import { appendOnlyJsonl } from "./lib/append-only-jsonl.mjs";
+import { compactTranscript } from "./lib/compact-transcript.mjs";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
 const contractPath = path.resolve(
@@ -48,6 +49,7 @@ const skillRoot = path.resolve(
   process.env.SVS_TESTED_SKILL_ROOT ??
     path.join(outputRoot, "standalone", "solo-venture-scout"),
 );
+const currentSkillTreeSha256 = await treeSha256(skillRoot);
 const concurrency = Number(process.env.SVS_ACCEPTANCE_CONCURRENCY ?? "3");
 if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) {
   throw new Error("SVS_ACCEPTANCE_CONCURRENCY must be an integer from 1 through 8");
@@ -139,7 +141,8 @@ for (const profile of contract.profiles) {
         record.recordType === "behavioral-run" &&
         record.profileId === profile.id &&
         record.scenarioId === scenario.id &&
-        record.repetition === repetition,
+        record.repetition === repetition &&
+        record.skillTreeSha256 === currentSkillTreeSha256,
     );
     if (existingRuns.length > 0) {
       throw new Error(
@@ -153,7 +156,7 @@ for (const profile of contract.profiles) {
     while (nextJobIndex < jobs.length) {
       const { scenario, repetition } = jobs[nextJobIndex];
       nextJobIndex += 1;
-      const runId = `${profile.id}-${scenario.id}-${repetition}`;
+      const runId = `${profile.id}-${scenario.id}-${repetition}-${currentSkillTreeSha256.slice(0, 12)}`;
       const runDirectory = path.join(artifactsDirectory, runId);
       await mkdir(runDirectory, { recursive: false });
       try {
@@ -167,7 +170,11 @@ for (const profile of contract.profiles) {
           skillRoot,
         });
         const transcriptPath = path.join(runDirectory, "transcript.json");
-        const sanitizedTranscript = JSON.stringify(coordinatorResult.transcript, null, 2)
+        const sanitizedTranscript = JSON.stringify(
+          compactTranscript(coordinatorResult.transcript),
+          null,
+          2,
+        )
           .replaceAll(runDirectory, "$RUN_DIRECTORY")
           .replaceAll(skillRoot, "$SKILL_ROOT")
           .replaceAll(repositoryRoot, "$REPOSITORY_ROOT");
@@ -185,69 +192,70 @@ for (const profile of contract.profiles) {
           coordinatorResult,
           transcriptPath,
         });
-      const forcedOutcomePassed = evaluatorResult.forcedOutcomePassed === true;
-      const invariantsPassed =
-        Array.isArray(evaluatorResult.invariants) &&
-        contract.zeroToleranceInvariants.every(
-          /** @param {string} invariantId */
-          (invariantId) =>
-            evaluatorResult.invariants.some(
-              /** @param {{ id: string, status: string }} invariant */
-              (invariant) =>
-                invariant.id === invariantId && invariant.status === "passed",
-            ),
-        );
-      const rubricsPassed =
-        Array.isArray(evaluatorResult.ratings) &&
-        contract.rubricDimensions.every(
-          /** @param {string} dimension */
-          (dimension) =>
-            evaluatorResult.ratings.some(
-              /** @param {{ dimension: string, rating: string }} rating */
-              (rating) =>
-                rating.dimension === dimension &&
-                ["acceptable", "strong", "exceptional"].includes(rating.rating),
-            ),
-        );
-      const status =
-        evaluatorResult.status === "passed" &&
-        forcedOutcomePassed &&
-        invariantsPassed &&
-        rubricsPassed &&
-        /^[a-f0-9]{64}$/.test(coordinatorResult.skillTreeSha256) &&
-        coordinatorResult.sessionId !== evaluatorResult.sessionId
-          ? "passed"
-          : "failed";
-      const record = {
-        recordType: "behavioral-run",
-        profileId: profile.id,
-        scenarioId: scenario.id,
-        repetition,
-        runId,
-        coordinatorSessionId: coordinatorResult.sessionId,
-        skillTreeSha256: coordinatorResult.skillTreeSha256,
-        scenarioInputSha256: sha256(JSON.stringify(scenario.coordinatorInput)),
-        precondition: coordinatorResult.precondition,
-        startedAt: coordinatorResult.startedAt,
-        completedAt: coordinatorResult.completedAt,
-        transcriptPath: path.relative(path.dirname(ledgerPath), transcriptPath),
-        campaignPath: path.relative(
-          path.dirname(ledgerPath),
-          coordinatorResult.campaignPath,
-        ),
-        status,
-        forcedOutcomePassed,
-        invariants: evaluatorResult.invariants,
-        evaluation: {
-          evaluationId: evaluatorResult.evaluationId,
-          evaluatorSessionId: evaluatorResult.sessionId,
-          status: evaluatorResult.status,
-          rubricVersion: rubric.rubricVersion,
-          failures: evaluatorResult.failures,
-          adjudication: evaluatorResult.adjudication,
-          ratings: evaluatorResult.ratings,
-        },
-      };
+        const forcedOutcomePassed = evaluatorResult.forcedOutcomePassed === true;
+        const invariantsPassed =
+          Array.isArray(evaluatorResult.invariants) &&
+          contract.zeroToleranceInvariants.every(
+            /** @param {string} invariantId */
+            (invariantId) =>
+              evaluatorResult.invariants.some(
+                /** @param {{ id: string, status: string }} invariant */
+                (invariant) =>
+                  invariant.id === invariantId && invariant.status === "passed",
+              ),
+          );
+        const rubricsPassed =
+          Array.isArray(evaluatorResult.ratings) &&
+          contract.rubricDimensions.every(
+            /** @param {string} dimension */
+            (dimension) =>
+              evaluatorResult.ratings.some(
+                /** @param {{ dimension: string, rating: string }} rating */
+                (rating) =>
+                  rating.dimension === dimension &&
+                  ["acceptable", "strong", "exceptional"].includes(rating.rating),
+              ),
+          );
+        const status =
+          evaluatorResult.status === "passed" &&
+          forcedOutcomePassed &&
+          invariantsPassed &&
+          rubricsPassed &&
+          coordinatorResult.skillTreeSha256 === currentSkillTreeSha256 &&
+          coordinatorResult.sessionId !== evaluatorResult.sessionId
+            ? "passed"
+            : "failed";
+        const record = {
+          recordType: "behavioral-run",
+          profileId: profile.id,
+          scenarioId: scenario.id,
+          repetition,
+          runId,
+          candidateId: currentSkillTreeSha256,
+          coordinatorSessionId: coordinatorResult.sessionId,
+          skillTreeSha256: coordinatorResult.skillTreeSha256,
+          scenarioInputSha256: sha256(JSON.stringify(scenario.coordinatorInput)),
+          precondition: coordinatorResult.precondition,
+          startedAt: coordinatorResult.startedAt,
+          completedAt: coordinatorResult.completedAt,
+          transcriptPath: path.relative(path.dirname(ledgerPath), transcriptPath),
+          campaignPath: path.relative(
+            path.dirname(ledgerPath),
+            coordinatorResult.campaignPath,
+          ),
+          status,
+          forcedOutcomePassed,
+          invariants: evaluatorResult.invariants,
+          evaluation: {
+            evaluationId: evaluatorResult.evaluationId,
+            evaluatorSessionId: evaluatorResult.sessionId,
+            status: evaluatorResult.status,
+            rubricVersion: rubric.rubricVersion,
+            failures: evaluatorResult.failures,
+            adjudication: evaluatorResult.adjudication,
+            ratings: evaluatorResult.ratings,
+          },
+        };
         await rm(path.join(runDirectory, "tested-skill"), {
           recursive: true,
           force: true,
@@ -257,20 +265,36 @@ for (const profile of contract.profiles) {
         if (status !== "passed") failed = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const failedTranscriptPath = path.join(runDirectory, "transcript.json");
+        await writeFile(
+          failedTranscriptPath,
+          `${JSON.stringify(
+            {
+              status: "failed",
+              failure: message.slice(0, 16_000),
+              runId,
+              candidateId: currentSkillTreeSha256,
+            },
+            null,
+            2,
+          )}\n`,
+        );
         const record = {
           recordType: "behavioral-run",
           profileId: profile.id,
           scenarioId: scenario.id,
           repetition,
           runId,
+          candidateId: currentSkillTreeSha256,
           coordinatorSessionId: null,
+          skillTreeSha256: currentSkillTreeSha256,
           scenarioInputSha256: sha256(JSON.stringify(scenario.coordinatorInput)),
           precondition: null,
           startedAt: new Date().toISOString(),
           completedAt: new Date().toISOString(),
           transcriptPath: path.relative(
             path.dirname(ledgerPath),
-            path.join(runDirectory, "transcript.json"),
+            failedTranscriptPath,
           ),
           campaignPath: path.relative(
             path.dirname(ledgerPath),

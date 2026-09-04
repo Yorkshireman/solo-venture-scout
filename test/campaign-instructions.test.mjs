@@ -417,6 +417,14 @@ test("packaged Scout records challenges, targeted re-evaluation, and terminal su
     instructions,
     /Resume.+only.+time-sensitive evidence.+active\s+decision/is,
   );
+  assert.match(
+    instructions,
+    /inspect.+authoritative Work View.+current disposition.+eligibility.+exactly/is,
+  );
+  assert.match(
+    instructions,
+    /never.+carry forward.+superseded.+status|label/is,
+  );
   assert.match(reference, /"command": "reevaluateCampaign"/);
   assert.match(reference, /"kind": "campaign-re-evaluation"/);
   assert.match(reference, /"supersededDecisionIds"/);

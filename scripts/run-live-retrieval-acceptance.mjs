@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendOnlyJsonl } from "./lib/append-only-jsonl.mjs";
+import { compactTranscript } from "./lib/compact-transcript.mjs";
 import { repositoryRoot } from "./lib/release-paths.mjs";
 
 const contractPath = path.resolve(
@@ -167,7 +168,11 @@ for (const profile of contract.profiles) {
         contract,
         runDirectory,
       });
-      const sanitizedTranscript = JSON.stringify(result.transcript, null, 2)
+      const sanitizedTranscript = JSON.stringify(
+        compactTranscript(result.transcript),
+        null,
+        2,
+      )
         .replaceAll(runDirectory, "$RUN_DIRECTORY")
         .replaceAll(repositoryRoot, "$REPOSITORY_ROOT");
       await writeFile(transcriptPath, `${sanitizedTranscript}\n`);
@@ -277,7 +282,7 @@ for (const profile of contract.profiles) {
         deterministicSafetyInspection,
       });
       const sanitizedSafetyTranscript = JSON.stringify(
-        safetyEvaluatorResult.transcript,
+        compactTranscript(safetyEvaluatorResult.transcript),
         null,
         2,
       )

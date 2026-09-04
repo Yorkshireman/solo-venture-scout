@@ -31,6 +31,7 @@ const skillVersions = JSON.parse(
   await readFile(path.join(skillRoot, "references", "versions.json"), "utf8"),
 );
 const records = await readJsonLines(ledgerPath, { label: "behavioral ledger" });
+const currentSkillTreeSha256 = await treeSha256(skillRoot);
 const hostVersion =
   process.env.SVS_CODEX_VERSION ??
   (await execFileAsync("codex", ["--version"])).stdout.trim();
@@ -42,13 +43,19 @@ for (const claimedProfile of contract.profiles) {
       record.recordType === "evaluator-calibration" &&
       record.profileId === claimedProfile.id,
   );
-  const runRecords = records.filter(
+  const allRunRecords = records.filter(
     (record) =>
       record.recordType === "behavioral-run" && record.profileId === claimedProfile.id,
   );
+  const runRecords = allRunRecords.filter(
+    (record) => record.skillTreeSha256 === currentSkillTreeSha256,
+  );
+  const priorRunRecords = allRunRecords.filter(
+    (record) => record.skillTreeSha256 !== currentSkillTreeSha256,
+  );
   const calibration = calibrationRecords[0];
-  const runs = [];
-  for (const record of runRecords) {
+  /** @param {Record<string, any>} record */
+  const materializeRun = async (record) => {
     let transcriptSha256 = "unavailable";
     let campaignSha256 = "unavailable";
     try {
@@ -59,7 +66,7 @@ for (const claimedProfile of contract.profiles) {
         path.resolve(path.dirname(ledgerPath), record.campaignPath),
       );
     } catch {}
-    runs.push({
+    return {
       scenarioId: record.scenarioId,
       repetition: record.repetition,
       runId: record.runId,
@@ -77,8 +84,10 @@ for (const claimedProfile of contract.profiles) {
       forcedOutcomePassed: record.forcedOutcomePassed,
       invariants: record.invariants,
       evaluation: record.evaluation,
-    });
-  }
+    };
+  };
+  const runs = await Promise.all(runRecords.map(materializeRun));
+  const priorRuns = await Promise.all(priorRunRecords.map(materializeRun));
   const scenarioOrder = new Map(
     contract.controlledScenarios.map(
       /** @param {string} scenarioId @param {number} index */
@@ -91,6 +100,11 @@ for (const claimedProfile of contract.profiles) {
         (scenarioOrder.get(right.scenarioId) ?? Number.MAX_SAFE_INTEGER) ||
       left.repetition - right.repetition,
   );
+  priorRuns.sort(
+    (left, right) =>
+      String(left.startedAt).localeCompare(String(right.startedAt)) ||
+      String(left.runId).localeCompare(String(right.runId)),
+  );
   const expectedRunCount =
     contract.controlledScenarios.length * contract.scenarioRepetitions;
   const expectedKeys = new Set();
@@ -100,8 +114,13 @@ for (const claimedProfile of contract.profiles) {
     }
   }
   const actualKeys = runs.map((run) => `${run.scenarioId}:${run.repetition}`);
+  const ledgerKeys = allRunRecords.map(
+    (record) =>
+      `${record.skillTreeSha256 ?? "unknown"}:${record.scenarioId}:${record.repetition}`,
+  );
   const runLedgerComplete =
     calibrationRecords.length === 1 &&
+    new Set(ledgerKeys).size === ledgerKeys.length &&
     runs.length === expectedRunCount &&
     new Set(actualKeys).size === expectedRunCount &&
     actualKeys.every((key) => expectedKeys.has(key));
@@ -132,8 +151,11 @@ for (const claimedProfile of contract.profiles) {
         : null,
     },
     runLedgerComplete,
-    attemptCount: runs.length,
+    attemptCount: allRunRecords.length,
+    qualificationAttemptCount: runs.length,
+    priorAttemptCount: priorRuns.length,
     runs,
+    priorRuns,
   });
 }
 
@@ -174,7 +196,7 @@ const evidence = {
   skill: {
     name: contract.skillName,
     version: skillVersions.release,
-    treeSha256: await treeSha256(skillRoot),
+    treeSha256: currentSkillTreeSha256,
   },
   profiles,
 };

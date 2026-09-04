@@ -228,7 +228,17 @@ function validateBehavioralEvidence(evidence, acceptanceContract, scenarioPack) 
     }
 
     const runs = Array.isArray(profile.runs) ? profile.runs : [];
-    if (profile.runLedgerComplete !== true || profile.attemptCount !== runs.length) {
+    const priorRuns = Array.isArray(profile.priorRuns) ? profile.priorRuns : [];
+    if (
+      profile.runLedgerComplete !== true ||
+      profile.qualificationAttemptCount !== runs.length ||
+      profile.priorAttemptCount !== priorRuns.length ||
+      profile.attemptCount !== runs.length + priorRuns.length ||
+      priorRuns.some(
+        (/** @type {Record<string, any>} */ run) =>
+          run.skillTreeSha256 === evidence.skill.treeSha256,
+      )
+    ) {
       diagnostics.push(`profile ${claimedProfile.id} does not attest a complete append-only run ledger`);
     }
     const expectedRunCount =
@@ -1005,7 +1015,14 @@ function renderHumanReport(acceptanceReport) {
         "",
         `Evaluator: ${profile.evaluator?.model ?? "unknown"} ${profile.evaluator?.version ?? "unknown"}; rubric ${profile.evaluator?.calibration?.rubricVersion ?? "unknown"}; golden set ${profile.evaluator?.calibration?.goldenSetVersion ?? "unknown"}; calibration ${profile.evaluator?.calibration?.status ?? "missing"}.`,
         "",
+        `Current candidate runs: ${profile.qualificationAttemptCount ?? 0}; preserved prior candidate runs: ${profile.priorAttemptCount ?? 0}; append-only total: ${profile.attemptCount ?? 0}.`,
+        "",
       );
+      for (const run of profile.priorRuns ?? []) {
+        lines.push(
+          `- Preserved prior run ${run.runId}: ${run.scenarioId} repetition ${run.repetition}; ${run.status}; skill ${run.skillTreeSha256}; coordinator ${run.coordinatorSessionId}; evaluator ${run.evaluation?.evaluatorSessionId}; adjudication ${run.evaluation?.adjudication?.status} ${run.evaluation?.adjudication?.version}; failures ${(run.evaluation?.failures ?? []).join(" | ") || "none recorded"}; transcript ${run.transcriptSha256}; Campaign ${run.campaignSha256}.`,
+        );
+      }
       for (const run of profile.runs ?? []) {
         lines.push(
           `- ${run.runId}: ${run.scenarioId} repetition ${run.repetition}; ${run.status}; scenario input ${run.scenarioInputSha256}; precondition ${run.precondition?.precondition} at record ${run.precondition?.initialRecordSequence}; input binding ${run.precondition?.inputBinding?.status} (Campaign Intake ${run.precondition?.inputBinding?.persistedCampaignIntakeSha256}; Evidence ${run.precondition?.inputBinding?.boundEvidenceSha256}; Work View ${run.precondition?.inputBinding?.workViewSha256}); skill ${run.skillTreeSha256}; coordinator ${run.coordinatorSessionId}; evaluator ${run.evaluation?.evaluatorSessionId}; evaluation ${run.evaluation?.evaluationId}; adjudication ${run.evaluation?.adjudication?.status} ${run.evaluation?.adjudication?.version}; transcript ${run.transcriptSha256}; Campaign ${run.campaignSha256}.`,

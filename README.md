@@ -426,9 +426,14 @@ Evidence, and Work View digests. This binds the declared input to the authoritat
 boundary and keeps deterministic fixture work from being attributed to the coordinator.
 Runs use bounded concurrency (three by default; set
 `SVS_ACCEPTANCE_CONCURRENCY` from 1 through 8). The JSONL ledger is append-only, including
-process failures. A rerun does not erase a genuine failure, and an existing
-scenario/repetition cannot be replaced. A failed release needs a new suite or release
-version rather than selective deletion.
+process failures. Each model invocation also has a ten-minute wall-clock limit and a
+16 MiB transcript-output limit by default; either bound fails closed and can be lowered
+with `SVS_CODEX_TIMEOUT_MS` or `SVS_CODEX_MAX_TRANSCRIPT_BYTES`. A rerun does not erase
+a genuine failure, and an existing scenario/repetition for the same generated skill
+tree cannot be replaced. After the implementation changes, a new skill-tree candidate
+may record a complete cohort in the same append-only ledger. Qualification uses only
+the complete cohort for the exact current skill tree while preserving and disclosing
+every prior candidate run and adjudication in the machine- and human-readable reports.
 
 The live gate checks every claimed retrieval method with multiple independent public
 Sources, resolving citations, provenance, freshness, claim separation, hostile-content

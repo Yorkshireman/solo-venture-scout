@@ -8,10 +8,14 @@ import test from "node:test";
 import {
   buildPackagedScout,
   repositoryRoot,
+  runKernel,
 } from "./support/packaged-scout.mjs";
 import { prepareControlledCampaign } from "../scripts/lib/controlled-campaign-fixtures.mjs";
 import { compactTranscriptForEvaluation } from "../scripts/lib/codex-acceptance-driver.mjs";
 import { invokeCodex } from "../scripts/lib/codex-invocation.mjs";
+import { controlledLeadingOpportunityCommand } from "../scripts/lib/controlled-leading-opportunity.mjs";
+import { controlledReevaluationCommand } from "../scripts/lib/controlled-reevaluation.mjs";
+import { treeSha256 } from "../scripts/lib/artifact-identity.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +55,60 @@ test("shared Codex invocation preserves policy, identity, output, and sanitized 
   assert.equal(result.transcript.arguments.includes("$RUN_DIRECTORY"), true);
   assert.equal(result.transcript.arguments.includes("--sandbox"), true);
   assert.equal(result.transcript.arguments.includes("read-only"), true);
+});
+
+test("shared Codex invocation fails closed on timeout and transcript output limits", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-codex-bounds-"));
+  const executable = path.join(root, "fake-codex.mjs");
+  const schemaPath = path.join(root, "schema.json");
+  await writeFile(schemaPath, "{}\n");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+      process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "bounded-session" }) + "\\n");
+      if (process.env.SVS_TEST_CODEX_MODE === "output") {
+        process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "x".repeat(4096) } }) + "\\n");
+      }
+      setInterval(() => {}, 1_000);
+    `,
+  );
+  await chmod(executable, 0o755);
+
+  const previousMode = process.env.SVS_TEST_CODEX_MODE;
+  try {
+    process.env.SVS_TEST_CODEX_MODE = "output";
+    await assert.rejects(
+      invokeCodex({
+        prompt: "Stay bounded.",
+        schema: schemaPath,
+        model: "test-model",
+        reasoningEffort: "test",
+        workingDirectory: root,
+        executable,
+        timeoutMs: 2_000,
+        maxTranscriptBytes: 1_024,
+      }),
+      /transcript output exceeded 1024 bytes/i,
+    );
+
+    delete process.env.SVS_TEST_CODEX_MODE;
+    await assert.rejects(
+      invokeCodex({
+        prompt: "Finish promptly.",
+        schema: schemaPath,
+        model: "test-model",
+        reasoningEffort: "test",
+        workingDirectory: root,
+        executable,
+        timeoutMs: 50,
+        maxTranscriptBytes: 10_000,
+      }),
+      /timed out after 50 ms/i,
+    );
+  } finally {
+    if (previousMode === undefined) delete process.env.SVS_TEST_CODEX_MODE;
+    else process.env.SVS_TEST_CODEX_MODE = previousMode;
+  }
 });
 
 test("evaluator input compacts redundant command output without losing its identity", () => {
@@ -184,6 +242,114 @@ test("every preconditioned controlled scenario binds its declared intake and evi
       kernelPath,
     }),
     /does not match declared Freshness/,
+  );
+});
+
+test("controlled leading-opportunity candidate concludes the prepared Campaign once", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-controlled-leading-",
+  );
+  const scenarioPack = JSON.parse(
+    await readFile(
+      path.join(repositoryRoot, "release", "controlled-scenarios.json"),
+      "utf8",
+    ),
+  );
+  const scenario = scenarioPack.scenarios.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.id === "defensible-leading-opportunity",
+  );
+  const root = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-controlled-leading-run-"),
+  );
+  const campaignPath = path.join(root, "campaign");
+  const precondition = await prepareControlledCampaign({
+    scenario,
+    campaignPath,
+    kernelPath,
+  });
+
+  assert.equal(precondition.precondition, "eligible-after-adversarial-challenge");
+  const result = await runKernel(
+    kernelPath,
+    controlledLeadingOpportunityCommand(
+      campaignPath,
+      scenario.coordinatorInput.deterministic.now,
+    ),
+  );
+
+  assert.equal(result.code, 0, `${result.stderr}\n${JSON.stringify(result.response)}`);
+  assert.equal(result.response.ok, true);
+  assert.equal(result.response.result.workView.phase, "terminal");
+  assert.match(
+    result.response.result.artifact.path,
+    /opportunity-brief\.md$/,
+  );
+});
+
+test("controlled reevaluation candidate applies the complete dependency closure once", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-controlled-reevaluation-",
+  );
+  const scenarioPack = JSON.parse(
+    await readFile(
+      path.join(repositoryRoot, "release", "controlled-scenarios.json"),
+      "utf8",
+    ),
+  );
+  const scenario = scenarioPack.scenarios.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.id === "correction-and-reevaluation",
+  );
+  const root = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-controlled-reevaluation-run-"),
+  );
+  const campaignPath = path.join(root, "campaign");
+  const precondition = await prepareControlledCampaign({
+    scenario,
+    campaignPath,
+    kernelPath,
+  });
+
+  assert.equal(precondition.precondition, "developer-selected-terminal");
+  const result = await runKernel(
+    kernelPath,
+    controlledReevaluationCommand(
+      campaignPath,
+      scenario.coordinatorInput.deterministic.now,
+    ),
+  );
+
+  assert.equal(result.code, 0, `${result.stderr}\n${JSON.stringify(result.response)}`);
+  assert.equal(result.response.ok, true);
+  assert.equal(result.response.result.workView.breadthGate, undefined);
+  assert.equal(result.response.result.workView.qualificationResearch, undefined);
+  assert.deepEqual(
+    result.response.result.workView.opportunities.map(
+      (/** @type {Record<string, any>} */ opportunity) => ({
+        disposition: opportunity.disposition.status,
+        eligibility: opportunity.eligibility,
+        marketSafety: opportunity.marketSafety,
+        exclusionGates: opportunity.exclusionGates,
+        qualificationGates: opportunity.qualificationGates,
+      }),
+    ),
+    [
+      {
+        disposition: "unresolved",
+        eligibility: "pending-qualification",
+        marketSafety: undefined,
+        exclusionGates: undefined,
+        qualificationGates: undefined,
+      },
+      {
+        disposition: "unresolved",
+        eligibility: "pending-qualification",
+        marketSafety: undefined,
+        exclusionGates: undefined,
+        qualificationGates: undefined,
+      },
+    ],
   );
 });
 
@@ -366,6 +532,11 @@ test("behavioral evidence assembly preserves all three independent evaluated run
   const artifactsDirectory = path.join(root, "artifacts");
   await mkdir(evidenceDirectory);
   await mkdir(artifactsDirectory);
+  const { outputRoot } = await buildPackagedScout(
+    "solo-venture-scout-behavioral-assembly-",
+  );
+  const skillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const currentSkillTreeSha256 = await treeSha256(skillRoot);
   const contract = JSON.parse(
     await readFile(path.join(repositoryRoot, "release", "acceptance-contract.json"), "utf8"),
   );
@@ -387,6 +558,44 @@ test("behavioral evidence assembly preserves all three independent evaluated run
       ),
     },
   ];
+  const priorTranscriptPath = path.join(artifactsDirectory, "prior-failed-transcript.json");
+  const priorCampaignPath = path.join(artifactsDirectory, "prior-failed-campaign");
+  await writeFile(
+    priorTranscriptPath,
+    `${JSON.stringify({ runId: "prior-failed-run", turns: [] })}\n`,
+  );
+  await mkdir(priorCampaignPath);
+  await writeFile(
+    path.join(priorCampaignPath, "records.jsonl"),
+    `${JSON.stringify({ runId: "prior-failed-run", sequence: 1 })}\n`,
+  );
+  records.push({
+    recordType: "behavioral-run",
+    profileId: "codex-local-web",
+    scenarioId: contract.controlledScenarios[0],
+    repetition: 1,
+    runId: "prior-failed-run",
+    coordinatorSessionId: "prior-failed-coordinator",
+    skillTreeSha256: "0".repeat(64),
+    scenarioInputSha256: "c".repeat(64),
+    precondition: null,
+    startedAt: "2026-09-03T10:00:00.000Z",
+    completedAt: "2026-09-03T10:01:00.000Z",
+    transcriptPath: priorTranscriptPath,
+    campaignPath: priorCampaignPath,
+    status: "failed",
+    forcedOutcomePassed: false,
+    invariants: [],
+    evaluation: {
+      evaluationId: "prior-failed-evaluation",
+      evaluatorSessionId: "prior-failed-evaluator",
+      status: "failed",
+      rubricVersion: "1.0.0",
+      failures: ["Preserved prior candidate failure."],
+      adjudication: { status: "rejected", version: "1.0.0" },
+      ratings: [],
+    },
+  });
   for (const scenarioId of contract.controlledScenarios) {
     for (let repetition = 1; repetition <= 3; repetition += 1) {
       const runId = `${scenarioId}-${repetition}`;
@@ -405,6 +614,7 @@ test("behavioral evidence assembly preserves all three independent evaluated run
         repetition,
         runId,
         coordinatorSessionId: `coordinator-${runId}`,
+        skillTreeSha256: currentSkillTreeSha256,
         scenarioInputSha256: "c".repeat(64),
         precondition: {
           precondition: "controlled-test-boundary",
@@ -457,11 +667,7 @@ test("behavioral evidence assembly preserves all three independent evaluated run
       ...process.env,
       SVS_BEHAVIORAL_RUN_LEDGER: ledgerPath,
       SVS_ACCEPTANCE_EVIDENCE_DIR: evidenceDirectory,
-      SVS_TESTED_SKILL_ROOT: path.join(
-        (await buildPackagedScout("solo-venture-scout-behavioral-assembly-")).outputRoot,
-        "standalone",
-        "solo-venture-scout",
-      ),
+      SVS_TESTED_SKILL_ROOT: skillRoot,
     },
   });
 
@@ -471,8 +677,12 @@ test("behavioral evidence assembly preserves all three independent evaluated run
   assert.equal(evidence.status, "passed");
   assert.equal(evidence.profiles.length, 1);
   assert.equal(evidence.profiles[0].runLedgerComplete, true);
-  assert.equal(evidence.profiles[0].attemptCount, 36);
+  assert.equal(evidence.profiles[0].attemptCount, 37);
+  assert.equal(evidence.profiles[0].qualificationAttemptCount, 36);
+  assert.equal(evidence.profiles[0].priorAttemptCount, 1);
   assert.equal(evidence.profiles[0].runs.length, 36);
+  assert.equal(evidence.profiles[0].priorRuns.length, 1);
+  assert.equal(evidence.profiles[0].priorRuns[0].status, "failed");
   assert.equal(evidence.profiles[0].evaluator.calibration.status, "passed");
   for (const run of evidence.profiles[0].runs) {
     assert.match(run.transcriptSha256, /^[a-f0-9]{64}$/);
@@ -624,6 +834,8 @@ test("controlled scenario runner bounds concurrency and never replaces completed
   const artifactsPath = path.join(root, "artifacts");
   const driverEventsPath = path.join(root, "driver-events.jsonl");
   const { outputRoot } = await buildPackagedScout("solo-venture-scout-controlled-skill-");
+  const testedSkillRoot = path.join(outputRoot, "standalone", "solo-venture-scout");
+  const initialSkillTreeSha256 = await treeSha256(testedSkillRoot);
   await writeFile(
     contractPath,
     `${JSON.stringify({
@@ -704,7 +916,7 @@ test("controlled scenario runner bounds concurrency and never replaces completed
         await appendFile(process.env.SVS_TEST_DRIVER_EVENTS, JSON.stringify({ event: "complete", id: scenario.id }) + "\\n");
         return {
           sessionId: "coordinator-" + scenario.id,
-          skillTreeSha256: "a".repeat(64),
+          skillTreeSha256: process.env.SVS_TEST_SKILL_TREE_SHA256,
           precondition: {
             precondition: "test-boundary",
             activeCoordinatorId: "coordinator-primary",
@@ -753,7 +965,8 @@ test("controlled scenario runner bounds concurrency and never replaces completed
       SVS_BEHAVIORAL_ARTIFACTS_DIR: artifactsPath,
       SVS_ACCEPTANCE_CONCURRENCY: "2",
       SVS_TEST_DRIVER_EVENTS: driverEventsPath,
-      SVS_TESTED_SKILL_ROOT: path.join(outputRoot, "standalone", "solo-venture-scout"),
+      SVS_TEST_SKILL_TREE_SHA256: initialSkillTreeSha256,
+      SVS_TESTED_SKILL_ROOT: testedSkillRoot,
     },
   });
 
@@ -802,12 +1015,54 @@ test("controlled scenario runner bounds concurrency and never replaces completed
         SVS_BEHAVIORAL_ARTIFACTS_DIR: artifactsPath,
         SVS_ACCEPTANCE_CONCURRENCY: "2",
         SVS_TEST_DRIVER_EVENTS: driverEventsPath,
-        SVS_TESTED_SKILL_ROOT: path.join(outputRoot, "standalone", "solo-venture-scout"),
+        SVS_TEST_SKILL_TREE_SHA256: initialSkillTreeSha256,
+        SVS_TESTED_SKILL_ROOT: testedSkillRoot,
       },
     }),
     /already contains a complete result/i,
   );
   assert.equal((await readFile(ledgerPath, "utf8")).trim().split("\n").length, 3);
+
+  await writeFile(path.join(testedSkillRoot, "candidate-marker.txt"), "next candidate\n");
+  const nextSkillTreeSha256 = await treeSha256(testedSkillRoot);
+  await execFileAsync(process.execPath, ["scripts/run-controlled-scenarios.mjs"], {
+    cwd: repositoryRoot,
+    env: {
+      ...process.env,
+      SVS_ACCEPTANCE_CONTRACT: contractPath,
+      SVS_CONTROLLED_SCENARIOS: scenariosPath,
+      SVS_EVALUATOR_RUBRIC: rubricPath,
+      SVS_EVALUATOR_GOLDEN_SET: goldenPath,
+      SVS_ACCEPTANCE_DRIVER: driverPath,
+      SVS_BEHAVIORAL_RUN_LEDGER: ledgerPath,
+      SVS_BEHAVIORAL_ARTIFACTS_DIR: artifactsPath,
+      SVS_ACCEPTANCE_CONCURRENCY: "2",
+      SVS_TEST_DRIVER_EVENTS: driverEventsPath,
+      SVS_TEST_SKILL_TREE_SHA256: nextSkillTreeSha256,
+      SVS_TESTED_SKILL_ROOT: testedSkillRoot,
+    },
+  });
+  const retriedRecords = (await readFile(ledgerPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(retriedRecords.length, 5);
+  assert.equal(
+    retriedRecords.filter(
+      (record) =>
+        record.recordType === "behavioral-run" &&
+        record.skillTreeSha256 === initialSkillTreeSha256,
+    ).length,
+    2,
+  );
+  assert.equal(
+    retriedRecords.filter(
+      (record) =>
+        record.recordType === "behavioral-run" &&
+        record.skillTreeSha256 === nextSkillTreeSha256,
+    ).length,
+    2,
+  );
 
   const failureLedgerPath = path.join(root, "failure-runs.jsonl");
   const failureArtifactsPath = path.join(root, "failure-artifacts");
@@ -824,7 +1079,8 @@ test("controlled scenario runner bounds concurrency and never replaces completed
     SVS_ACCEPTANCE_CONCURRENCY: "2",
     SVS_TEST_DRIVER_EVENTS: failureEventsPath,
     SVS_TEST_FAIL_SCENARIO: "test-scenario-a",
-    SVS_TESTED_SKILL_ROOT: path.join(outputRoot, "standalone", "solo-venture-scout"),
+    SVS_TEST_SKILL_TREE_SHA256: nextSkillTreeSha256,
+    SVS_TESTED_SKILL_ROOT: testedSkillRoot,
   };
   await assert.rejects(
     execFileAsync(process.execPath, ["scripts/run-controlled-scenarios.mjs"], {

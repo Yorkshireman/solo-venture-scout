@@ -5988,6 +5988,11 @@ async function rebuildCampaignFromAuthorityUnchecked(
     throw new Error("latest authoritative record is invalid");
   }
   const workViewAsOf = latestRecord.recordedAt;
+  const supersededDecisionIds = invalidatedCampaignDecisionIds(
+    authoritativeHistory,
+  );
+  const decisionIsCurrent = (decisionId: string) =>
+    !supersededDecisionIds.has(decisionId);
 
   const workView = initialWorkView(manifest.campaignId);
   workView.recordSequence = records.length;
@@ -6216,8 +6221,12 @@ async function rebuildCampaignFromAuthorityUnchecked(
       adversarialSourceUnitsReserved: intake!.researchBudget.adversarialSourceReserve,
     };
   }
-  if (breadthGates.length > 0) {
-    const gate = breadthGates.at(-1)!;
+  const latestBreadthGate = breadthGates.at(-1);
+  if (
+    latestBreadthGate !== undefined &&
+    decisionIsCurrent(latestBreadthGate.decision.id)
+  ) {
+    const gate = latestBreadthGate;
     const ordinarySourceCap =
       intake!.researchBudget.sourceCap - intake!.researchBudget.adversarialSourceReserve;
     const usedSourceUnits = [...reservations.values()].reduce(
@@ -6321,9 +6330,17 @@ async function rebuildCampaignFromAuthorityUnchecked(
           applicableRule: constraint.gate.decision.applicableRule,
           decisionId: constraint.gate.decision.id,
         })),
-      ];
+      ].filter((gate) => decisionIsCurrent(gate.decisionId));
+      if (gates.length === 0) {
+        return opportunity;
+      }
+      const marketSafetyIsCurrent = decisionIsCurrent(
+        assessment.marketSafety.gate.decision.id,
+      );
       const elevatedRiskApprovalUnavailable = isElevatedRiskApprovalUnavailable(
-        assessment.marketSafety.classification,
+        marketSafetyIsCurrent
+          ? assessment.marketSafety.classification
+          : "unresolved",
         researchApprovals,
         assessment.opportunityId,
         workViewAsOf,
@@ -6334,13 +6351,17 @@ async function rebuildCampaignFromAuthorityUnchecked(
       );
       return {
         ...opportunity,
-        marketSafety: {
-          classification: assessment.marketSafety.classification,
-          intendedActivity: assessment.marketSafety.intendedActivity,
-          excludedCategory: assessment.marketSafety.excludedCategory,
-          directlyServesExcludedActivity:
-            assessment.marketSafety.directlyServesExcludedActivity,
-        },
+        ...(marketSafetyIsCurrent
+          ? {
+              marketSafety: {
+                classification: assessment.marketSafety.classification,
+                intendedActivity: assessment.marketSafety.intendedActivity,
+                excludedCategory: assessment.marketSafety.excludedCategory,
+                directlyServesExcludedActivity:
+                  assessment.marketSafety.directlyServesExcludedActivity,
+              },
+            }
+          : {}),
         exclusionGates: gates,
         ...disposition,
         terminalRole: null,
@@ -6358,26 +6379,28 @@ async function rebuildCampaignFromAuthorityUnchecked(
     workView.completedWork.push(
       `${evaluation.assessments.length} Opportunity qualification assessment${evaluation.assessments.length === 1 ? "" : "s"} recorded`,
     );
-    workView.qualificationResearch = {
-      state: evaluation.researchDecision.outcome,
-      decisionValuePriorities:
-        evaluation.researchDecision.decisionValuePriorities,
-      stopReason: evaluation.researchDecision.stopReason,
-      decisionId: evaluation.researchDecision.id,
-    };
-    if (evaluation.researchDecision.outcome === "stop") {
-      workView.publicResearchAvailable = false;
+    if (decisionIsCurrent(evaluation.researchDecision.id)) {
+      workView.qualificationResearch = {
+        state: evaluation.researchDecision.outcome,
+        decisionValuePriorities:
+          evaluation.researchDecision.decisionValuePriorities,
+        stopReason: evaluation.researchDecision.stopReason,
+        decisionId: evaluation.researchDecision.id,
+      };
+      if (evaluation.researchDecision.outcome === "stop") {
+        workView.publicResearchAvailable = false;
+      }
+      workView.nextPermittedActions =
+        evaluation.researchDecision.outcome === "continue"
+          ? [
+              "reserve-public-research",
+              "record-evidence-reasoning",
+              "evaluate-qualification-gates",
+            ]
+          : evaluation.researchDecision.stopReason === "qualification-complete"
+            ? ["compare-eligible-opportunities"]
+            : ["conclude-no-qualifying-opportunity"];
     }
-    workView.nextPermittedActions =
-      evaluation.researchDecision.outcome === "continue"
-        ? [
-            "reserve-public-research",
-            "record-evidence-reasoning",
-            "evaluate-qualification-gates",
-          ]
-        : evaluation.researchDecision.stopReason === "qualification-complete"
-          ? ["compare-eligible-opportunities"]
-          : ["conclude-no-qualifying-opportunity"];
     workView.opportunities = workView.opportunities!.map((opportunity) => {
       const assessment = assessmentsByOpportunityId.get(opportunity.id);
       if (
@@ -6386,13 +6409,18 @@ async function rebuildCampaignFromAuthorityUnchecked(
       ) {
         return opportunity;
       }
-      const qualificationGates = assessment.gates.map((gate) => ({
-        id: gate.id,
-        kind: gate.kind,
-        state: gate.state,
-        applicableRule: gate.decision.applicableRule,
-        decisionId: gate.decision.id,
-      }));
+      const qualificationGates = assessment.gates
+        .filter((gate) => decisionIsCurrent(gate.decision.id))
+        .map((gate) => ({
+          id: gate.id,
+          kind: gate.kind,
+          state: gate.state,
+          applicableRule: gate.decision.applicableRule,
+          decisionId: gate.decision.id,
+        }));
+      if (qualificationGates.length === 0) {
+        return opportunity;
+      }
       return {
         ...opportunity,
         qualificationGates,
@@ -6740,7 +6768,17 @@ async function rebuildCampaignFromAuthorityUnchecked(
               ...opportunity,
               disposition: {
                 status:
-                  opportunity.disposition?.status === "rejected"
+                  opportunityExclusionEvaluations
+                    .at(-1)
+                    ?.assessments.some(
+                      (assessment) =>
+                        assessment.opportunityId === opportunity.id,
+                    ) === true &&
+                  noQualifyingOpportunityDisposition(
+                    authoritativeHistory,
+                    opportunity.id,
+                    workViewAsOf,
+                  ).status === "rejected"
                     ? ("active" as const)
                     : ("unresolved" as const),
                 decisionIds: [latestReevaluation.decision.id],
@@ -6752,9 +6790,6 @@ async function rebuildCampaignFromAuthorityUnchecked(
       );
     }
   }
-  const supersededDecisionIds = new Set(
-    reevaluations.flatMap((entry) => entry.invalidatedDecisionIds),
-  );
   const unavailableFreshnessIds = invalidatedEvidenceIds({
     sources,
     observations,
