@@ -1,38 +1,55 @@
 # Solo Venture Scout
 
-Solo Venture Scout is a Codex skill for finding evidence-backed software
-opportunities that one developer could realistically pursue.
+Most lists of software ideas begin with guesses. Solo Venture Scout begins with
+evidence: where people are already losing money, wasting skilled time, taking
+operational risk, or paying for awkward workarounds.
 
-It runs a bounded, resumable **Scouting Campaign**: it starts from your Commercial
-Outcome Target, capacity, Advantages, Hard Constraints, Preferences, and risk
-tolerance; searches broadly for Costly Problems; tests the resulting Opportunities
-against evidence and your constraints; and preserves the reasoning behind its
-conclusion.
+It is a Codex skill for solo software developers who want to decide what is worth
+validating before they spend months building it. The Scout searches broadly, checks
+what it finds against your goals and limits, and explains why each possibility was
+kept, rejected, or left uncertain.
 
-The intended user is a solo developer who wants a more defensible answer than a list
-of unsupported Opportunities, while retaining control over private context, research
-spend, restricted sources, and any action that could affect another person or the
-market.
+A Codex skill is a reusable workflow that you invoke in a Codex conversation. Solo
+Venture Scout runs inside Codex; it is not a separate desktop application or hosted
+service.
 
-## What the Scout does—and does not do
+The Scout calls one investigation a **Scouting Campaign**. Think of it as a private
+research folder with an audit trail. It can run across multiple Codex sessions without
+depending on chat history, and its research allowance keeps the investigation from
+expanding forever.
 
-The Scout performs **opportunity discovery**. It looks for a specific customer with a
-specific costly problem in a specific situation, then asks whether the evidence
-supports a plausible, solo-feasible route to your Commercial Outcome Target. It does
-not start from a familiar industry list or a proposed product and work backward to a
-justification.
+## What you get
 
-A Leading Opportunity is promising enough to validate. It is **not a validated
-business**. A Scouting Campaign does not contact prospective customers, publish an
-offer, collect personal data, accept money, or otherwise perform an External
-Validation Action. Its terminal Value Hypothesis is deliberately provisional, not a
-product specification: the Scout does not settle features, interfaces, architecture,
-positioning, a roadmap, or an implementation plan.
+The Scout looks for an **Opportunity**: a particular kind of customer experiencing a
+costly problem in a particular situation. It does not simply brainstorm products or
+confine the search to industries you already know.
 
-If you want to turn an Opportunity Brief into a product-planning effort, you can
-invoke [Wayfinder](https://github.com/mattpocock/skills) separately. Wayfinder is an
-optional downstream tool, not a dependency, and Solo Venture Scout never starts it
-automatically.
+At the end, you receive one or more Markdown documents explaining one of four honest
+results:
+
+- one opportunity is clearly the strongest candidate for real-world validation;
+- nothing found enough support within the research allowance;
+- several candidates remain, but the evidence cannot justify choosing one; or
+- after an inconclusive result, you choose one or more candidates yourself.
+
+Every result includes the evidence, uncertainty, trade-offs, and links back to the
+recorded research behind it. “Nothing qualified” and “the comparison is inconclusive”
+are useful conclusions, not failed runs.
+
+## What it does not do
+
+Solo Venture Scout discovers opportunities; it does not validate demand in the real
+world. It does not contact potential customers, publish an offer, submit forms,
+collect personal data, change accounts, or accept money. The project calls those
+market-facing steps **External Validation Actions**.
+
+It also does not design the product. Even its strongest result contains only a
+provisional statement of the customer outcome worth testing—not features, screens,
+architecture, positioning, estimates, or a roadmap.
+
+If you want to plan a product after reading the result, you can invoke
+[Wayfinder](https://github.com/mattpocock/skills) separately. Wayfinder is optional,
+is not required to run Solo Venture Scout, and is never started automatically.
 
 ## Install
 
@@ -40,10 +57,11 @@ You need:
 
 - Codex in the ChatGPT desktop app, Codex CLI, or the Codex IDE extension;
 - Node.js 24.x; and
-- at least one available, lawful route for retrieving public material.
+- a Codex tool that can read public web pages without bypassing access controls or
+  site rules.
 
-The repository currently builds a standalone skill and a skills-only plugin. The
-standalone skill is the simplest local installation. From a checkout:
+The repository can produce a personal skill installation and a plugin bundle for
+distribution. Most people will want the personal installation. From a checkout:
 
 ```bash
 git clone https://github.com/Yorkshireman/solo-venture-scout.git
@@ -66,127 +84,159 @@ appear in `/skills` after installation, restart Codex. See the official
 [Codex skills documentation](https://developers.openai.com/codex/skills/) for other
 supported scopes and installation locations.
 
-## Start or resume a Campaign
+## Start a Campaign
 
-Solo Venture Scout is explicit-invocation-only. Start it by mentioning the skill by
-name:
+Solo Venture Scout does not start itself when you discuss business ideas. You must
+mention the skill by name:
 
 ```text
 $solo-venture-scout Start a Scouting Campaign. Use /absolute/path/to/existing-storage
 for storage and /absolute/path/to/existing-storage/my-campaign as the Campaign path.
 ```
 
-The Scout shows the current working directory and completes a preflight before it
-creates Campaign state. The storage directory must already exist. The final Campaign
-path must be explicit and must not already exist.
+The first path is an existing folder where Campaigns may be stored. The second is the
+new folder for this Campaign; it must not already exist. Before writing anything, the
+Scout shows the current working directory and checks that Node, storage, and public
+web-research tools are ready.
 
-Resume later from the Campaign directory, not from conversation memory:
+It then asks about:
+
+- the amount you want the business to earn, how that is measured, and by when;
+- the time and money you can commit;
+- your skills, access, and existing advantages;
+- your must-not-cross constraints, preferences, and tolerance for risk; and
+- how much research the Scout may perform.
+
+You see and explicitly confirm a summary before research begins. The project calls
+this agreed starting point the **Campaign Intake**.
+
+## Resume a Campaign
+
+Resume from the Campaign folder rather than relying on conversation memory:
 
 ```text
 $solo-venture-scout Resume the Scouting Campaign at
 /absolute/path/to/existing-storage/my-campaign.
 ```
 
-You can start in a fresh Codex session. The Campaign directory contains the history,
-checkpoint, lease, current Work View, and generated artifacts needed to continue.
+You can do this in a fresh Codex session. The folder contains the saved history and a
+rebuilt summary of the current position (the **Work View**), so the Scout can report
+what is finished, what is paused, and what it may do next.
 
-## How a Scouting Campaign works
+If an earlier operation was interrupted, resumption finishes or reconciles the safely
+recorded work before continuing. It will not guess its way past damaged history, a
+newer file format, an unresolved approval, or another active session.
 
-1. **Preflight.** The Scout checks Node 24.x, the chosen writable storage directory,
-   available public-retrieval routes, and the independent contract versions. No
-   Campaign state is created during this check.
-2. **Campaign Intake.** You confirm a dated snapshot of your Developer Profile, a
-   concrete Commercial Outcome Target, Hard Constraints, weighted Preferences,
-   Advantages, risk tolerance, and a Research Budget. Public Research cannot begin
-   before explicit confirmation.
-3. **Broad discovery.** Bounded Discovery Sweeps use heterogeneous external maps of
-   economic activity and problem signals. Discovery Tranches reserve one-fifth of
-   their capacity for evidence-neutral Novelty Probes, preventing familiar-domain
-   bias without granting speculation evidential credit.
-4. **Opportunity formation.** An Exploration Thread becomes an Opportunity only when
-   evidence identifies a specific customer, situation, and Costly Problem. Formation
-   requires independent Source Lineages and a behavioral Problem Signal.
-5. **Gates and deepening.** Exclusion Gates fail only on affirmative evidence;
-   Qualification Gates pass only on affirmative evidence. Missing evidence stays
-   visible as unresolved. Once the Breadth Gate justifies narrowing, most ordinary
-   research deepens Opportunities while an open-world discovery allowance remains.
-6. **Comparison and challenge.** Eligible Opportunities are compared qualitatively by
-   Required Input, Potential Output, Outcome Uncertainty, Input–Output Asymmetry, and
-   your confirmed Preferences and Advantages. The Scout does not use a magic score or
-   an invented probability. A protected adversarial reserve must challenge an
-   apparent leader before it can be recommended.
-7. **Terminal handoff.** The Campaign ends honestly with one of the artifact variants
-   below. No Qualifying Opportunity and inconclusive comparison are successful
-   outcomes, not exceptions.
+## What happens during a Campaign
 
-### Research Budget
+1. **Agree on the target and boundaries.** You confirm the Campaign Intake described
+   above. Research cannot begin before that confirmation.
+2. **Search beyond the obvious.** The Scout samples several kinds of public sources
+   and deliberately spends some discovery effort looking outside familiar patterns.
+   Speculative leads receive no credit until evidence supports them.
+3. **Turn signals into candidates.** A complaint or feature request is only a clue.
+   Before creating an Opportunity, the Scout looks for a material consequence and
+   committed behavior—such as spending, workaround effort, switching, or escalation—
+   supported by at least two genuinely independent lines of evidence.
+4. **Try to disqualify and qualify each candidate.** The Scout needs evidence before
+   rejecting a candidate, and evidence before declaring one eligible. Missing or
+   conflicting evidence remains visible instead of being quietly treated as a yes or
+   no.
+5. **Compare the survivors.** It considers the time, cash, sales effort, operating
+   burden, downside, plausible upside, uncertainty, and fit with your preferences. It
+   does not hide those trade-offs inside a weighted score or made-up probability.
+6. **Challenge the front-runner.** Part of the research allowance is saved specifically
+   to look for reasons the apparent leader is wrong or another candidate is stronger.
+7. **Write the result.** The final document is generated from the recorded history so
+   it can be checked and reproduced.
 
-A Research Budget is an enforceable ceiling, not a quota. It limits Sources,
-Discovery Sweeps, comparison breadth, Opportunity depth, and paid spend. Twenty
-percent of every named profile's Source cap is protected for the final adversarial
-challenge.
+## Choose the research depth
 
-| Profile | Sources | Discovery Sweeps | Minimum Source Families | Deepened Opportunities | Minimum comparison set | Adversarial Sources |
+The **Research Budget** is the Campaign's research allowance. It is a maximum, not a
+target the Scout must use up. Choose Quick for a short scan, Standard for a broader
+comparison, or Deep when you want more candidates investigated in detail.
+
+| Profile | Maximum sources | Candidates researched deeply |
+| --- | ---: | ---: |
+| Quick | 30 | 2 |
+| Standard | 100 | 4 |
+| Deep | 250 | 6 |
+
+<details>
+<summary>Exact limits used for reproducible Campaigns</summary>
+
+Each profile also controls how widely the Scout searches, the variety of sources it
+must use, the minimum comparison size, and the research saved to challenge an apparent
+leader.
+
+| Profile | Source cap | Discovery Sweep cap (broad searches) | Source Family minimum (different source types) | Deepened Opportunity cap | Minimum comparison set | Adversarial Source reserve |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Quick | 30 | 4 | 3 | 2 | 2 | 6 |
 | Standard | 100 | 8 | 5 | 4 | 3 | 20 |
 | Deep | 250 | 14 | 7 | 6 | 4 | 50 |
 
-A custom budget requires every limit to be stated explicitly and reserves
-`ceil(Source cap × 0.2)` Sources for adversarial research. Paid spend defaults to zero
-only after that visible default is explicitly confirmed.
+</details>
 
-### Approval boundaries
+Twenty percent of the source limit is protected for the final challenge. A custom
+budget requires every limit to be stated explicitly and rounds that protected amount
+up to the next whole source. Paid research starts at zero; even that default is shown
+for you to confirm rather than being assumed.
 
-After Campaign Intake, lawful read-only Public Research can proceed autonomously
-within the Research Budget. The Scout pauses at boundaries that need your authority:
+## When the Scout asks permission
 
-- authenticated, restricted, or paid research needs a time-bounded Research Approval
-  for the exact Source, purpose, access method, retained data, maximum cost, and
-  duration;
-- deep research or recommendation in an Elevated-Risk Market needs
-  Opportunity-specific approval;
-- a revised Campaign Intake and a forward migration of an older Campaign each need
-  explicit confirmation; and
-- an inconclusive comparison waits for an explicit choice to stop, extend targeted
-  research, or select one or more Non-Dominated Opportunities.
+Once you confirm the Campaign Intake, the Scout may read lawful public sources without
+asking about every page. It stays inside the Research Budget and does not take actions
+on those sites.
 
-Silence, an informational question, or a general instruction to continue never counts
-as consent. A Research Approval can authorize only read-only research. It cannot
-authorize unlawful activity or an External Validation Action such as outreach,
-publishing, form submission, account changes, personal-data collection, or accepting
-money.
+It pauses and asks before:
 
-### The four terminal artifact variants
+- using a signed-in, restricted, or paid source;
+- spending any money;
+- researching a candidate deeply or recommending it in a legally, regulatorily, or
+  otherwise elevated-risk market;
+- changing the agreed Campaign Intake;
+- migrating an older Campaign format; or
+- acting on an inconclusive comparison.
 
-| Outcome | Artifact | Meaning |
+For restricted or paid research, the approval shows the exact source, purpose, access
+method, data to be read and kept, maximum cost, duration, risks, and alternatives. It
+is valid only for that unchanged scope. Silence, a question, or “continue” does not
+mean yes.
+
+Permission for research never authorizes unlawful activity or a market-facing action
+such as outreach, publishing, submitting a form, changing an account, collecting
+personal data, or accepting money.
+
+## The four possible final results
+
+| Result | File | What it means |
 | --- | --- | --- |
-| Defensible leader | `opportunity-brief.md` | One Leading Opportunity survived comparison and adversarial challenge. |
-| No Qualifying Opportunity | `no-qualifying-opportunity-report.md` | No Opportunity became eligible within the Research Budget; rejected and unresolved Opportunities remain distinct. |
-| Inconclusive, then stop | `inconclusive-comparison-report.md` | The evidence did not justify a stand-out leader, so the unscored comparison and its blockers are preserved unchanged. |
-| Inconclusive, then select | `inconclusive-comparison-report.md` plus one `opportunity-brief-<opportunity-id>.md` per selection | Your choice is recorded as developer Preference, not market evidence; each brief is marked Developer-Selected rather than Leading. |
+| A clear front-runner | `opportunity-brief.md` | One candidate survived comparison and a deliberate attempt to disprove it. The document calls it the **Leading Opportunity**, meaning “ready to validate,” not “validated.” |
+| Nothing qualified | `no-qualifying-opportunity-report.md` | Nothing gathered enough support within the Research Budget. The report separates candidates disproved by evidence from candidates that simply remain uncertain. |
+| No clear winner; you stop | `inconclusive-comparison-report.md` | The report preserves the surviving candidates side by side and explains their trade-offs. It names blockers and unanswered evidence questions when present; a genuine evidence-complete tie may have neither. |
+| No clear winner; you choose | The comparison report plus one `opportunity-brief-<opportunity-id>.md` for each choice | Your choices are clearly marked **Developer-Selected**. The Scout does not pretend that your preference was market evidence or that it discovered a Leading Opportunity. |
 
-Choosing **extend** after an inconclusive comparison is intentionally not terminal. It
-creates a new Campaign Intake version and Research Budget and resumes only the
-targeted Evidence Gaps.
+There is also a non-final option after an inconclusive comparison: you can extend the
+Campaign with a new Research Budget aimed only at the unanswered questions that could
+change the result.
 
-## Campaign privacy and local state
+## Privacy
 
-Campaigns are self-contained directories at paths you choose. On POSIX systems, the
-kernel creates the directory with mode `0700` and its artifacts with mode `0600`.
-Campaign files can contain private constraints, source metadata, research, and
-commercial reasoning, so treat the entire directory as sensitive.
+The Campaign is stored in a self-contained folder at the path you choose. On macOS and
+Linux, the Scout restricts that folder and its files to the current user. The files can
+still contain private constraints, source details, research, and commercial reasoning,
+so treat the whole folder as sensitive.
 
-These permissions are not encryption and do not override filesystem sharing, backup,
-or cloud-sync policy. If you place a Campaign inside a Git repository, Git may expose
-it as untracked content. Add an appropriate ignore rule yourself before creation if
-needed. The Scout never stages or commits Campaign data and never edits ignore rules
-without a separate request.
+The folder permissions are not encryption and do not override filesystem sharing,
+backup, or cloud-sync settings. If you put a Campaign inside a Git repository, Git may
+show it as untracked content. Add an appropriate ignore rule yourself before creating
+it if needed. The Scout never stages or commits Campaign files and does not edit ignore
+rules unless you separately ask it to.
 
-The persisted research contract minimizes data: it accepts precise Source metadata
-and atomic neutral paraphrases, but has no fields for credentials, payment details,
-raw retrieved content, or active instructions. Restricted-source access still occurs
-outside the kernel and only within the approved scope.
+The Scout stores source details and short, neutral summaries rather than complete web
+pages. Its storage format has no fields for passwords, payment details, or raw
+restricted content. Access to a restricted source happens outside the Campaign's state
+engine and only within the scope you approved.
 
 ## For developers
 
