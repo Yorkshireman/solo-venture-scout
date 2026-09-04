@@ -75,6 +75,8 @@ for (const claimedProfile of contract.profiles) {
       runId: record.runId,
       coordinatorSessionId: record.coordinatorSessionId,
       skillTreeSha256: record.skillTreeSha256,
+      scenarioInputSha256: record.scenarioInputSha256,
+      precondition: record.precondition,
       startedAt: record.startedAt,
       completedAt: record.completedAt,
       transcriptPath: record.transcriptPath,
@@ -155,6 +157,9 @@ const status = profiles.every(
         run.forcedOutcomePassed === true &&
         /^[a-f0-9]{64}$/.test(run.transcriptSha256) &&
         /^[a-f0-9]{64}$/.test(run.campaignSha256) &&
+        /^[a-f0-9]{64}$/.test(run.scenarioInputSha256) &&
+        typeof run.precondition?.precondition === "string" &&
+        Number.isSafeInteger(run.precondition?.initialRecordSequence) &&
         run.evaluation?.status === "passed",
     ),
 );

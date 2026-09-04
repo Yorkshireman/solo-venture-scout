@@ -28,8 +28,8 @@ const baselineStatements = [
 
 /** @type {Record<string, string>} */
 const preconditions = {
-  "defensible-leader": "eligible-after-adversarial-challenge",
-  "no-qualifier": "no-qualifier-ready",
+  "defensible-leading-opportunity": "eligible-after-adversarial-challenge",
+  "no-qualifying-opportunity": "no-qualifying-opportunity-ready",
   "genuine-tie-stop": "inconclusive-comparison",
   "genuine-tie-extend": "inconclusive-comparison",
   "genuine-tie-select": "inconclusive-comparison",
@@ -298,7 +298,7 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
   if (precondition === "eligible-after-adversarial-challenge") {
     await prepareEligibleCampaign(kernelPath, campaignPath, baselineStatements);
     await completeAdversarialResearch(kernelPath, campaignPath);
-  } else if (precondition === "no-qualifier-ready") {
+  } else if (precondition === "no-qualifying-opportunity-ready") {
     await prepareNoQualifierCampaign(kernelPath, campaignPath);
   } else if (precondition === "inconclusive-comparison") {
     await enterInconclusiveComparison(kernelPath, campaignPath);

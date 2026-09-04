@@ -3,7 +3,7 @@
   "evidenceLicense": "CC0-1.0 synthetic fixtures",
   "scenarios": [
     {
-      "id": "defensible-leader",
+      "id": "defensible-leading-opportunity",
       "coordinatorInput": {
         "campaignIntake": {"version": 1, "target": "GBP 10,000 MRR by 2027-12-31", "hardConstraints": ["solo operation", "no regulated decision automation"], "preferences": [{"value": "low support load", "importance": "major"}], "advantages": ["TypeScript and B2B workflow access"], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
@@ -17,12 +17,12 @@
       "evaluatorOnly": {"forcedOutcome": "leading-opportunity", "requiredDecisions": ["preserve one supported non-dominated leader", "settle adversarial reserve", "render one Opportunity Brief"], "forbiddenDecisions": ["weighted score", "unsupported recommendation", "automatic Wayfinder invocation"]}
     },
     {
-      "id": "no-qualifier",
+      "id": "no-qualifying-opportunity",
       "coordinatorInput": {
         "campaignIntake": {"version": 1, "target": "GBP 8,000 monthly profit by 2027-09-30", "hardConstraints": ["maximum five support hours weekly"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
         "evidence": [{"id": "noq-a", "lineageId": "forum-posts", "freshness": {"assessment": "current", "asOf": "2026-08-10"}, "observation": "Several posts express annoyance but contain no expenditure, workaround commitment, or measurable loss.", "copyrightSafe": true}],
-        "deterministic": {"now": "2026-09-04T09:10:00.000Z", "identitySeed": "no-qualifier", "injectedFailures": []},
+        "deterministic": {"now": "2026-09-04T09:10:00.000Z", "identitySeed": "no-qualifying-opportunity", "injectedFailures": []},
         "developerTurns": ["The Research Budget is exhausted; report the honest result."]
       },
       "evaluatorOnly": {"forcedOutcome": "no-qualifying-opportunity", "requiredDecisions": ["separate rejected and unresolved Opportunities", "render No Qualifying Opportunity Report"], "forbiddenDecisions": ["invented qualifier", "failure framing", "Opportunity Brief"]}
@@ -125,7 +125,7 @@
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
         "evidence": [{"id": "challenge-a", "lineageId": "developer-challenge", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "The developer disputes the prior Observation supporting customer-access qualification. No replacement Source or Observation has been supplied; this challenge fixture is not new research evidence.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T10:40:00.000Z", "identitySeed": "correction", "injectedFailures": []},
-        "developerTurns": ["I challenge the customer-access conclusion; the old Source was wrong. No replacement Source is supplied. Record the append-only correction, re-evaluate only dependent decisions, and tell me the preserved terminal artifact paths and complete next permitted actions."]
+        "developerTurns": ["I challenge the customer-access conclusion; the old Source was wrong. No replacement Source is supplied. Record the append-only correction and re-evaluate only dependent decisions. Once that re-evaluation succeeds, stop without executing any returned next action; report the authoritative Work View, preserved terminal artifact paths, and next permitted actions exactly as returned."]
       },
       "evaluatorOnly": {"forcedOutcome": "append-only-reevaluation", "requiredDecisions": ["append Correction", "supersede dependent decisions", "preserve prior terminal artifact"], "forbiddenDecisions": ["rewrite old Observation", "delete history", "silent terminal replacement"]}
     },

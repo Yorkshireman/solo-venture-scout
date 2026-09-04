@@ -429,7 +429,10 @@ test("acceptance reports retain exact suite, artifact, contract, and runtime ide
   const report = JSON.parse(
     await readFile(path.join(outputRoot, "acceptance-report.json"), "utf8"),
   );
-  assert.deepEqual(report.acceptanceIdentity, {
+  const { controlledScenariosSha256, ...acceptanceIdentity } =
+    report.acceptanceIdentity;
+  assert.match(controlledScenariosSha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(acceptanceIdentity, {
     contractVersion: "1.0.0",
     suiteVersion: "1.0.0",
     releaseVersion: "1.0.0",

@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { sha256 } from "./lib/artifact-identity.mjs";
 import { filesUnder } from "./lib/files-under.mjs";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
@@ -13,11 +13,6 @@ const lock = JSON.parse(
 );
 const packagesDirectory = path.join(outputRoot, "packages");
 const releaseDirectory = path.join(outputRoot, "release");
-
-/** @param {Buffer | string} contents */
-function sha256(contents) {
-  return createHash("sha256").update(contents).digest("hex");
-}
 
 /**
  * @param {Buffer} header

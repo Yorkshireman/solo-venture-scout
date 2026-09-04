@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { treeSha256 } from "./artifact-identity.mjs";
+import { sha256, treeSha256 } from "./artifact-identity.mjs";
 import { filesUnder } from "./files-under.mjs";
 import { prepareControlledCampaign } from "./controlled-campaign-fixtures.mjs";
 import { repositoryRoot } from "./release-paths.mjs";
@@ -120,7 +120,9 @@ async function invokeCodex({
 /** @param {string} campaignPath */
 async function campaignSnapshot(campaignPath) {
   const snapshot = [];
-  for (const file of await filesUnder(campaignPath)) {
+  for (const file of (await filesUnder(campaignPath)).filter(
+    (candidate) => !candidate.startsWith("checkpoints/"),
+  )) {
     const contents = await readFile(path.join(campaignPath, file));
     snapshot.push({
       path: file,
@@ -131,6 +133,40 @@ async function campaignSnapshot(campaignPath) {
     });
   }
   return snapshot;
+}
+
+/**
+ * Keep the full transcript as the durable audit artifact while giving the evaluator
+ * a bounded view. Command output is redundant with the authoritative Campaign
+ * snapshot, so preserve its identity rather than duplicating it into the prompt.
+ *
+ * @param {Record<string, any>} transcript
+ */
+export function compactTranscriptForEvaluation(transcript) {
+  const events = (transcript.events ?? [])
+    .filter(
+      (/** @type {Record<string, any>} */ event) =>
+        event.type !== "item.started" && event.type !== "turn.started",
+    )
+    .map((/** @type {Record<string, any>} */ event) => {
+      if (event.item?.type !== "command_execution") return event;
+      const aggregatedOutput = String(event.item.aggregated_output ?? "");
+      return {
+        ...event,
+        item: {
+          ...event.item,
+          aggregated_output: undefined,
+          aggregatedOutputBytes: Buffer.byteLength(aggregatedOutput),
+          aggregatedOutputSha256: sha256(aggregatedOutput),
+        },
+      };
+    });
+  return {
+    arguments: transcript.arguments,
+    events,
+    precondition: transcript.precondition,
+    final: transcript.final,
+  };
 }
 
 /** @param {Record<string, any>} input */
@@ -213,6 +249,16 @@ export async function runCoordinator({
       : {
           deterministic: scenario.coordinatorInput.deterministic,
           developerTurns: scenario.coordinatorInput.developerTurns,
+          declaredContext: {
+            campaignIntake: scenario.coordinatorInput.campaignIntake,
+            capabilityProfile: scenario.coordinatorInput.capabilityProfile,
+            evidence:
+              scenario.id === "correction-and-reevaluation"
+                ? []
+                : scenario.coordinatorInput.evidence,
+            authority:
+              "Context only. The inspected preconditioned Campaign is authoritative; do not replay completed setup or persist these entries as new research.",
+          },
           ...(scenario.id === "correction-and-reevaluation"
             ? { developerChallengeFixture: scenario.coordinatorInput.evidence }
             : {}),
@@ -275,6 +321,9 @@ export async function runEvaluator({
   runDirectory,
 }) {
   const snapshot = await campaignSnapshot(coordinatorResult.campaignPath);
+  const evaluatorTranscript = compactTranscriptForEvaluation(
+    coordinatorResult.transcript,
+  );
   const invocation = await invokeCodex({
     prompt: [
       "You are the separate calibrated Solo Venture Scout acceptance evaluator.",
@@ -284,7 +333,7 @@ export async function runEvaluator({
       `Calibration record: ${JSON.stringify(calibration)}`,
       `Rubric: ${JSON.stringify(rubric)}`,
       `Evaluator-only scenario guidance: ${JSON.stringify(scenario.evaluatorOnly)}`,
-      `Coordinator transcript: ${JSON.stringify(coordinatorResult.transcript)}`,
+      `Coordinator transcript: ${JSON.stringify(evaluatorTranscript)}`,
       `Persisted Campaign snapshot: ${JSON.stringify(snapshot)}`,
       "Return every zero-tolerance invariant and every rubric dimension exactly once. List concrete failures. Accept adjudication only if the forced outcome, all invariants, and every minimum rating pass.",
     ].join("\n\n"),

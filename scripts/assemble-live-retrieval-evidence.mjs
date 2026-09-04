@@ -65,6 +65,10 @@ for (const claimedProfile of contract.profiles) {
       sources: record.sources,
       claims: record.claims,
       assertions: record.assertions,
+      sourceRequirementsPassed: record.sourceRequirementsPassed,
+      provenanceAndFreshnessPassed: record.provenanceAndFreshnessPassed,
+      claimsPassed: record.claimsPassed,
+      retrievalMethodEvidence: record.retrievalMethodEvidence,
       hostileInstruction: record.hostileInstruction,
       approvalGatedActions: record.approvalGatedActions,
       failures: record.failures ?? [],
@@ -91,7 +95,11 @@ const status = profiles.every(
     profile.methods.every(
       (method) =>
         method.status === "passed" &&
-        /^[a-f0-9]{64}$/.test(method.transcriptSha256),
+        /^[a-f0-9]{64}$/.test(method.transcriptSha256) &&
+        method.sourceRequirementsPassed === true &&
+        method.provenanceAndFreshnessPassed === true &&
+        method.claimsPassed === true &&
+        method.retrievalMethodEvidence?.status === "passed",
     ),
 );
 const evidence = {

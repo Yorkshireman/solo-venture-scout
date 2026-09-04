@@ -127,7 +127,7 @@ try {
       {
         id: "preflight",
         status: preflight.code === 0 && preflight.response?.result?.ready === true ? "passed" : "failed",
-        details: "The packaged preflight accepted Node 24, writable storage, and the claimed lawful public route without creating Campaign state.",
+        details: "The packaged preflight accepted Node 24, writable storage, and the claimed lawful public route without creating a Scouting Campaign.",
       },
       {
         id: "packaged-skill-discovery",

@@ -11,9 +11,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "url", "resolvedUrl", "resolved", "httpStatus", "publisher", "lineageId", "exactLocator", "publishedAt", "updatedAt", "accessedAt", "freshness"],
+        "required": ["id", "requirementId", "url", "resolvedUrl", "resolved", "httpStatus", "publisher", "lineageId", "exactLocator", "publishedAt", "updatedAt", "accessedAt", "freshness"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
+          "requirementId": {"type": "string", "minLength": 1},
           "url": {"type": "string", "minLength": 1},
           "resolvedUrl": {"type": "string", "minLength": 1},
           "resolved": {"type": "boolean"},

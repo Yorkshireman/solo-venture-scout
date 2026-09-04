@@ -28,11 +28,20 @@ const compatibilityMatrixPath = path.resolve(
   process.env.SVS_COMPATIBILITY_MATRIX ??
     path.join(repositoryRoot, "release", "compatibility-matrix.json"),
 );
+const controlledScenariosPath = path.resolve(
+  process.env.SVS_CONTROLLED_SCENARIOS ??
+    path.join(repositoryRoot, "release", "controlled-scenarios.json"),
+);
 
 const compatibilityMatrixContents = await readFile(compatibilityMatrixPath);
 const compatibilityMatrix = JSON.parse(compatibilityMatrixContents.toString("utf8"));
 const compatibilityMatrixSha256 = createHash("sha256")
   .update(compatibilityMatrixContents)
+  .digest("hex");
+const controlledScenariosContents = await readFile(controlledScenariosPath);
+const controlledScenarioPack = JSON.parse(controlledScenariosContents.toString("utf8"));
+const controlledScenariosSha256 = createHash("sha256")
+  .update(controlledScenariosContents)
   .digest("hex");
 
 /** @param {string} filePath */
@@ -163,8 +172,9 @@ function validateDeterministicEvidence(evidence, acceptanceContract) {
 /**
  * @param {Record<string, any>} evidence
  * @param {Record<string, any>} acceptanceContract
+ * @param {Record<string, any>} scenarioPack
  */
-function validateBehavioralEvidence(evidence, acceptanceContract) {
+function validateBehavioralEvidence(evidence, acceptanceContract, scenarioPack) {
   const diagnostics = [];
   if (
     !isRecord(evidence.skill) ||
@@ -248,6 +258,14 @@ function validateBehavioralEvidence(evidence, acceptanceContract) {
         }
         const run = matchingRuns[0];
         const runKey = `${scenarioId}:${repetition}`;
+        const scenario = scenarioPack.scenarios?.find(
+          (/** @type {Record<string, any>} */ candidate) => candidate.id === scenarioId,
+        );
+        const expectedScenarioInputSha256 = scenario
+          ? createHash("sha256")
+              .update(JSON.stringify(scenario.coordinatorInput))
+              .digest("hex")
+          : null;
         runKeys.add(runKey);
         if (
           typeof run.runId !== "string" ||
@@ -258,7 +276,13 @@ function validateBehavioralEvidence(evidence, acceptanceContract) {
           Number.isNaN(Date.parse(run.startedAt)) ||
           Number.isNaN(Date.parse(run.completedAt)) ||
           !isSha256(run.transcriptSha256) ||
-          !isSha256(run.campaignSha256)
+          !isSha256(run.campaignSha256) ||
+          run.scenarioInputSha256 !== expectedScenarioInputSha256 ||
+          !isRecord(run.precondition) ||
+          typeof run.precondition.precondition !== "string" ||
+          typeof run.precondition.activeCoordinatorId !== "string" ||
+          !Number.isSafeInteger(run.precondition.initialRecordSequence) ||
+          run.precondition.initialRecordSequence < 0
         ) {
           diagnostics.push(`run ${runKey} lacks independent identity, timing, or artifact digests`);
         }
@@ -373,6 +397,25 @@ function validateLiveRetrievalEvidence(evidence, acceptanceContract) {
       ) {
         diagnostics.push(`live retrieval method ${methodId} lacks a complete passing run identity`);
       }
+      if (
+        method.sourceRequirementsPassed !== true ||
+        method.provenanceAndFreshnessPassed !== true ||
+        method.claimsPassed !== true
+      ) {
+        diagnostics.push(`live retrieval method ${methodId} lacks independently verified Source and claim requirements`);
+      }
+      if (
+        !isRecord(method.retrievalMethodEvidence) ||
+        method.retrievalMethodEvidence.status !== "passed" ||
+        method.retrievalMethodEvidence.methodId !== methodId ||
+        !Number.isSafeInteger(method.retrievalMethodEvidence.webSearchEvents) ||
+        method.retrievalMethodEvidence.webSearchEvents < 1 ||
+        method.retrievalMethodEvidence.readOnlySandbox !== true ||
+        !Array.isArray(method.retrievalMethodEvidence.disallowedActionEvents) ||
+        method.retrievalMethodEvidence.disallowedActionEvents.length !== 0
+      ) {
+        diagnostics.push(`live retrieval method ${methodId} lacks independent transcript proof of read-only method use`);
+      }
 
       const sources = Array.isArray(method.sources) ? method.sources.filter(isRecord) : [];
       if (sources.length < acceptanceContract.liveRetrieval.minimumIndependentSources) {
@@ -399,6 +442,15 @@ function validateLiveRetrievalEvidence(evidence, acceptanceContract) {
           source.httpStatus < 200 ||
           source.httpStatus >= 400 ||
           !urlsResolve ||
+          source.hostAllowed !== true ||
+          source.pathAllowed !== true ||
+          source.contentMarkersMatched !== true ||
+          !isSha256(source.contentSha256) ||
+          !Number.isSafeInteger(source.contentBytes) ||
+          source.contentBytes < 1 ||
+          typeof source.contentType !== "string" ||
+          !source.contentType.toLocaleLowerCase("en-US").includes("text/html") ||
+          Number.isNaN(Date.parse(source.retrievedAt)) ||
           typeof source.publisher !== "string" ||
           typeof source.exactLocator !== "string" ||
           Number.isNaN(Date.parse(source.accessedAt)) ||
@@ -418,6 +470,40 @@ function validateLiveRetrievalEvidence(evidence, acceptanceContract) {
       }
       if (sourceIds.size !== sources.length) {
         diagnostics.push(`live retrieval method ${methodId} has duplicate Source identities`);
+      }
+      for (const requirement of acceptanceContract.liveRetrieval.sourceRequirements) {
+        const matchingSources = sources.filter(
+          (source) => source.requirementId === requirement.id,
+        );
+        if (matchingSources.length !== 1) {
+          diagnostics.push(`live retrieval method ${methodId} did not verify Source requirement ${requirement.id} exactly once`);
+          continue;
+        }
+        try {
+          const resolvedUrl = new URL(matchingSources[0].resolvedUrl);
+          const hostAllowed = requirement.allowedHosts.some(
+            (/** @type {string} */ allowedHost) =>
+              resolvedUrl.hostname === allowedHost ||
+              resolvedUrl.hostname.endsWith(`.${allowedHost}`),
+          );
+          if (!hostAllowed || !resolvedUrl.pathname.startsWith(requirement.pathPrefix)) {
+            diagnostics.push(`live retrieval method ${methodId} Source requirement ${requirement.id} resolved outside its declared authority`);
+          }
+        } catch {
+          diagnostics.push(`live retrieval method ${methodId} Source requirement ${requirement.id} has an invalid resolved URL`);
+        }
+      }
+      if (
+        sources.length !== acceptanceContract.liveRetrieval.sourceRequirements.length ||
+        sources.some(
+          (source) =>
+            !acceptanceContract.liveRetrieval.sourceRequirements.some(
+              (/** @type {Record<string, any>} */ requirement) =>
+                requirement.id === source.requirementId,
+            ),
+        )
+      ) {
+        diagnostics.push(`live retrieval method ${methodId} contains undeclared or duplicate Source requirements`);
       }
 
       const assertions = Array.isArray(method.assertions) ? method.assertions : [];
@@ -450,6 +536,24 @@ function validateLiveRetrievalEvidence(evidence, acceptanceContract) {
           claim.sourceIds.some((sourceId) => !sourceIds.has(sourceId))
         ) {
           diagnostics.push(`live retrieval method ${methodId} has an invalid or untraceable separated claim`);
+        }
+      }
+      for (const requirement of acceptanceContract.liveRetrieval.sourceRequirements) {
+        const source = sources.find(
+          (candidate) => candidate.requirementId === requirement.id,
+        );
+        const requirementClaim = claims.find(
+          (claim) =>
+            source &&
+            claim.sourceIds?.includes(source.id) &&
+            requirement.claimTerms.every((/** @type {string} */ term) =>
+              String(claim.statement)
+                .toLocaleLowerCase("en-US")
+                .includes(term.toLocaleLowerCase("en-US")),
+            ),
+        );
+        if (!requirementClaim) {
+          diagnostics.push(`live retrieval method ${methodId} lacks a traceable claim for Source requirement ${requirement.id}`);
         }
       }
       if (
@@ -729,7 +833,9 @@ for (const gate of contract.mandatoryGates) {
     diagnostics.push(...validateDeterministicEvidence(evidence, contract));
   }
   if (gate.id === "behavioral") {
-    diagnostics.push(...validateBehavioralEvidence(evidence, contract));
+    diagnostics.push(
+      ...validateBehavioralEvidence(evidence, contract, controlledScenarioPack),
+    );
   }
   if (gate.id === "live-retrieval") {
     diagnostics.push(...validateLiveRetrievalEvidence(evidence, contract));
@@ -793,6 +899,7 @@ const report = {
   acceptanceIdentity: {
     contractVersion: contract.contractVersion,
     suiteVersion: contract.suiteVersion,
+    controlledScenariosSha256,
     releaseVersion: contract.targetReleaseVersion,
     officialTag: contract.officialTag,
   },
@@ -815,6 +922,8 @@ const report = {
 
 /** @param {Record<string, any>} acceptanceReport */
 function renderHumanReport(acceptanceReport) {
+  const identity = acceptanceReport.acceptanceIdentity;
+  const reportEvidence = acceptanceReport.evidenceResults;
   const lines = [
     `# Solo Venture Scout ${acceptanceReport.releaseVersion} acceptance`,
     "",
@@ -822,11 +931,12 @@ function renderHumanReport(acceptanceReport) {
     "",
     "## Exact acceptance identity",
     "",
-    `- Acceptance contract: ${contract.contractVersion}`,
-    `- Acceptance suite: ${contract.suiteVersion}`,
-    `- Official tag: ${contract.officialTag}`,
+    `- Acceptance contract: ${identity.contractVersion}`,
+    `- Acceptance suite: ${identity.suiteVersion}`,
+    `- Controlled scenarios: ${identity.controlledScenariosSha256}`,
+    `- Official tag: ${identity.officialTag}`,
   ];
-  const deterministic = evidenceResults.deterministic;
+  const deterministic = reportEvidence.deterministic;
   if (deterministic) {
     lines.push(
       `- Skill: ${deterministic.skill?.name ?? "unknown"} ${deterministic.skill?.version ?? "unknown"} (${deterministic.skill?.treeSha256 ?? "unknown"})`,
@@ -837,7 +947,7 @@ function renderHumanReport(acceptanceReport) {
     );
   }
   lines.push("", "## Gates", "");
-  for (const gate of gates) {
+  for (const gate of acceptanceReport.gates) {
     lines.push(`- ${gate.id}: ${gate.status}`);
     for (const diagnostic of gate.diagnostics ?? []) lines.push(`  - ${diagnostic}`);
   }
@@ -849,7 +959,7 @@ function renderHumanReport(acceptanceReport) {
       );
     }
   }
-  const behavioral = evidenceResults.behavioral;
+  const behavioral = reportEvidence.behavioral;
   if (behavioral?.profiles) {
     lines.push("", "## Behavioral profiles and runs", "");
     for (const profile of behavioral.profiles) {
@@ -863,26 +973,26 @@ function renderHumanReport(acceptanceReport) {
       );
       for (const run of profile.runs ?? []) {
         lines.push(
-          `- ${run.runId}: ${run.scenarioId} repetition ${run.repetition}; ${run.status}; skill ${run.skillTreeSha256}; coordinator ${run.coordinatorSessionId}; evaluator ${run.evaluation?.evaluatorSessionId}; evaluation ${run.evaluation?.evaluationId}; adjudication ${run.evaluation?.adjudication?.status} ${run.evaluation?.adjudication?.version}; transcript ${run.transcriptSha256}; Campaign ${run.campaignSha256}.`,
+          `- ${run.runId}: ${run.scenarioId} repetition ${run.repetition}; ${run.status}; scenario input ${run.scenarioInputSha256}; precondition ${run.precondition?.precondition} at record ${run.precondition?.initialRecordSequence}; skill ${run.skillTreeSha256}; coordinator ${run.coordinatorSessionId}; evaluator ${run.evaluation?.evaluatorSessionId}; evaluation ${run.evaluation?.evaluationId}; adjudication ${run.evaluation?.adjudication?.status} ${run.evaluation?.adjudication?.version}; transcript ${run.transcriptSha256}; Campaign ${run.campaignSha256}.`,
         );
       }
     }
   }
-  const liveRetrieval = evidenceResults["live-retrieval"];
+  const liveRetrieval = reportEvidence["live-retrieval"];
   if (liveRetrieval?.profiles) {
     lines.push("", "## Live retrieval", "");
     for (const profile of liveRetrieval.profiles) {
       for (const method of profile.methods ?? []) {
         lines.push(
-          `- ${profile.id}/${method.id}: ${method.status}; run ${method.runId}; session ${method.retrievalSessionId}; checked ${method.checkedAt}; transcript ${method.transcriptSha256}; Sources ${(method.sources ?? []).map(
+          `- ${profile.id}/${method.id}: ${method.status}; method proof ${method.retrievalMethodEvidence?.status} (${method.retrievalMethodEvidence?.webSearchEvents} web-search events, read-only=${method.retrievalMethodEvidence?.readOnlySandbox}); run ${method.runId}; session ${method.retrievalSessionId}; checked ${method.checkedAt}; transcript ${method.transcriptSha256}; Sources ${(method.sources ?? []).map(
             /** @param {Record<string, any>} source */
-            (source) => `${source.id} (${source.resolvedUrl})`,
+            (source) => `${source.id}/${source.requirementId} (${source.resolvedUrl}; content ${source.contentSha256})`,
           ).join(", ")}.`,
         );
       }
     }
   }
-  const compatibility = evidenceResults.compatibility;
+  const compatibility = reportEvidence.compatibility;
   if (compatibility?.claims) {
     lines.push("", "## Compatibility", "");
     for (const claim of compatibility.claims) {
@@ -894,7 +1004,7 @@ function renderHumanReport(acceptanceReport) {
       );
     }
   }
-  const packaging = evidenceResults["legal-and-packaging"];
+  const packaging = reportEvidence["legal-and-packaging"];
   if (packaging?.archives) {
     lines.push("", "## Legal and packaging", "");
     for (const archive of packaging.archives) {
@@ -912,7 +1022,7 @@ function renderHumanReport(acceptanceReport) {
     `- Standalone: ${acceptanceReport.versionAndTagState.standaloneReleaseVersion}`,
     `- Plugin: ${acceptanceReport.versionAndTagState.pluginReleaseVersion}`,
     `- HEAD: ${acceptanceReport.versionAndTagState.headCommit}`,
-    `- Tag: ${contract.officialTag} (${acceptanceReport.versionAndTagState.tagObjectType}) -> ${acceptanceReport.versionAndTagState.taggedCommit}`,
+    `- Tag: ${identity.officialTag} (${acceptanceReport.versionAndTagState.tagObjectType}) -> ${acceptanceReport.versionAndTagState.taggedCommit}`,
     `- Clean worktree: ${acceptanceReport.versionAndTagState.workingTreeClean}`,
     "",
   );

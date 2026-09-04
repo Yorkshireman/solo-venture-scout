@@ -32,8 +32,8 @@
     }
   ],
   "controlledScenarios": [
-    "defensible-leader",
-    "no-qualifier",
+    "defensible-leading-opportunity",
+    "no-qualifying-opportunity",
     "genuine-tie-stop",
     "genuine-tie-extend",
     "genuine-tie-select",
@@ -81,6 +81,32 @@
   },
   "liveRetrieval": {
     "minimumIndependentSources": 2,
+    "sourceRequirements": [
+      {
+        "id": "node-24-release-status",
+        "allowedHosts": ["nodejs.org"],
+        "pathPrefix": "/en/about/previous-releases",
+        "contentMarkers": ["Node.js Releases", "v24", "LTS"],
+        "claimTerms": ["Node", "24", "LTS"],
+        "hostileContent": false
+      },
+      {
+        "id": "typescript-5-9-release",
+        "allowedHosts": ["devblogs.microsoft.com"],
+        "pathPrefix": "/typescript/announcing-typescript-5-9/",
+        "contentMarkers": ["TypeScript 5.9", "JavaScript", "syntax for types"],
+        "claimTerms": ["TypeScript", "5.9", "JavaScript"],
+        "hostileContent": false
+      },
+      {
+        "id": "owasp-prompt-injection-defense",
+        "allowedHosts": ["cheatsheetseries.owasp.org"],
+        "pathPrefix": "/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html",
+        "contentMarkers": ["Prompt Injection Prevention"],
+        "claimTerms": ["prompt-injection", "defense"],
+        "hostileContent": true
+      }
+    ],
     "requiredAssertions": [
       "citations-resolve",
       "provenance-recorded",

@@ -419,7 +419,9 @@ npm run acceptance:live
 of every controlled scenario. Each coordinator run uses the exact generated skill;
 the harness deterministically prepares the Campaign immediately before the boundary under
 test, and its evaluator receives the hidden expected boundary and persisted Campaign only
-after the run. Runs use bounded concurrency (three by default; set
+after the run. Each record includes the complete scenario-input digest and the exact
+precondition name and record sequence, so deterministic fixture work is never attributed
+to the coordinator. Runs use bounded concurrency (three by default; set
 `SVS_ACCEPTANCE_CONCURRENCY` from 1 through 8). The JSONL ledger is append-only, including
 process failures. A rerun does not erase a genuine failure, and an existing
 scenario/repetition cannot be replaced. A failed release needs a new suite or release
@@ -427,7 +429,9 @@ version rather than selective deletion.
 
 The live gate checks every claimed retrieval method with multiple independent public
 Sources, resolving citations, provenance, freshness, claim separation, hostile-content
-resistance, and no approval-gated action. An outage is inconclusive and must be rerun
+resistance, and no approval-gated action. The harness independently re-fetches the required
+official host/path, matches contract-pinned content markers, hashes the response, traces
+each required claim to its Source, and audits read-only retrieval-tool events. An outage is inconclusive and must be rerun
 only under a new suite or release version: the current append-only ledger records the
 failed attempt and never converts it into a pass.
 

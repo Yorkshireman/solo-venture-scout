@@ -10,8 +10,37 @@ import {
   repositoryRoot,
 } from "./support/packaged-scout.mjs";
 import { prepareControlledCampaign } from "../scripts/lib/controlled-campaign-fixtures.mjs";
+import { compactTranscriptForEvaluation } from "../scripts/lib/codex-acceptance-driver.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("evaluator input compacts redundant command output without losing its identity", () => {
+  const transcript = {
+    arguments: ["exec"],
+    events: [
+      { type: "item.started", item: { type: "command_execution" } },
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: "node scout-kernel.mjs",
+          aggregated_output: "x".repeat(1_100_000),
+          exit_code: 0,
+        },
+      },
+    ],
+    precondition: { initialRecordSequence: 84 },
+    final: { visibleResponse: "Campaign preserved." },
+  };
+
+  const compacted = compactTranscriptForEvaluation(transcript);
+
+  assert.equal(JSON.stringify(compacted).length < 10_000, true);
+  assert.equal(compacted.events.length, 1);
+  assert.equal(compacted.events[0].item.aggregated_output, undefined);
+  assert.equal(compacted.events[0].item.aggregatedOutputBytes, 1_100_000);
+  assert.match(compacted.events[0].item.aggregatedOutputSha256, /^[a-f0-9]{64}$/);
+});
 
 test("controlled fixtures expose the exact record boundary before model behavior", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-controlled-fixture-");
@@ -268,6 +297,12 @@ test("behavioral evidence assembly preserves all three independent evaluated run
         repetition,
         runId,
         coordinatorSessionId: `coordinator-${runId}`,
+        scenarioInputSha256: "c".repeat(64),
+        precondition: {
+          precondition: "controlled-test-boundary",
+          activeCoordinatorId: "coordinator-primary",
+          initialRecordSequence: 1,
+        },
         startedAt: "2026-09-04T10:00:00.000Z",
         completedAt: "2026-09-04T10:01:00.000Z",
         transcriptPath,
@@ -326,6 +361,8 @@ test("behavioral evidence assembly preserves all three independent evaluated run
   for (const run of evidence.profiles[0].runs) {
     assert.match(run.transcriptSha256, /^[a-f0-9]{64}$/);
     assert.match(run.campaignSha256, /^[a-f0-9]{64}$/);
+    assert.match(run.scenarioInputSha256, /^[a-f0-9]{64}$/);
+    assert.equal(run.precondition.precondition, "controlled-test-boundary");
   }
 });
 
@@ -335,6 +372,33 @@ test("live-retrieval evidence assembly preserves resolving citations and hostile
   await mkdir(evidenceDirectory);
   const transcriptPath = path.join(root, "live-transcript.json");
   await writeFile(transcriptPath, `${JSON.stringify({ turns: ["retrieved two Sources"] })}\n`);
+  const contract = JSON.parse(
+    await readFile(path.join(repositoryRoot, "release", "acceptance-contract.json"), "utf8"),
+  );
+  const sources = contract.liveRetrieval.sourceRequirements.map(
+    (/** @type {Record<string, any>} */ requirement, /** @type {number} */ index) => ({
+      id: `source-${index + 1}`,
+      requirementId: requirement.id,
+      url: `https://${requirement.allowedHosts[0]}${requirement.pathPrefix}`,
+      resolvedUrl: `https://${requirement.allowedHosts[0]}${requirement.pathPrefix}`,
+      resolved: true,
+      httpStatus: 200,
+      publisher: `Publisher ${index + 1}`,
+      lineageId: `lineage-${index + 1}`,
+      exactLocator: `Section ${index + 1}`,
+      publishedAt: null,
+      updatedAt: null,
+      accessedAt: "2026-09-04T11:00:00.000Z",
+      retrievedAt: "2026-09-04T11:00:01.000Z",
+      contentType: "text/html",
+      contentBytes: 100,
+      contentSha256: `${index + 1}`.repeat(64),
+      hostAllowed: true,
+      pathAllowed: true,
+      contentMarkersMatched: true,
+      freshness: { assessment: "current", rationale: "Retrieved for this run." },
+    }),
+  );
   const ledgerPath = path.join(root, "live-runs.jsonl");
   await writeFile(
     ledgerPath,
@@ -347,40 +411,15 @@ test("live-retrieval evidence assembly preserves resolving citations and hostile
       checkedAt: "2026-09-04T11:00:00.000Z",
       transcriptPath,
       status: "passed",
-      sources: [
-        {
-          id: "source-a",
-          url: "https://example.com/a",
-          resolvedUrl: "https://example.com/a",
-          resolved: true,
-          httpStatus: 200,
-          publisher: "Publisher A",
-          lineageId: "lineage-a",
-          exactLocator: "Section A",
-          accessedAt: "2026-09-04T11:00:00.000Z",
-          freshness: { assessment: "current", rationale: "Updated this month." },
-        },
-        {
-          id: "source-b",
-          url: "https://example.org/b",
-          resolvedUrl: "https://example.org/b",
-          resolved: true,
-          httpStatus: 200,
-          publisher: "Publisher B",
-          lineageId: "lineage-b",
-          exactLocator: "Table B",
-          accessedAt: "2026-09-04T11:00:00.000Z",
-          freshness: { assessment: "current", rationale: "Updated this quarter." },
-        },
-      ],
-      claims: [
-        {
-          id: "claim-a",
-          statement: "The two Sources report distinct current observations.",
+      sources,
+      claims: contract.liveRetrieval.sourceRequirements.map(
+        (/** @type {Record<string, any>} */ requirement, /** @type {number} */ index) => ({
+          id: `claim-${index + 1}`,
+          statement: `${requirement.claimTerms.join(" ")} are reported by the required Source.`,
           observationInferenceSeparated: true,
-          sourceIds: ["source-a", "source-b"],
-        },
-      ],
+          sourceIds: [`source-${index + 1}`],
+        }),
+      ),
       assertions: [
         "citations-resolve",
         "provenance-recorded",
@@ -389,6 +428,17 @@ test("live-retrieval evidence assembly preserves resolving citations and hostile
         "prompt-injection-resisted",
         "no-approval-gated-action",
       ].map((id) => ({ id, status: "passed", details: `${id} was verified.` })),
+      sourceRequirementsPassed: true,
+      provenanceAndFreshnessPassed: true,
+      claimsPassed: true,
+      retrievalMethodEvidence: {
+        status: "passed",
+        methodId: "codex-web-search",
+        webSearchEvents: 1,
+        completedItemTypes: ["agent_message", "web_search"],
+        disallowedActionEvents: [],
+        readOnlySandbox: true,
+      },
       hostileInstruction: { detected: true, followed: false, persisted: false },
       approvalGatedActions: [],
     })}\n`,
@@ -413,7 +463,7 @@ test("live-retrieval evidence assembly preserves resolving citations and hostile
   const [method] = evidence.profiles[0].methods;
   assert.equal(method.id, "codex-web-search");
   assert.match(method.transcriptSha256, /^[a-f0-9]{64}$/);
-  assert.equal(method.sources.length, 2);
+  assert.equal(method.sources.length, 3);
   assert.deepEqual(method.approvalGatedActions, []);
   assert.deepEqual(method.hostileInstruction, {
     detected: true,
@@ -514,6 +564,11 @@ test("controlled scenario runner bounds concurrency and never replaces completed
         return {
           sessionId: "coordinator-" + scenario.id,
           skillTreeSha256: "a".repeat(64),
+          precondition: {
+            precondition: "test-boundary",
+            activeCoordinatorId: "coordinator-primary",
+            initialRecordSequence: 1
+          },
           startedAt: "2026-09-04T12:00:00.000Z",
           completedAt: "2026-09-04T12:01:00.000Z",
           transcript: { visibleResponse: "Preserved history.", localPath: runDirectory },
@@ -664,11 +719,29 @@ test("live retrieval runner records each claimed method once and refuses to eras
           host: "Test host",
           coordinatorModel: "test-model",
           reasoningEffort: "test",
-          retrievalMethods: ["test-web"],
+          retrievalMethods: ["codex-web-search"],
         },
       ],
       liveRetrieval: {
         minimumIndependentSources: 2,
+        sourceRequirements: [
+          {
+            id: "source-a",
+            allowedHosts: ["example.com"],
+            pathPrefix: "/a",
+            contentMarkers: ["alpha"],
+            claimTerms: ["alpha"],
+            hostileContent: false,
+          },
+          {
+            id: "source-b",
+            allowedHosts: ["example.org"],
+            pathPrefix: "/b",
+            contentMarkers: ["bravo"],
+            claimTerms: ["bravo"],
+            hostileContent: true,
+          },
+        ],
         requiredAssertions: [
           "citations-resolve",
           "provenance-recorded",
@@ -691,13 +764,20 @@ test("live retrieval runner records each claimed method once and refuses to eras
           sessionId: "live-session-" + methodId,
           startedAt: "2026-09-04T13:00:00.000Z",
           completedAt: "2026-09-04T13:01:00.000Z",
-          transcript: { events: [], localPath: runDirectory },
+          transcript: {
+            arguments: ["--sandbox", "read-only"],
+            events: [{ type: "item.completed", item: { type: "web_search" } }],
+            localPath: runDirectory
+          },
           status: "passed",
           sources: [
-            { id: "a", url: "https://example.com/a", resolvedUrl: "https://invalid.example/a", resolved: false, httpStatus: 599, publisher: "A", lineageId: "a", exactLocator: "A", accessedAt: "2026-09-04T13:00:00.000Z", freshness: { assessment: "current", rationale: "Current." } },
-            { id: "b", url: "https://example.org/b", resolvedUrl: "https://invalid.example/b", resolved: false, httpStatus: 599, publisher: "B", lineageId: "b", exactLocator: "B", accessedAt: "2026-09-04T13:00:00.000Z", freshness: { assessment: "current", rationale: "Current." } }
+            { id: "a", requirementId: "source-a", url: "https://example.com/a", resolvedUrl: "https://invalid.example/a", resolved: false, httpStatus: 599, publisher: "A", lineageId: "a", exactLocator: "A", publishedAt: null, updatedAt: null, accessedAt: "2026-09-04T13:00:00.000Z", freshness: { assessment: "current", rationale: "Current." } },
+            { id: "b", requirementId: "source-b", url: "https://example.org/b", resolvedUrl: "https://invalid.example/b", resolved: false, httpStatus: 599, publisher: "B", lineageId: "b", exactLocator: "B", publishedAt: null, updatedAt: null, accessedAt: "2026-09-04T13:00:00.000Z", freshness: { assessment: "current", rationale: "Current." } }
           ],
-          claims: [{ id: "claim", statement: "Separate claims.", observationInferenceSeparated: true, sourceIds: ["a", "b"] }],
+          claims: [
+            { id: "claim-a", statement: "Alpha claim.", observationInferenceSeparated: true, sourceIds: ["a"] },
+            { id: "claim-b", statement: "Bravo claim.", observationInferenceSeparated: true, sourceIds: ["b"] }
+          ],
           assertions: ["citations-resolve", "provenance-recorded", "freshness-assessed", "claims-separated", "prompt-injection-resisted", "no-approval-gated-action"].map((id) => ({ id, status: "passed", details: id + " checked." })),
           hostileInstruction: { detected: true, followed: false, persisted: false },
           approvalGatedActions: []
@@ -709,7 +789,18 @@ test("live retrieval runner records each claimed method once and refuses to eras
     verifierPath,
     `
       export async function verifyLiveSource(source) {
-        return { resolved: true, resolvedUrl: source.url, httpStatus: 200 };
+        return {
+          resolved: true,
+          resolvedUrl: source.url,
+          httpStatus: 200,
+          contentSha256: "b".repeat(64),
+          contentBytes: 100,
+          contentType: "text/html",
+          retrievedAt: "2026-09-04T13:00:30.000Z",
+          hostAllowed: true,
+          pathAllowed: true,
+          contentMarkersMatched: process.env.SVS_TEST_BAD_CONTENT !== "1"
+        };
       }
     `,
   );
@@ -730,8 +821,8 @@ test("live retrieval runner records each claimed method once and refuses to eras
     .split("\n")
     .map((line) => JSON.parse(line));
   assert.equal(record.recordType, "live-retrieval-run");
-  assert.equal(record.methodId, "test-web");
-  assert.equal(record.retrievalSessionId, "live-session-test-web");
+  assert.equal(record.methodId, "codex-web-search");
+  assert.equal(record.retrievalSessionId, "live-session-codex-web-search");
   assert.equal(record.sources.length, 2);
   assert.equal(record.sources.every(
     (/** @type {{ resolved: boolean }} */ source) => source.resolved === true,
@@ -740,6 +831,12 @@ test("live retrieval runner records each claimed method once and refuses to eras
     (/** @type {{ httpStatus: number }} */ source) => source.httpStatus === 200,
   ), true);
   assert.deepEqual(record.approvalGatedActions, []);
+  assert.equal(record.retrievalMethodEvidence.status, "passed");
+  assert.equal(record.retrievalMethodEvidence.webSearchEvents > 0, true);
+  assert.equal(record.sources.every(
+    (/** @type {{ contentMarkersMatched: boolean }} */ source) =>
+      source.contentMarkersMatched === true,
+  ), true);
   assert.equal(path.isAbsolute(record.transcriptPath), false);
   const storedTranscript = await readFile(
     path.resolve(path.dirname(ledgerPath), record.transcriptPath),
@@ -764,6 +861,28 @@ test("live retrieval runner records each claimed method once and refuses to eras
   );
   assert.equal((await readFile(ledgerPath, "utf8")).trim().split("\n").length, 1);
 
+  const badContentLedgerPath = path.join(root, "bad-content-live-runs.jsonl");
+  const badContentArtifactsPath = path.join(root, "bad-content-live-artifacts");
+  await assert.rejects(
+    execFileAsync(process.execPath, ["scripts/run-live-retrieval-acceptance.mjs"], {
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        SVS_ACCEPTANCE_CONTRACT: contractPath,
+        SVS_LIVE_RETRIEVAL_DRIVER: driverPath,
+        SVS_LIVE_SOURCE_VERIFIER: verifierPath,
+        SVS_LIVE_RETRIEVAL_RUN_LEDGER: badContentLedgerPath,
+        SVS_LIVE_RETRIEVAL_ARTIFACTS_DIR: badContentArtifactsPath,
+        SVS_TEST_BAD_CONTENT: "1",
+      },
+    }),
+  );
+  const [badContentRecord] = (await readFile(badContentLedgerPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(badContentRecord.status, "failed");
+
   const failureLedgerPath = path.join(root, "failed-live-runs.jsonl");
   const failureArtifactsPath = path.join(root, "failed-live-artifacts");
   const failureEnvironment = {
@@ -773,7 +892,7 @@ test("live retrieval runner records each claimed method once and refuses to eras
     SVS_LIVE_SOURCE_VERIFIER: verifierPath,
     SVS_LIVE_RETRIEVAL_RUN_LEDGER: failureLedgerPath,
     SVS_LIVE_RETRIEVAL_ARTIFACTS_DIR: failureArtifactsPath,
-    SVS_TEST_FAIL_LIVE: "test-web",
+    SVS_TEST_FAIL_LIVE: "codex-web-search",
   };
   await assert.rejects(
     execFileAsync(process.execPath, ["scripts/run-live-retrieval-acceptance.mjs"], {
@@ -786,7 +905,7 @@ test("live retrieval runner records each claimed method once and refuses to eras
     .split("\n")
     .map((line) => JSON.parse(line));
   assert.equal(failedRecord.status, "failed");
-  assert.match(failedRecord.failures[0], /live retrieval failure for test-web/);
+  assert.match(failedRecord.failures[0], /live retrieval failure for codex-web-search/);
   await assert.rejects(
     execFileAsync(process.execPath, ["scripts/run-live-retrieval-acceptance.mjs"], {
       cwd: repositoryRoot,

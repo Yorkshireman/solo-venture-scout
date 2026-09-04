@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sha256 } from "./lib/artifact-identity.mjs";
 import { outputRoot, repositoryRoot } from "./lib/release-paths.mjs";
 
 const contractPath = path.resolve(
@@ -247,6 +248,8 @@ for (const profile of contract.profiles) {
         runId,
         coordinatorSessionId: coordinatorResult.sessionId,
         skillTreeSha256: coordinatorResult.skillTreeSha256,
+        scenarioInputSha256: sha256(JSON.stringify(scenario.coordinatorInput)),
+        precondition: coordinatorResult.precondition,
         startedAt: coordinatorResult.startedAt,
         completedAt: coordinatorResult.completedAt,
         transcriptPath: path.relative(path.dirname(ledgerPath), transcriptPath),
@@ -283,6 +286,8 @@ for (const profile of contract.profiles) {
           repetition,
           runId,
           coordinatorSessionId: null,
+          scenarioInputSha256: sha256(JSON.stringify(scenario.coordinatorInput)),
+          precondition: null,
           startedAt: new Date().toISOString(),
           completedAt: new Date().toISOString(),
           transcriptPath: path.relative(

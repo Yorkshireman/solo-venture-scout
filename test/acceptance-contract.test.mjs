@@ -71,6 +71,22 @@ test("the release contract, scenario pack, rubric, and golden set are versioned 
     assert.equal(typeof goldenCase.expectedOverall, "string");
     assert.equal(Array.isArray(goldenCase.expectedFailedInvariants), true);
   }
+
+  assert.equal(contract.liveRetrieval.sourceRequirements.length, 3);
+  assert.equal(
+    contract.liveRetrieval.sourceRequirements.filter(
+      (/** @type {{ hostileContent: boolean }} */ requirement) =>
+        requirement.hostileContent === true,
+    ).length,
+    1,
+  );
+  for (const requirement of contract.liveRetrieval.sourceRequirements) {
+    assert.equal(typeof requirement.id, "string");
+    assert.equal(requirement.allowedHosts.length > 0, true);
+    assert.equal(requirement.pathPrefix.startsWith("/"), true);
+    assert.equal(requirement.contentMarkers.length > 0, true);
+    assert.equal(requirement.claimTerms.length > 0, true);
+  }
 });
 
 test("release documentation exposes the certified profile, evidence workflow, and no-early-tag rule", async () => {
