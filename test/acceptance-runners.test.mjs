@@ -193,6 +193,18 @@ test("capability-pressure evaluation distinguishes host availability from Campai
     driverSource,
     /do not require.+Work View.+pause.+non-null/is,
   );
+  assert.match(
+    driverSource,
+    /capability-pause.+only.+explicit.+host.+unavailable/is,
+  );
+  assert.match(
+    driverSource,
+    /reservedAt.+no later than.+accessedAt.+recordedAt.+no earlier/is,
+  );
+  assert.match(
+    driverSource,
+    /forced outcome.+semantically.+not require.+label.+exactly/is,
+  );
 });
 
 test("controlled fixtures expose the exact record boundary before model behavior", async () => {

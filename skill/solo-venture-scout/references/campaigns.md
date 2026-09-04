@@ -273,6 +273,11 @@ kernel also rejects obvious credential or payment assignments, imperative active
 instructions, and raw markup in accepted text fields; this is defense-in-depth and
 does not replace the coordinator's semantic data-minimisation review.
 
+The retrieval chronology is authoritative: the reservation's `reservedAt` must be no
+later than the Source's `accessedAt`, and the command's `recordedAt` must be no earlier
+than either. Use actual timestamps and inspect them before submission. Do not alter
+Source provenance or retry under a new identity to conceal an invalid timeline.
+
 The strict command has no fields for credentials, payment information, personal data,
 raw retrieved content, or active instructions. Do not add them. Success appends the
 immutable Source and Observation to authoritative history, settles the reservation,

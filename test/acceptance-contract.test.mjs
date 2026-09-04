@@ -42,6 +42,13 @@ test("the release contract, scenario pack, rubric, and golden set are versioned 
       assert.equal(item.copyrightSafe, true);
       assert.equal(typeof item.lineageId, "string");
       assert.equal(typeof item.freshness, "object");
+      if (item.kind === "retrieved-source") {
+        assert.match(item.source.publishedAt, /^\d{4}-\d{2}-\d{2}$/);
+        assert.match(
+          item.source.accessedAt,
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+        );
+      }
     }
   }
   const preconditionedScenarioIds = new Set([

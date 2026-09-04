@@ -111,6 +111,14 @@ authoritative Pending Decision, so the Work View's `pause` remains `null`; do no
 manufacture a kernel mutation. `publicResearchAvailable` reports Campaign policy and
 budget permission, not whether a host retrieval route is currently operational.
 Likewise, a Work View action may remain permitted while temporarily not executable.
+Use `capability-pause` only when an explicit current host diagnostic says the route
+is unavailable, not merely because bounded research is complete or no further Source
+is currently proposed.
+
+Keep retrieval timestamps monotonic and truthful. A reservation's `reservedAt` must
+be no later than the Source's `accessedAt`, and the observation's `recordedAt` must be
+no earlier than both. Check the supplied or observed times before reserving; never
+backdate, postdate, or alter Source provenance to make an import pass.
 
 1. Define one bounded research purpose and identify the lawful public-retrieval route
    to use. Create stable reservation and request identities, then run
