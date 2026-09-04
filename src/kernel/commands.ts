@@ -102,6 +102,7 @@ import type { CoordinatorOperationLock } from "./authority.js";
 import {
   addManifestDigest,
   addRecordDigests,
+  authoritativeHistoryDigest,
   commandDigest,
 } from "./recovery.js";
 import type { CampaignRecovery } from "./authority.js";
@@ -508,21 +509,27 @@ export async function resumeCampaign(command: ResumeCampaignCommand, currentTime
       explicitCampaignPath === undefined
         ? undefined
         : path.resolve(explicitCampaignPath);
-    const newerContracts =
-      campaignPath === undefined
-        ? undefined
-        : await unsupportedNewerCampaignContracts(campaignPath).catch(
-            () => undefined,
-          );
-    if (newerContracts !== undefined) {
-      return coordinatorOperationFailure(command, {
-        code: "SVS-CAMPAIGN-CONTRACT-NEWER",
-        message:
-          "Scouting Campaign uses contract versions newer than this release supports.",
-        action:
-          "Open it with a release that supports every listed version; do not reinterpret, edit, or migrate it backward.",
-        details: newerContracts,
-      });
+    if (campaignPath !== undefined) {
+      try {
+        const newerContracts = await unsupportedNewerCampaignContracts(
+          campaignPath,
+        );
+        if (newerContracts !== undefined) {
+          return coordinatorOperationFailure(command, {
+            code: "SVS-CAMPAIGN-CONTRACT-NEWER",
+            message:
+              "Scouting Campaign uses contract versions newer than this release supports.",
+            action:
+              "Open it with a release that supports every listed version; do not reinterpret, edit, or migrate it backward.",
+            details: newerContracts,
+          });
+        }
+      } catch (error) {
+        const authorityFailure = campaignAuthorityFailure(error);
+        if (authorityFailure !== undefined) {
+          return coordinatorOperationFailure(command, authorityFailure);
+        }
+      }
     }
     let migration;
     try {
@@ -3115,7 +3122,11 @@ export async function createCampaign(command: CreateCampaignCommand) {
       campaignId: command.payload.campaignId,
       createdAt: command.payload.createdAt,
       versions: contracts,
-      authority: { records: "records.jsonl" },
+      authority: {
+        records: "records.jsonl",
+        recordCount: records.length,
+        historyDigest: authoritativeHistoryDigest(records),
+      },
       projections: {
         workView: "work-view.json",
         campaignIntake: "campaign-intake.json",

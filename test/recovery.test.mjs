@@ -612,6 +612,7 @@ test("resume regenerates projections after faults around the authoritative commi
     "solo-venture-scout-recovery-projections-",
   );
   const faultPoints = [
+    "after-authoritative-records",
     "after-authoritative-commit",
     "after-work-view-projection",
     "after-lease-projection",

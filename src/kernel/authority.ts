@@ -127,13 +127,16 @@ import {
 import {
   commitStagedOperation,
   completeOperationRecovery,
+  authoritativeHistoryDigest,
   manifestDigest,
+  parseAuthoritativeRecordText,
   recordDigest,
   injectPersistenceFault,
   recoverInterruptedOperations,
   stageOperationIntent,
 } from "./recovery.js";
 import {
+  CampaignAuthorityError,
   campaignAuthorityFailure,
   NewerCampaignContractsError,
 } from "./campaign-errors.js";
@@ -5632,22 +5635,20 @@ export async function readJson(targetPath: string): Promise<unknown> {
 }
 
 export async function readCampaignRecords(campaignPath: string): Promise<unknown[]> {
-  const text = await readFile(path.join(campaignPath, "records.jsonl"), "utf8");
-  if (text.trim() === "") {
-    throw new Error("authoritative history is empty");
+  try {
+    return parseAuthoritativeRecordText(
+      await readFile(path.join(campaignPath, "records.jsonl"), "utf8"),
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      throw new CampaignAuthorityError("missing", "records.jsonl was not found.");
+    }
+    throw error;
   }
-  return text
-    .trimEnd()
-    .split("\n")
-    .map((line, index) => {
-      try {
-        return JSON.parse(line) as unknown;
-      } catch {
-        throw new Error(
-          `authoritative record line ${index + 1} is not valid JSON; damaged tail was preserved`,
-        );
-      }
-    });
 }
 
 export function matchesContracts(
@@ -5699,7 +5700,11 @@ export type CampaignManifest = {
   createdAt: string;
   manifestDigest?: string;
   versions: Record<string, unknown>;
-  authority: { records: "records.jsonl" };
+  authority: {
+    records: "records.jsonl";
+    recordCount?: number;
+    historyDigest?: string;
+  };
   projections: {
     workView: "work-view.json";
     campaignIntake?: "campaign-intake.json";
@@ -5717,24 +5722,36 @@ export function parseCampaignManifest(
   if (
     expectedContracts.campaignFormat === contracts.campaignFormat &&
     isRecord(value) &&
-    isRecord(value.versions)
+    value.manifestDigest !== undefined &&
+    (typeof value.manifestDigest !== "string" ||
+      value.manifestDigest !== manifestDigest(value))
   ) {
-    const newerContracts = newerContractDetails(value.versions);
-    if (newerContracts.length > 0) {
-      throw new NewerCampaignContractsError(newerContracts);
-    }
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest integrity digest does not match",
+    );
   }
   if (
     expectedContracts.campaignFormat === contracts.campaignFormat &&
     isRecord(value) &&
     isRecord(value.versions) &&
     matchesContracts(value.versions, expectedContracts) &&
-    (
-      typeof value.manifestDigest !== "string" ||
-      value.manifestDigest !== manifestDigest(value)
-    )
+    typeof value.manifestDigest !== "string"
   ) {
-    throw new Error("manifest integrity digest does not match");
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest integrity digest does not match",
+    );
+  }
+  if (
+    expectedContracts.campaignFormat === contracts.campaignFormat &&
+    isRecord(value) &&
+    isRecord(value.versions)
+  ) {
+    const newerContracts = newerContractDetails(value.versions);
+    if (newerContracts.length > 0) {
+      throw new NewerCampaignContractsError(newerContracts);
+    }
   }
   if (
     !isRecord(value) ||
@@ -5745,6 +5762,11 @@ export function parseCampaignManifest(
     !matchesContracts(value.versions, expectedContracts) ||
     !isRecord(value.authority) ||
     value.authority.records !== "records.jsonl" ||
+    (expectedContracts.campaignFormat === contracts.campaignFormat &&
+      (!Number.isSafeInteger(value.authority.recordCount) ||
+        Number(value.authority.recordCount) < 2 ||
+        typeof value.authority.historyDigest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.authority.historyDigest))) ||
     !isRecord(value.projections) ||
     value.projections.workView !== "work-view.json" ||
     (value.projections.campaignIntake !== undefined &&
@@ -5764,7 +5786,7 @@ export function parseCampaignManifest(
   return value as unknown as CampaignManifest;
 }
 
-export async function rebuildCampaignFromAuthority(
+async function rebuildCampaignFromAuthorityUnchecked(
   campaignPath: string,
   expectedContracts: Record<string, string> = contracts,
 ) {
@@ -5779,7 +5801,10 @@ export async function rebuildCampaignFromAuthority(
 
   const records = await readCampaignRecords(resolvedPath);
   if (records.length < 2 || records.length % 2 !== 0) {
-    throw new Error("authoritative history is incomplete");
+    throw new CampaignAuthorityError(
+      "damaged",
+      "authoritative history is incomplete",
+    );
   }
   const operationRequests = new Set<string>();
   const authoritativeHistory: AuthoritativeHistoryRebuild = {
@@ -5845,7 +5870,8 @@ export async function rebuildCampaignFromAuthority(
       (typeof record.recordDigest !== "string" ||
         record.recordDigest !== recordDigest(record))
     ) {
-      throw new Error(
+      throw new CampaignAuthorityError(
+        "reconciliation",
         `authoritative record ${sequence} integrity digest does not match`,
       );
     }
@@ -5891,7 +5917,8 @@ export async function rebuildCampaignFromAuthority(
       (typeof outcome.recordDigest !== "string" ||
         outcome.recordDigest !== recordDigest(outcome))
     ) {
-      throw new Error(
+      throw new CampaignAuthorityError(
+        "reconciliation",
         `authoritative record ${outcomeSequence} integrity digest does not match`,
       );
     }
@@ -5911,6 +5938,16 @@ export async function rebuildCampaignFromAuthority(
       outcomeSequence,
       history: authoritativeHistory,
     });
+  }
+  if (
+    expectedContracts.campaignFormat === contracts.campaignFormat &&
+    (manifest.authority.recordCount !== records.length ||
+      manifest.authority.historyDigest !== authoritativeHistoryDigest(records))
+  ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "authoritative history does not match its manifest anchor",
+    );
   }
   const {
     intake,
@@ -6980,6 +7017,45 @@ export async function rebuildCampaignFromAuthority(
           intakeRevision: latestReevaluation.intakeRevision,
         }),
   };
+}
+
+export async function rebuildCampaignFromAuthority(
+  campaignPath: string,
+  expectedContracts: Record<string, string> = contracts,
+) {
+  try {
+    return await rebuildCampaignFromAuthorityUnchecked(
+      campaignPath,
+      expectedContracts,
+    );
+  } catch (error) {
+    if (
+      error instanceof CampaignAuthorityError ||
+      error instanceof NewerCampaignContractsError
+    ) {
+      throw error;
+    }
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT" &&
+      error.message.includes("records.jsonl")
+    ) {
+      throw new CampaignAuthorityError("missing", "records.jsonl was not found.");
+    }
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT" &&
+      error.message.includes("manifest.json")
+    ) {
+      throw error;
+    }
+    throw new CampaignAuthorityError(
+      "damaged",
+      error instanceof Error ? error.message : "unknown validation error",
+    );
+  }
 }
 
 export function matchesPersistedWorkView(

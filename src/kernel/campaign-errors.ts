@@ -17,10 +17,18 @@ export class AmbiguousCampaignDiscoveryError extends Error {
   }
 }
 
-function isFileSystemError(
-  error: unknown,
-): error is Error & { code: unknown } {
-  return error instanceof Error && "code" in error;
+export type CampaignAuthorityErrorKind =
+  | "missing"
+  | "damaged"
+  | "reconciliation";
+
+export class CampaignAuthorityError extends Error {
+  constructor(
+    readonly kind: CampaignAuthorityErrorKind,
+    detail: string,
+  ) {
+    super(detail);
+  }
 }
 
 export function campaignAuthorityFailure(
@@ -47,40 +55,26 @@ export function campaignAuthorityFailure(
   }
   const detail =
     error instanceof Error ? error.message : "unknown validation error";
-  if (
-    isFileSystemError(error) &&
-    error.code === "ENOENT" &&
-    detail.includes("records.jsonl")
-  ) {
-    return {
-      code: "SVS-CAMPAIGN-AUTHORITY-MISSING",
-      message: "Authoritative Campaign history is missing: records.jsonl.",
-      action:
-        "Choose one: restore records.jsonl from a trusted backup; restore a migration snapshot; or preserve this Campaign and start a new one. Never invent replacement records.",
-      details: ["records.jsonl was not found."],
-    };
-  }
-  if (
-    detail === "manifest integrity digest does not match" ||
-    /^authoritative record \d+ integrity digest does not match$/.test(detail)
-  ) {
-    return {
-      code: "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
-      message:
-        "Authoritative Campaign history changed outside the kernel and cannot be continued automatically.",
-      action:
-        "Reconcile the changed authoritative artifact against a trusted original or restore a migration snapshot; preserve the damaged copy and do not delete, rewrite, or drop its tail.",
-      details: [detail],
-    };
-  }
-  if (
-    detail === "authoritative history is empty" ||
-    detail === "authoritative history is incomplete" ||
-    /^authoritative record line \d+ is not valid JSON; damaged tail was preserved$/.test(
-      detail,
-    ) ||
-    /^authoritative record \d+ is invalid$/.test(detail)
-  ) {
+  if (error instanceof CampaignAuthorityError) {
+    if (error.kind === "missing") {
+      return {
+        code: "SVS-CAMPAIGN-AUTHORITY-MISSING",
+        message: "Authoritative Campaign history is missing: records.jsonl.",
+        action:
+          "Choose one: restore records.jsonl from a trusted backup; restore a migration snapshot; or preserve this Campaign and start a new one. Never invent replacement records.",
+        details: [detail],
+      };
+    }
+    if (error.kind === "reconciliation") {
+      return {
+        code: "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+        message:
+          "Authoritative Campaign history changed outside the kernel and cannot be continued automatically.",
+        action:
+          "Reconcile the changed authoritative artifact against a trusted original or restore a migration snapshot; preserve the damaged copy and do not delete, rewrite, or drop its tail.",
+        details: [detail],
+      };
+    }
     return {
       code: "SVS-CAMPAIGN-AUTHORITY-DAMAGED",
       message: "Authoritative Campaign history is incomplete or corrupt.",

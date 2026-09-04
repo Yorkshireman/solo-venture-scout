@@ -506,6 +506,117 @@ test("manual changes to the Campaign manifest require reconciliation before resu
   );
 });
 
+test("a manual version edit requires reconciliation instead of masquerading as a newer contract", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-version-reconciliation-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-current-campaign-"),
+  );
+  const campaignPath = path.join(storagePath, "manual-version-change");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-manual-version-change-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-manual-version-change",
+      coordinatorId: "coordinator-original",
+      createdAt: "2025-09-04T11:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T11:30:00.000Z",
+    },
+  });
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.versions.campaignFormat = "9.0.0";
+  manifest.versions.records = "9.0.0";
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const changedManifest = await readFile(manifestPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-manual-version-change-1",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2025-09-04T12:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T12:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(result.response.error.details, [
+    "manifest integrity digest does not match",
+  ]);
+  assert.deepEqual(await readFile(manifestPath), changedManifest);
+});
+
+test("a deleted authoritative tail is detected and preserved", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-deleted-tail-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-current-campaign-"),
+  );
+  const campaignPath = path.join(storagePath, "deleted-tail");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-deleted-tail-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-deleted-tail",
+      coordinatorId: "coordinator-original",
+      createdAt: "2025-09-04T12:40:00.000Z",
+      leaseExpiresAt: "2025-09-04T12:50:00.000Z",
+    },
+  });
+  const firstResume = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-before-tail-deletion-1",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-before-deletion",
+      resumedAt: "2025-09-04T13:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T13:30:00.000Z",
+    },
+  });
+  assert.equal(firstResume.code, 0, firstResume.stderr);
+  const recordsPath = path.join(campaignPath, "records.jsonl");
+  const records = (await readFile(recordsPath, "utf8")).trimEnd().split("\n");
+  assert.equal(records.length, 4);
+  await writeFile(recordsPath, `${records.slice(0, 2).join("\n")}\n`);
+  const shortenedAuthority = await readFile(recordsPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-after-tail-deletion-1",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-after-deletion",
+      resumedAt: "2025-09-04T14:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T14:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(result.response.error.details, [
+    "authoritative history does not match its manifest anchor",
+  ]);
+  assert.deepEqual(await readFile(recordsPath), shortenedAuthority);
+});
+
 test("missing authoritative history stops with recovery choices instead of inventing records", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-missing-authority-",
@@ -799,6 +910,47 @@ test("an older Campaign with corrupt authority is rejected before migration is o
     "authoritative record line 3 is not valid JSON; damaged tail was preserved",
   ]);
   assert.equal("migration" in (result.response.result ?? {}), false);
+  assert.deepEqual(await readFile(recordsPath), damagedAuthority);
+});
+
+test("semantic corruption in an older Campaign receives precise recovery choices", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-semantic-corrupt-older-campaign-",
+  );
+  const campaignPath = await copyOlderCampaign(
+    "semantic-corrupt-older-campaign",
+  );
+  const recordsPath = path.join(campaignPath, "records.jsonl");
+  const records = (await readFile(recordsPath, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  records[0].recordedAt = "2025-09-04T00:00:00.000Z";
+  records[1].recordedAt = "2025-09-04T00:00:00.000Z";
+  await writeFile(
+    recordsPath,
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+  const damagedAuthority = await readFile(recordsPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-semantic-corrupt-older-campaign-1",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2026-09-04T17:00:00.000Z",
+      leaseExpiresAt: "2026-09-04T17:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(result.response.error.code, "SVS-CAMPAIGN-AUTHORITY-DAMAGED");
+  assert.deepEqual(result.response.error.details, [
+    "manifest creation time does not match authoritative history",
+  ]);
+  assert.match(result.response.error.action, /restore records\.jsonl/i);
   assert.deepEqual(await readFile(recordsPath), damagedAuthority);
 });
 

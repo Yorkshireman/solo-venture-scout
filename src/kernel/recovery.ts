@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import contracts from "../../release/contracts.json" with { type: "json" };
+import { CampaignAuthorityError } from "./campaign-errors.js";
 import { authoritativeOperations } from "./types.js";
 import type { AuthoritativeOperation } from "./types.js";
 
@@ -86,6 +87,29 @@ export function addRecordDigests(
     ...record,
     recordDigest: recordDigest(record),
   }));
+}
+
+export function authoritativeHistoryDigest(records: unknown[]): string {
+  return commandDigest(records);
+}
+
+export function parseAuthoritativeRecordText(text: string): unknown[] {
+  if (text.trim() === "") {
+    throw new CampaignAuthorityError("damaged", "authoritative history is empty");
+  }
+  return text
+    .trimEnd()
+    .split("\n")
+    .map((line, index) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch {
+        throw new CampaignAuthorityError(
+          "damaged",
+          `authoritative record line ${index + 1} is not valid JSON; damaged tail was preserved`,
+        );
+      }
+    });
 }
 
 export function injectPersistenceFault(point: string): void {
@@ -190,19 +214,22 @@ function journalFileName(requestId: string): string {
 async function readAuthoritativeRecords(
   campaignPath: string,
 ): Promise<{ text: string; records: unknown[] }> {
-  const text = await readFile(path.join(campaignPath, "records.jsonl"), "utf8");
-  const lines = text.trimEnd().split("\n");
+  let text: string;
+  try {
+    text = await readFile(path.join(campaignPath, "records.jsonl"), "utf8");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      throw new CampaignAuthorityError("missing", "records.jsonl was not found.");
+    }
+    throw error;
+  }
   return {
     text,
-    records: lines.map((line, index) => {
-      try {
-        return JSON.parse(line) as unknown;
-      } catch {
-        throw new Error(
-          `authoritative record line ${index + 1} is not valid JSON; damaged tail was preserved`,
-        );
-      }
-    }),
+    records: parseAuthoritativeRecordText(text),
   };
 }
 
@@ -215,6 +242,102 @@ function recordsMatch(
   return expected.every(
     (record, index) =>
       JSON.stringify(existing[offset + index]) === JSON.stringify(record),
+  );
+}
+
+type AnchoredManifest = Record<string, unknown> & {
+  authority: Record<string, unknown> & {
+    records: "records.jsonl";
+    recordCount: number;
+    historyDigest: string;
+  };
+};
+
+async function readAnchoredManifest(
+  campaignPath: string,
+): Promise<AnchoredManifest> {
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      await readFile(path.join(campaignPath, "manifest.json"), "utf8"),
+    ) as unknown;
+  } catch (error) {
+    throw new CampaignAuthorityError(
+      "damaged",
+      error instanceof Error ? error.message : "manifest is not valid JSON",
+    );
+  }
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    throw new CampaignAuthorityError("damaged", "manifest is invalid");
+  }
+  const manifest = value as Record<string, unknown>;
+  if (
+    typeof manifest.manifestDigest !== "string" ||
+    manifest.manifestDigest !== manifestDigest(manifest)
+  ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest integrity digest does not match",
+    );
+  }
+  const authority = manifest.authority;
+  if (
+    authority === null ||
+    typeof authority !== "object" ||
+    Array.isArray(authority)
+  ) {
+    throw new CampaignAuthorityError(
+      "damaged",
+      "manifest authority anchor is invalid",
+    );
+  }
+  const anchor = authority as Record<string, unknown>;
+  if (
+    anchor.records !== "records.jsonl" ||
+    !Number.isSafeInteger(anchor.recordCount) ||
+    Number(anchor.recordCount) < 2 ||
+    typeof anchor.historyDigest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(anchor.historyDigest)
+  ) {
+    throw new CampaignAuthorityError(
+      "damaged",
+      "manifest authority anchor is invalid",
+    );
+  }
+  return manifest as AnchoredManifest;
+}
+
+function manifestAnchorMatches(
+  manifest: AnchoredManifest,
+  records: unknown[],
+): boolean {
+  return (
+    manifest.authority.recordCount === records.length &&
+    manifest.authority.historyDigest === authoritativeHistoryDigest(records)
+  );
+}
+
+async function updateManifestAnchor(
+  campaignPath: string,
+  manifest: AnchoredManifest,
+  records: unknown[],
+): Promise<void> {
+  const { manifestDigest: _manifestDigest, ...manifestFields } = manifest;
+  const updatedManifest = addManifestDigest({
+    ...manifestFields,
+    authority: {
+      ...manifest.authority,
+      recordCount: records.length,
+      historyDigest: authoritativeHistoryDigest(records),
+    },
+  });
+  await replaceDurablePrivateText(
+    path.join(campaignPath, "manifest.json"),
+    `${JSON.stringify(updatedManifest, null, 2)}\n`,
   );
 }
 
@@ -267,13 +390,17 @@ async function commitJournal(
   journal: OperationJournal,
 ): Promise<InterruptedOperationRecovery> {
   const authoritative = await readAuthoritativeRecords(campaignPath);
+  const manifest = await readAnchoredManifest(campaignPath);
   for (const [index, value] of authoritative.records.entries()) {
     if (
       value === null ||
       typeof value !== "object" ||
       Array.isArray(value)
     ) {
-      throw new Error(`authoritative record ${index + 1} is invalid`);
+      throw new CampaignAuthorityError(
+        "damaged",
+        `authoritative record ${index + 1} is invalid`,
+      );
     }
     const record = value as Record<string, unknown>;
     if (
@@ -281,18 +408,38 @@ async function commitJournal(
       (typeof record.recordDigest !== "string" ||
         record.recordDigest !== recordDigest(record))
     ) {
-      throw new Error(
+      throw new CampaignAuthorityError(
+        "reconciliation",
         `authoritative record ${index + 1} integrity digest does not match`,
       );
     }
   }
+  const journalRecordsPresent = recordsMatch(
+    authoritative.records,
+    journal.firstSequence,
+    journal.records,
+  );
+  const anchoredPrefix = authoritative.records.slice(
+    0,
+    journal.firstSequence - 1,
+  );
+  const recoverableUnanchoredCommit =
+    journalRecordsPresent &&
+    authoritative.records.length === journal.firstSequence + 1 &&
+    manifestAnchorMatches(manifest, anchoredPrefix);
   if (
-    recordsMatch(
-      authoritative.records,
-      journal.firstSequence,
-      journal.records,
-    )
+    !manifestAnchorMatches(manifest, authoritative.records) &&
+    !recoverableUnanchoredCommit
   ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "authoritative history does not match its manifest anchor",
+    );
+  }
+  if (journalRecordsPresent) {
+    if (recoverableUnanchoredCommit) {
+      await updateManifestAnchor(campaignPath, manifest, authoritative.records);
+    }
     return {
       journalPath,
       operation: {
@@ -304,7 +451,8 @@ async function commitJournal(
     };
   }
   if (authoritative.records.length !== journal.firstSequence - 1) {
-    throw new Error(
+    throw new CampaignAuthorityError(
+      "reconciliation",
       `interrupted operation ${journal.requestId} conflicts with authoritative history`,
     );
   }
@@ -316,6 +464,9 @@ async function commitJournal(
     path.join(campaignPath, "records.jsonl"),
     `${prefix}${appended}`,
   );
+  injectPersistenceFault("after-authoritative-records");
+  const updatedRecords = [...authoritative.records, ...journal.records];
+  await updateManifestAnchor(campaignPath, manifest, updatedRecords);
   return {
     journalPath,
     operation: {
@@ -335,7 +486,10 @@ export async function commitStagedOperation(
     JSON.parse(await readFile(journalPath, "utf8")) as unknown,
   );
   if (journal === undefined) {
-    throw new Error("durable operation intent is invalid");
+    throw new CampaignAuthorityError(
+      "damaged",
+      "durable operation intent is invalid",
+    );
   }
   return commitJournal(campaignPath, journalPath, journal);
 }
@@ -367,7 +521,10 @@ export async function recoverInterruptedOperations(
           JSON.parse(await readFile(journalPath, "utf8")) as unknown,
         );
         if (journal === undefined) {
-          throw new Error(`durable operation intent ${entry.name} is invalid`);
+          throw new CampaignAuthorityError(
+            "damaged",
+            `durable operation intent ${entry.name} is invalid`,
+          );
         }
         return { journalPath, journal };
       }),

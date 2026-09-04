@@ -28,10 +28,14 @@ import {
 import {
   addManifestDigest,
   addRecordDigests,
+  authoritativeHistoryDigest,
   injectPersistenceFault,
+  manifestDigest,
 } from "./recovery.js";
 import {
   AmbiguousCampaignDiscoveryError,
+  CampaignAuthorityError,
+  campaignAuthorityFailure,
   NewerCampaignContractsError,
 } from "./campaign-errors.js";
 
@@ -80,6 +84,16 @@ export async function unsupportedNewerCampaignContracts(
   ) as unknown;
   if (!isRecord(manifest) || !isRecord(manifest.versions)) {
     return undefined;
+  }
+  if (
+    manifest.manifestDigest !== undefined &&
+    (typeof manifest.manifestDigest !== "string" ||
+      manifest.manifestDigest !== manifestDigest(manifest))
+  ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest integrity digest does not match",
+    );
   }
   const details = newerContractDetails(manifest.versions);
   return details.length === 0 ? undefined : details;
@@ -315,9 +329,19 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     }
   }
 
-  const plan = await supportedCampaignMigrationPlan(campaignPath).catch(
-    () => undefined,
-  );
+  let plan;
+  try {
+    plan = await supportedCampaignMigrationPlan(campaignPath);
+  } catch (error) {
+    const authorityFailure = campaignAuthorityFailure(error);
+    if (authorityFailure !== undefined) {
+      return migrationResponse(command, {
+        ok: false,
+        ...authorityFailure,
+      });
+    }
+    throw error;
+  }
   if (plan === undefined) {
     return migrationResponse(command, {
       ok: false,
@@ -393,12 +417,6 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     if (!isRecord(olderManifest)) {
       throw new Error("snapshot manifest is invalid");
     }
-    const { manifestDigest: _olderDigest, ...olderManifestFields } =
-      olderManifest;
-    const upgradedManifest = addManifestDigest({
-      ...olderManifestFields,
-      versions: contracts,
-    });
     const upgradedRecords = addRecordDigests(
       (await readCampaignRecords(snapshotPath)).map((record) => {
         if (!isRecord(record)) {
@@ -407,6 +425,17 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
         return { ...record, recordVersion: contracts.records };
       }),
     );
+    const { manifestDigest: _olderDigest, ...olderManifestFields } =
+      olderManifest;
+    const upgradedManifest = addManifestDigest({
+      ...olderManifestFields,
+      versions: contracts,
+      authority: {
+        records: "records.jsonl",
+        recordCount: upgradedRecords.length,
+        historyDigest: authoritativeHistoryDigest(upgradedRecords),
+      },
+    });
     journal = completedStep(journal, "upgrade-record-integrity");
     await replacePrivateJson(journalPath, journal);
 

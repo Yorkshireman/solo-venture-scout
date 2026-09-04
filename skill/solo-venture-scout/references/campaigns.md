@@ -81,10 +81,12 @@ After confirmation, send the exact migration identity returned by Resume:
 
 The migration validates the older authoritative history first, writes a private
 snapshot and step journal under `migrations/<migration-id>/`, adds integrity digests
-to the migrated records, validates a complete candidate Campaign, and advances the
-manifest versions only after candidate validation. It never migrates backward. On
-failure, preserve the returned snapshot and journal and retry only the same forward
-migration after resolving the diagnostic.
+to the migrated records, anchors the complete authoritative record count and history
+digest in the manifest, validates a complete candidate Campaign, and advances the
+manifest versions only after candidate validation. Subsequent journaled operations
+advance the records and manifest anchor as one recoverable commit. It never migrates
+backward. On failure, preserve the returned snapshot and journal and retry only the
+same forward migration after resolving the diagnostic.
 
 Each release, Campaign format, record, command envelope, Research Result Package,
 and render-template contract has its own version in `references/versions.json`,
@@ -94,8 +96,9 @@ another.
 Unsupported newer contract versions stop before any Campaign mutation. Missing or
 corrupt `records.jsonl` stops with choices to restore a trusted backup, restore a
 migration snapshot, or preserve the Campaign and begin a new one. Record integrity
-changes made outside the kernel require explicit reconciliation against a trusted
-original or snapshot. Never invent authoritative records or remove a damaged tail.
+changes, deletion of an otherwise valid record tail, and manifest edits made outside
+the kernel require explicit reconciliation against a trusted original or snapshot.
+Never invent authoritative records or remove a damaged tail.
 
 ## Confirm Campaign Intake
 
