@@ -85,6 +85,18 @@ test("packaged Scout keeps Public Research retrieval outside the kernel and impo
   assert.match(instructions, /atomic.+neutral.+paraphrase/is);
   assert.match(instructions, /credentials.+payment information.+personal data.+raw content/is);
   assert.match(instructions, /checkpoint.+resume/is);
+  assert.match(
+    instructions,
+    /host.+retrieval capability.+unavailable.+capability-pause/is,
+  );
+  assert.match(
+    instructions,
+    /publicResearchAvailable.+policy.+budget.+not.+retrieval route/is,
+  );
+  assert.match(
+    instructions,
+    /capability-pause.+response boundary.+Work View.+pause.+null/is,
+  );
   assert.match(reference, /"command": "reservePublicResearch"/);
   assert.match(reference, /"command": "recordPublicResearchObservation"/);
   assert.match(reference, /"command": "reserveApprovedResearch"/);

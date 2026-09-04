@@ -103,6 +103,15 @@ available. Campaign Research is read-only: it may examine public material but mu
 not contact people, publish, transact, submit forms, change accounts, or perform any
 other External Validation Action.
 
+If the host's public-retrieval capability becomes unavailable, do not reserve a
+Source, borrow the adversarial reserve, or invent a replacement route. Name this a
+`capability-pause`, report the unavailable capability and the condition required to
+resume, and stop. A capability-pause is a response boundary rather than an
+authoritative Pending Decision, so the Work View's `pause` remains `null`; do not
+manufacture a kernel mutation. `publicResearchAvailable` reports Campaign policy and
+budget permission, not whether a host retrieval route is currently operational.
+Likewise, a Work View action may remain permitted while temporarily not executable.
+
 1. Define one bounded research purpose and identify the lawful public-retrieval route
    to use. Create stable reservation and request identities, then run
    `reservePublicResearch` from [references/campaigns.md](references/campaigns.md).

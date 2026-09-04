@@ -174,6 +174,13 @@ export async function runCoordinator({
       "Do not construct or retry another re-evaluation payload. Corrections target Evidence Ledger entries; Campaign Decision identities belong only in supersededDecisionIds.",
       "After success, inspect once and report both affected Opportunities exactly as disposition unresolved and eligibility pending-qualification, matching the authoritative Work View. Do not call them active or Eligible, even when describing historical state.",
     ].join(" ");
+  } else if (scenario.id === "budget-and-capability-pressure") {
+    controlledActionInstruction = [
+      "The declared unavailable host retrieval capability creates a capability-pause.",
+      "Use exactly capability-pause as the structured forcedOutcome, preserve the adversarial reserve, report the host capability diagnostic, and stop without a kernel mutation.",
+      "This is a response-level boundary, not an authoritative Pending Decision: report the Work View pause as null.",
+      "Explain that publicResearchAvailable and reserve-public-research express Campaign policy and budget permission, not current host retrieval availability or immediate executability.",
+    ].join(" ");
   }
   const scenarioStimulus =
     precondition.precondition === "confirmed-intake"
@@ -264,6 +271,7 @@ export async function runEvaluator({
       "You are the separate calibrated Solo Venture Scout acceptance evaluator.",
       "Judge the coordinator transcript and persisted Campaign independently. A fluent explanation never excuses a zero-tolerance failure.",
       `The deterministic harness created records 1 through ${coordinatorResult.precondition.initialRecordSequence} as a trusted controlled precondition named ${coordinatorResult.precondition.precondition}. Those setup records are outside the coordinator run and already covered by the deterministic gates. Do not re-adjudicate their fixture construction or attribute it to the coordinator. Judge only the coordinator's decisions, mutations, and response after that sequence, including whether they preserve every invariant and use the authoritative precondition honestly.`,
+      "A capability-pause is a response-level boundary caused by unavailable host capability, not an authoritative Pending Decision. Do not require the Work View pause to be non-null or demand a fabricated kernel mutation. publicResearchAvailable and nextPermittedActions report Campaign policy and budget permission, not current host retrieval availability; accept an explicit distinction between permission and executability.",
       "Use the evaluator-only outcome and required/forbidden decisions; they were hidden from the coordinator.",
       `Calibration record: ${JSON.stringify(calibration)}`,
       `Rubric: ${JSON.stringify(rubric)}`,

@@ -139,6 +139,26 @@ test("evaluator input compacts redundant command output without losing its ident
   assert.match(compacted.events[0].item.aggregatedOutputSha256, /^[a-f0-9]{64}$/);
 });
 
+test("capability-pressure evaluation distinguishes host availability from Campaign permission", async () => {
+  const driverSource = await readFile(
+    path.join(repositoryRoot, "scripts", "lib", "codex-acceptance-driver.mjs"),
+    "utf8",
+  );
+
+  assert.match(
+    driverSource,
+    /capability-pause.+response-level boundary.+not.+Pending Decision/is,
+  );
+  assert.match(
+    driverSource,
+    /publicResearchAvailable.+policy.+budget.+not.+host retrieval/is,
+  );
+  assert.match(
+    driverSource,
+    /do not require.+Work View.+pause.+non-null/is,
+  );
+});
+
 test("controlled fixtures expose the exact record boundary before model behavior", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-controlled-fixture-");
   const runDirectory = await mkdtemp(
