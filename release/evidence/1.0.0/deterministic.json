@@ -1,0 +1,98 @@
+{
+  "evidenceVersion": "1.0.0",
+  "gateId": "deterministic",
+  "releaseVersion": "1.0.0",
+  "status": "passed",
+  "generatedAt": "2026-09-04T22:56:44.617Z",
+  "suiteVersion": "1.0.0",
+  "skill": {
+    "name": "solo-venture-scout",
+    "version": "1.0.0",
+    "treeSha256": "c65641ced1cea382b5354df16b5bc569f6dae519df8c77650a5372113e95edd7"
+  },
+  "contractVersions": {
+    "release": "1.0.0",
+    "campaignFormat": "0.2.0",
+    "records": "0.2.0",
+    "commandEnvelope": "0.1.0",
+    "researchPackages": "0.1.0",
+    "renderTemplates": "0.1.0"
+  },
+  "runtime": {
+    "nodeVersion": "24.14.0",
+    "platform": "darwin",
+    "architecture": "arm64"
+  },
+  "suites": [
+    {
+      "id": "kernel",
+      "command": "node --test test/campaign-lifecycle.test.mjs test/public-research.test.mjs test/approved-research.test.mjs test/evidence-reasoning.test.mjs test/discovery.test.mjs test/reevaluation.test.mjs",
+      "status": "passed",
+      "testCount": 81,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:54:54.577Z",
+      "completedAt": "2026-09-04T22:56:13.997Z",
+      "outputSha256": "e7a210f8dc27f8d9a07ca0c5d4fff66234abd44260cd59bcccf0f78d1eab4847"
+    },
+    {
+      "id": "schema",
+      "command": "node --test test/preflight.test.mjs test/campaign-intake.test.mjs",
+      "status": "passed",
+      "testCount": 15,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:13.998Z",
+      "completedAt": "2026-09-04T22:56:15.845Z",
+      "outputSha256": "61d0c0f8e010766d6a5c82684c597692c3fceb4859768bd90d3fe715ba3e4a38"
+    },
+    {
+      "id": "migration",
+      "command": "node --test test/compatibility.test.mjs",
+      "status": "passed",
+      "testCount": 23,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:15.845Z",
+      "completedAt": "2026-09-04T22:56:19.235Z",
+      "outputSha256": "5951463d39b36f0a8bc7047e84493fa3843aaddeea07b443c7816e4352488248"
+    },
+    {
+      "id": "property",
+      "command": "node --test --test-name-pattern=duplicate and out-of-order reservation inputs test/recovery.test.mjs",
+      "status": "passed",
+      "testCount": 1,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:19.235Z",
+      "completedAt": "2026-09-04T22:56:22.634Z",
+      "outputSha256": "390b54b0d9289cd1975e96520624feb62296eb1b27b4c72e19487e9f9010f128"
+    },
+    {
+      "id": "concurrency",
+      "command": "node --test --test-name-pattern=concurrent|arrival order test/campaign-lifecycle.test.mjs test/recovery.test.mjs",
+      "status": "passed",
+      "testCount": 3,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:22.634Z",
+      "completedAt": "2026-09-04T22:56:26.494Z",
+      "outputSha256": "81767cc002b36371f4f3b02fcc3608dd8d038c235a28dcbc170b00111cb753bc"
+    },
+    {
+      "id": "rendering",
+      "command": "node --test --test-name-pattern=Report|Brief|rendering|terminal artifact test/discovery.test.mjs",
+      "status": "passed",
+      "testCount": 4,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:26.494Z",
+      "completedAt": "2026-09-04T22:56:43.484Z",
+      "outputSha256": "9119250fb57ae66ab3bceb58328cd291c447f499ddb9ef542c5cef925cdbc07c"
+    },
+    {
+      "id": "fault-recovery",
+      "command": "node --test --test-name-pattern=interrupted|corrupt|damaged|missing authoritative|failed migration test/recovery.test.mjs test/compatibility.test.mjs",
+      "status": "passed",
+      "testCount": 8,
+      "failureCount": 0,
+      "startedAt": "2026-09-04T22:56:43.484Z",
+      "completedAt": "2026-09-04T22:56:44.617Z",
+      "outputSha256": "5c66f1a8d3ef5d81265158c19251504d8d8162d264026fda1ab0ac98ec59dba3"
+    }
+  ]
+}

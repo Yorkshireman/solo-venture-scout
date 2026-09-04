@@ -1,0 +1,31 @@
+{
+  "evidenceVersion": "1.0.0",
+  "releaseVersion": "1.0.0",
+  "generatedAt": "2026-09-04T23:24:34Z",
+  "distribution": "github-release-asset",
+  "asset": {
+    "filename": "solo-venture-scout-1.0.0-raw-acceptance-evidence.tar.gz",
+    "bytes": 6252347,
+    "sha256": "f6c1cb7a91e21db43fa860f9c80d4c70ad9054e280faa272cf25e604a8be9d6f",
+    "fileCount": 6085,
+    "archiveEntryCount": 6980,
+    "contents": [
+      "behavioral-artifacts/",
+      "live-retrieval-artifacts/"
+    ]
+  },
+  "requiredForBuild": false,
+  "requiredForQualification": false,
+  "credentialScan": {
+    "status": "passed",
+    "privateKeyMatches": 0,
+    "credentialFieldMatches": 0,
+    "homeDirectoryPathMatches": 0,
+    "credentialFormatMatches": 0,
+    "syntheticCanary": {
+      "distinctValues": 1,
+      "matchingFiles": 32,
+      "presentInTrackedFixtures": true
+    }
+  }
+}

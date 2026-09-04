@@ -1,0 +1,55 @@
+{
+  "evidenceVersion": "1.0.0",
+  "gateId": "legal-and-packaging",
+  "releaseVersion": "1.0.0",
+  "status": "passed",
+  "generatedAt": "2026-09-04T22:58:12.547Z",
+  "skill": {
+    "name": "solo-venture-scout",
+    "version": "1.0.0",
+    "treeSha256": "c65641ced1cea382b5354df16b5bc569f6dae519df8c77650a5372113e95edd7"
+  },
+  "skillTreesByteIdentical": true,
+  "archives": [
+    {
+      "distribution": "plugin",
+      "path": "packages/solo-venture-scout-plugin-1.0.0.tgz",
+      "bytes": 127222,
+      "sha256": "4334f65ff7f0205f6f4ce0cc4737cf30e2109cfceea1b66c5e5319e9511f25f0",
+      "repeatSha256": "4334f65ff7f0205f6f4ce0cc4737cf30e2109cfceea1b66c5e5319e9511f25f0",
+      "contentsValid": true
+    },
+    {
+      "distribution": "standalone",
+      "path": "packages/solo-venture-scout-standalone-1.0.0.tgz",
+      "bytes": 126696,
+      "sha256": "ae6bf2e2230f27faa492c06fdcf1bece704b948c2cb01ca8878bda91161ce53d",
+      "repeatSha256": "ae6bf2e2230f27faa492c06fdcf1bece704b948c2cb01ca8878bda91161ce53d",
+      "contentsValid": true
+    }
+  ],
+  "checksumManifest": {
+    "path": "release/CHECKSUMS.sha256",
+    "sha256": "ae11c20a84c58cd8d40151913d736924c1fd292135942562285a7a2b7d49c0ce",
+    "verified": true
+  },
+  "dependencyInventory": {
+    "path": "release/dependency-inventory.json",
+    "sha256": "d69cccb8de2298a8ef5943d7e90fbbf8b6f295dbc9d3b203d26544db09818b74",
+    "verified": true,
+    "runtimeDependencies": [],
+    "allLicensesKnown": true
+  },
+  "licenseAndNotice": {
+    "licenseIncluded": true,
+    "noticeIncluded": true,
+    "archiveCopiesVerified": true,
+    "licenseSha256": "2036ce46be3a79a899317facd05ddef267dfefa644b270cb995dce729bb1a6c5",
+    "noticeSha256": "56e4c2d1c15fa5357bb70e242de370f6ea6680d98f7379ffbf825a73e9140078",
+    "unresolvedNotices": []
+  },
+  "compatibilityMatrix": {
+    "verified": true,
+    "sha256": "5bf99f373bc83bc6ab8fe20056da5d4d7dca96012b2a0c7f2d6adcba0019bb21"
+  }
+}

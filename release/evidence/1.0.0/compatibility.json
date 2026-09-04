@@ -1,0 +1,63 @@
+{
+  "evidenceVersion": "1.0.0",
+  "gateId": "compatibility",
+  "releaseVersion": "1.0.0",
+  "status": "passed",
+  "generatedAt": "2026-09-04T22:58:12.934Z",
+  "matrixVersion": "1.0.0",
+  "matrixSha256": "5bf99f373bc83bc6ab8fe20056da5d4d7dca96012b2a0c7f2d6adcba0019bb21",
+  "skill": {
+    "name": "solo-venture-scout",
+    "version": "1.0.0",
+    "treeSha256": "c65641ced1cea382b5354df16b5bc569f6dae519df8c77650a5372113e95edd7"
+  },
+  "claims": [
+    {
+      "profileId": "codex-local-web",
+      "status": "passed",
+      "host": "Codex local workspace",
+      "hostVersion": "codex-cli 0.150.1",
+      "runtime": {
+        "nodeVersion": "24.14.0",
+        "platform": "darwin",
+        "architecture": "arm64"
+      },
+      "coordinatorModel": "gpt-5.6-sol",
+      "reasoningEffort": "xhigh",
+      "coordinatorCount": 1,
+      "retrievalMethods": [
+        "codex-web-search"
+      ],
+      "runId": "fd7dfe6e-6436-403b-91c6-adb62606639e",
+      "checkedAt": "2026-09-04T22:58:12.933Z",
+      "artifactSha256": "531aa629d8f08659f68b99fe74ff3c38d2927681800c427bd98e98a175dab84f",
+      "assertions": [
+        {
+          "id": "preflight",
+          "status": "passed",
+          "details": "The packaged preflight accepted Node 24, writable storage, and the claimed lawful public route without creating a Scouting Campaign."
+        },
+        {
+          "id": "packaged-skill-discovery",
+          "status": "passed",
+          "details": "The generated standalone skill and skills-only plugin expose the expected explicit-invocation metadata."
+        },
+        {
+          "id": "kernel-execution",
+          "status": "passed",
+          "details": "The generated bundled kernel executed through its JSON subprocess interface."
+        },
+        {
+          "id": "campaign-persistence",
+          "status": "passed",
+          "details": "A Campaign created by the packaged kernel was inspectable from its persisted append-only authority."
+        },
+        {
+          "id": "public-retrieval",
+          "status": "passed",
+          "details": "The separately recorded live-retrieval gate passed every retrieval method claimed by this profile."
+        }
+      ]
+    }
+  ]
+}

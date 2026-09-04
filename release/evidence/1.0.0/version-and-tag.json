@@ -1,0 +1,11 @@
+{
+  "evidenceVersion": "1.0.0",
+  "gateId": "version-and-tag",
+  "releaseVersion": "1.0.0",
+  "status": "passed",
+  "generatedAt": "2026-09-04T22:58:13.038Z",
+  "officialTag": "v1.0.0",
+  "tagMustBeAnnotated": true,
+  "tagMustPointToHead": true,
+  "publicationRequiresQualifiedReport": true
+}

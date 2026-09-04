@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.tgz
 *.log
+release/evidence/*/behavioral-artifacts/
+release/evidence/*/live-retrieval-artifacts/
