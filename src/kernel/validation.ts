@@ -169,6 +169,14 @@ export function validateMigrateCampaignFields(
     }
   }
   if (
+    typeof command.payload.sourceAuthorityDigest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(command.payload.sourceAuthorityDigest)
+  ) {
+    details.push(
+      "payload.sourceAuthorityDigest must be the SHA-256 digest from the migration plan.",
+    );
+  }
+  if (
     typeof command.payload.campaignPath === "string" &&
     !path.isAbsolute(command.payload.campaignPath)
   ) {

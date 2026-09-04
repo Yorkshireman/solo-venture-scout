@@ -62,7 +62,8 @@ forward-only migration plan. It does not acquire a lease, append history, create
 snapshot, or advance a version at this stage. Show the returned source and target
 versions and every planned step to the developer, then obtain explicit confirmation.
 
-After confirmation, send the exact migration identity returned by Resume:
+After confirmation, send the exact migration identity and source-authority digest
+returned by Resume:
 
 ```json
 {
@@ -74,6 +75,7 @@ After confirmation, send the exact migration identity returned by Resume:
     "coordinatorId": "stable-coordinator-id",
     "confirmedAt": "2026-09-04T09:05:00.000Z",
     "migrationId": "campaign-format-0.1.0-to-0.2.0",
+    "sourceAuthorityDigest": "exact-sha-256-digest-from-the-plan",
     "confirmed": true
   }
 }
@@ -85,8 +87,9 @@ to the migrated records, anchors the complete authoritative record count and his
 digest in the manifest, validates a complete candidate Campaign, and advances the
 manifest versions only after candidate validation. Subsequent journaled operations
 advance the records and manifest anchor as one recoverable commit. It never migrates
-backward. On failure, preserve the returned snapshot and journal and retry only the
-same forward migration after resolving the diagnostic.
+backward or migrates authority that differs from the confirmed source digest. On
+failure, preserve the returned snapshot and journal and retry only the same forward
+migration after resolving the diagnostic.
 
 Each release, Campaign format, record, command envelope, Research Result Package,
 and render-template contract has its own version in `references/versions.json`,

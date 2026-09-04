@@ -128,9 +128,9 @@ import {
   commitStagedOperation,
   completeOperationRecovery,
   authoritativeHistoryDigest,
-  manifestDigest,
+  assertManifestDigest,
+  assertRecordDigest,
   parseAuthoritativeRecordText,
-  recordDigest,
   injectPersistenceFault,
   recoverInterruptedOperations,
   stageOperationIntent,
@@ -5722,14 +5722,9 @@ export function parseCampaignManifest(
   if (
     expectedContracts.campaignFormat === contracts.campaignFormat &&
     isRecord(value) &&
-    value.manifestDigest !== undefined &&
-    (typeof value.manifestDigest !== "string" ||
-      value.manifestDigest !== manifestDigest(value))
+    value.manifestDigest !== undefined
   ) {
-    throw new CampaignAuthorityError(
-      "reconciliation",
-      "manifest integrity digest does not match",
-    );
+    assertManifestDigest(value);
   }
   if (
     expectedContracts.campaignFormat === contracts.campaignFormat &&
@@ -5865,15 +5860,8 @@ async function rebuildCampaignFromAuthorityUnchecked(
     ) {
       throw new Error(`authoritative record ${sequence} is invalid`);
     }
-    if (
-      expectedContracts.records === contracts.records &&
-      (typeof record.recordDigest !== "string" ||
-        record.recordDigest !== recordDigest(record))
-    ) {
-      throw new CampaignAuthorityError(
-        "reconciliation",
-        `authoritative record ${sequence} integrity digest does not match`,
-      );
+    if (expectedContracts.records === contracts.records) {
+      assertRecordDigest(record, sequence);
     }
     const operationDescriptor = isRecord(record)
       ? authoritativeOperationDescriptor(record.operation)
@@ -5912,15 +5900,8 @@ async function rebuildCampaignFromAuthorityUnchecked(
     ) {
       throw new Error(`authoritative record ${outcomeSequence} is invalid`);
     }
-    if (
-      expectedContracts.records === contracts.records &&
-      (typeof outcome.recordDigest !== "string" ||
-        outcome.recordDigest !== recordDigest(outcome))
-    ) {
-      throw new CampaignAuthorityError(
-        "reconciliation",
-        `authoritative record ${outcomeSequence} integrity digest does not match`,
-      );
+    if (expectedContracts.records === contracts.records) {
+      assertRecordDigest(outcome, outcomeSequence);
     }
     if (
       !isAuthoritativeOperation(record.operation) ||
@@ -7430,6 +7411,32 @@ export async function hasCampaignManifest(campaignPath: string): Promise<boolean
       return false;
     }
     return parseCampaignManifest(await readJson(manifestPath)) !== undefined;
+  } catch (error) {
+    if (
+      error instanceof CampaignAuthorityError ||
+      error instanceof NewerCampaignContractsError
+    ) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+async function hasCampaignManifestMarker(campaignPath: string): Promise<boolean> {
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  try {
+    const manifestFile = await lstat(manifestPath);
+    if (!manifestFile.isFile()) {
+      return false;
+    }
+    const manifest = await readJson(manifestPath);
+    return (
+      isRecord(manifest) &&
+      typeof manifest.campaignId === "string" &&
+      isRecord(manifest.versions) &&
+      isRecord(manifest.authority) &&
+      manifest.authority.records === "records.jsonl"
+    );
   } catch {
     return false;
   }
@@ -7444,13 +7451,13 @@ export async function locateCampaign(locator: CampaignLocator) {
   }
   const searchPath = path.resolve(locator.searchPath!);
   const matches: string[] = [];
-  if (await hasCampaignManifest(searchPath)) {
+  if (await hasCampaignManifestMarker(searchPath)) {
     matches.push(searchPath);
   }
   for (const entry of await readdir(searchPath, { withFileTypes: true })) {
     if (
       entry.isDirectory() &&
-      (await hasCampaignManifest(path.join(searchPath, entry.name)))
+      (await hasCampaignManifestMarker(path.join(searchPath, entry.name)))
     ) {
       matches.push(path.join(searchPath, entry.name));
     }
@@ -7460,6 +7467,7 @@ export async function locateCampaign(locator: CampaignLocator) {
       `manifest discovery requires exactly one direct Scouting Campaign; found ${matches.length}`,
     );
   }
+  await rebuildCampaignFromAuthority(matches[0]!);
   return { campaignPath: matches[0]!, locatedBy: "manifestDiscovery" as const };
 }
 
@@ -7556,18 +7564,23 @@ export async function inspectEvidence(command: InspectEvidenceCommand) {
       },
     };
   } catch (error) {
+    const authorityFailure = campaignAuthorityFailure(error);
     return {
       envelopeVersion: contracts.commandEnvelope,
       requestId: command.requestId,
       command: command.command,
       ok: false as const,
-      error: {
-        code: "SVS-EVIDENCE-INSPECTION-INVALID",
-        message: "Requested Evidence Ledger entries could not be inspected.",
-        action:
-          "Use stable entry identities from the validated Work View and preserve Campaign state when validation fails.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
+      error:
+        authorityFailure ??
+        {
+          code: "SVS-EVIDENCE-INSPECTION-INVALID",
+          message: "Requested Evidence Ledger entries could not be inspected.",
+          action:
+            "Use stable entry identities from the validated Work View and preserve Campaign state when validation fails.",
+          details: [
+            error instanceof Error ? error.message : "unknown validation error",
+          ],
+        },
     };
   }
 }

@@ -29,12 +29,12 @@ import {
   addManifestDigest,
   addRecordDigests,
   authoritativeHistoryDigest,
+  assertManifestDigest,
+  campaignAuthorityDigest,
   injectPersistenceFault,
-  manifestDigest,
 } from "./recovery.js";
 import {
   AmbiguousCampaignDiscoveryError,
-  CampaignAuthorityError,
   campaignAuthorityFailure,
   NewerCampaignContractsError,
 } from "./campaign-errors.js";
@@ -67,6 +67,7 @@ type CampaignMigrationJournal = {
   status: "in-progress" | "completed" | "failed";
   coordinatorId: string;
   confirmedAt: string;
+  sourceAuthorityDigest: string;
   fromVersions: typeof supportedOlderCampaignVersions;
   toVersions: typeof contracts;
   steps: Array<{
@@ -85,15 +86,8 @@ export async function unsupportedNewerCampaignContracts(
   if (!isRecord(manifest) || !isRecord(manifest.versions)) {
     return undefined;
   }
-  if (
-    manifest.manifestDigest !== undefined &&
-    (typeof manifest.manifestDigest !== "string" ||
-      manifest.manifestDigest !== manifestDigest(manifest))
-  ) {
-    throw new CampaignAuthorityError(
-      "reconciliation",
-      "manifest integrity digest does not match",
-    );
+  if (manifest.manifestDigest !== undefined) {
+    assertManifestDigest(manifest);
   }
   const details = newerContractDetails(manifest.versions);
   return details.length === 0 ? undefined : details;
@@ -111,9 +105,13 @@ export async function supportedCampaignMigrationPlan(campaignPath: string) {
   ) {
     return undefined;
   }
-  await rebuildCampaignFromAuthority(
+  const rebuiltCampaign = await rebuildCampaignFromAuthority(
     campaignPath,
     supportedOlderCampaignVersions,
+  );
+  const sourceAuthorityDigest = campaignAuthorityDigest(
+    manifest,
+    rebuiltCampaign.records,
   );
   return {
     campaign: {
@@ -125,12 +123,14 @@ export async function supportedCampaignMigrationPlan(campaignPath: string) {
       required: true as const,
       id: campaignMigrationId,
       direction: "forward-only" as const,
+      sourceAuthorityDigest,
       fromVersions: supportedOlderCampaignVersions,
       toVersions: contracts,
       steps: [...campaignMigrationSteps],
       confirmation: {
         required: true as const,
         command: "migrateCampaign" as const,
+        sourceAuthorityDigest,
       },
     },
   };
@@ -185,8 +185,10 @@ export async function discoverSupportedCampaignMigration(searchPath: string) {
   if (match === undefined) {
     return undefined;
   }
-  const newerContracts = newerContractDetails(match.manifest.versions as Record<string, unknown>);
-  if (newerContracts.length > 0) {
+  const newerContracts = await unsupportedNewerCampaignContracts(
+    match.candidate,
+  );
+  if (newerContracts !== undefined) {
     throw new NewerCampaignContractsError(newerContracts);
   }
   return supportedCampaignMigrationPlan(match.candidate);
@@ -259,7 +261,9 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
       if (
         completedJournal.requestId !== command.requestId ||
         completedJournal.coordinatorId !== command.payload.coordinatorId ||
-        completedJournal.confirmedAt !== command.payload.confirmedAt
+        completedJournal.confirmedAt !== command.payload.confirmedAt ||
+        completedJournal.sourceAuthorityDigest !==
+          command.payload.sourceAuthorityDigest
       ) {
         return migrationResponse(command, {
           ok: false,
@@ -352,6 +356,22 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
         "Preserve the Campaign contents and use the compatibility diagnostic from resume; do not force or reverse a migration.",
     });
   }
+  if (
+    plan.migration.sourceAuthorityDigest !==
+    command.payload.sourceAuthorityDigest
+  ) {
+    return migrationResponse(command, {
+      ok: false,
+      code: "SVS-CAMPAIGN-MIGRATION-SOURCE-CHANGED",
+      message:
+        "The Campaign authority no longer matches the migration plan that was confirmed.",
+      action:
+        "Resume the Campaign again, review the new source authority digest and complete plan, and confirm that exact state before migration.",
+      details: [
+        `confirmed ${command.payload.sourceAuthorityDigest}; current ${plan.migration.sourceAuthorityDigest}.`,
+      ],
+    });
+  }
 
   const lock = await acquireCoordinatorOperationLock(
     campaignPath,
@@ -377,6 +397,7 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
     status: "in-progress",
     coordinatorId: command.payload.coordinatorId,
     confirmedAt: command.payload.confirmedAt,
+    sourceAuthorityDigest: command.payload.sourceAuthorityDigest,
     fromVersions: supportedOlderCampaignVersions,
     toVersions: contracts,
     steps: campaignMigrationSteps.map((name) => ({
@@ -387,10 +408,21 @@ export async function migrateCampaign(command: MigrateCampaignCommand) {
   let candidatePath: string | undefined;
   let snapshotCreated = false;
   try {
-    await rebuildCampaignFromAuthority(
-      campaignPath,
-      supportedOlderCampaignVersions,
-    );
+    const lockedPlan = await supportedCampaignMigrationPlan(campaignPath);
+    if (
+      lockedPlan === undefined ||
+      lockedPlan.migration.sourceAuthorityDigest !==
+        command.payload.sourceAuthorityDigest
+    ) {
+      return migrationResponse(command, {
+        ok: false,
+        code: "SVS-CAMPAIGN-MIGRATION-SOURCE-CHANGED",
+        message:
+          "The Campaign authority changed after the migration confirmation was checked.",
+        action:
+          "Resume the Campaign again, review the new source authority digest and complete plan, and confirm that exact state before migration.",
+      });
+    }
     await mkdir(snapshotPath, { recursive: true, mode: 0o700 });
     await chmod(path.join(campaignPath, "migrations"), 0o700);
     await chmod(migrationPath, 0o700);

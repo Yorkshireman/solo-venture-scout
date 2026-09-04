@@ -89,8 +89,44 @@ export function addRecordDigests(
   }));
 }
 
+export function assertManifestDigest(
+  manifest: Record<string, unknown>,
+): void {
+  if (
+    typeof manifest.manifestDigest !== "string" ||
+    manifest.manifestDigest !== manifestDigest(manifest)
+  ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      "manifest integrity digest does not match",
+    );
+  }
+}
+
+export function assertRecordDigest(
+  record: Record<string, unknown>,
+  sequence: number,
+): void {
+  if (
+    typeof record.recordDigest !== "string" ||
+    record.recordDigest !== recordDigest(record)
+  ) {
+    throw new CampaignAuthorityError(
+      "reconciliation",
+      `authoritative record ${sequence} integrity digest does not match`,
+    );
+  }
+}
+
 export function authoritativeHistoryDigest(records: unknown[]): string {
   return commandDigest(records);
+}
+
+export function campaignAuthorityDigest(
+  manifest: unknown,
+  records: unknown[],
+): string {
+  return commandDigest({ manifest, records });
 }
 
 export function parseAuthoritativeRecordText(text: string): unknown[] {
@@ -275,15 +311,7 @@ async function readAnchoredManifest(
     throw new CampaignAuthorityError("damaged", "manifest is invalid");
   }
   const manifest = value as Record<string, unknown>;
-  if (
-    typeof manifest.manifestDigest !== "string" ||
-    manifest.manifestDigest !== manifestDigest(manifest)
-  ) {
-    throw new CampaignAuthorityError(
-      "reconciliation",
-      "manifest integrity digest does not match",
-    );
-  }
+  assertManifestDigest(manifest);
   const authority = manifest.authority;
   if (
     authority === null ||
@@ -403,15 +431,8 @@ async function commitJournal(
       );
     }
     const record = value as Record<string, unknown>;
-    if (
-      record.recordVersion === contracts.records &&
-      (typeof record.recordDigest !== "string" ||
-        record.recordDigest !== recordDigest(record))
-    ) {
-      throw new CampaignAuthorityError(
-        "reconciliation",
-        `authoritative record ${index + 1} integrity digest does not match`,
-      );
+    if (record.recordVersion === contracts.records) {
+      assertRecordDigest(record, index + 1);
     }
   }
   const journalRecordsPresent = recordsMatch(

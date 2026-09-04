@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   cp,
   mkdtemp,
@@ -55,6 +56,40 @@ async function runKernel(kernelPath, command, environment = {}) {
   return { ...result, response: JSON.parse(result.stdout) };
 }
 
+/**
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function canonicalize(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalize(entry)]),
+    );
+  }
+  return value;
+}
+
+/** @param {string} campaignPath */
+async function sourceAuthorityDigest(campaignPath) {
+  const manifest = JSON.parse(
+    await readFile(path.join(campaignPath, "manifest.json"), "utf8"),
+  );
+  const records = (
+    await readFile(path.join(campaignPath, "records.jsonl"), "utf8")
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize({ manifest, records })))
+    .digest("hex");
+}
+
 test("resume presents a forward migration plan for a supported older Campaign without mutating it", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-migration-plan-",
@@ -76,6 +111,9 @@ test("resume presents a forward migration plan for a supported older Campaign wi
   });
 
   assert.equal(result.code, 0, result.stderr);
+  const plannedSourceAuthorityDigest =
+    result.response.result.migration.sourceAuthorityDigest;
+  assert.match(plannedSourceAuthorityDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(result.response, {
     envelopeVersion: "0.1.0",
     requestId: "resume-legacy-fixture-1",
@@ -92,6 +130,7 @@ test("resume presents a forward migration plan for a supported older Campaign wi
         required: true,
         id: "campaign-format-0.1.0-to-0.2.0",
         direction: "forward-only",
+        sourceAuthorityDigest: plannedSourceAuthorityDigest,
         fromVersions: olderVersions,
         toVersions: currentVersions,
         steps: [
@@ -103,6 +142,7 @@ test("resume presents a forward migration plan for a supported older Campaign wi
         confirmation: {
           required: true,
           command: "migrateCampaign",
+          sourceAuthorityDigest: plannedSourceAuthorityDigest,
         },
       },
     },
@@ -124,6 +164,72 @@ test("resume presents a forward migration plan for a supported older Campaign wi
   ]);
 });
 
+test("migration confirmation is bound to the exact older authority that was shown", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-migration-source-binding-",
+  );
+  const campaignPath = await copyOlderCampaign("migration-source-binding");
+  const planned = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-migration-source-binding-1",
+    command: "resumeCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2026-09-04T09:00:00.000Z",
+      leaseExpiresAt: "2026-09-04T09:30:00.000Z",
+    },
+  });
+  assert.equal(planned.code, 0, planned.stderr);
+  const plannedDigest = planned.response.result.migration.sourceAuthorityDigest;
+
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.campaignId = "campaign-changed-after-plan";
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const recordsPath = path.join(campaignPath, "records.jsonl");
+  const records = (await readFile(recordsPath, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  for (const record of records) {
+    record.campaignId = "campaign-changed-after-plan";
+    record.recordId =
+      `campaign-changed-after-plan:record:` +
+      String(record.sequence).padStart(12, "0");
+  }
+  await writeFile(
+    recordsPath,
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+  const changedManifest = await readFile(manifestPath);
+  const changedRecords = await readFile(recordsPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "migrate-source-changed-1",
+    command: "migrateCampaign",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-current",
+      confirmedAt: "2026-09-04T09:05:00.000Z",
+      migrationId: "campaign-format-0.1.0-to-0.2.0",
+      sourceAuthorityDigest: plannedDigest,
+      confirmed: true,
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-MIGRATION-SOURCE-CHANGED",
+  );
+  assert.match(result.response.error.action, /resume/i);
+  assert.deepEqual(await readFile(manifestPath), changedManifest);
+  assert.deepEqual(await readFile(recordsPath), changedRecords);
+  assert.equal((await readdir(campaignPath)).includes("migrations"), false);
+});
+
 test("migration refuses mutation without explicit confirmation", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-migration-unconfirmed-",
@@ -141,6 +247,7 @@ test("migration refuses mutation without explicit confirmation", async () => {
       coordinatorId: "coordinator-current",
       confirmedAt: "2026-09-04T09:02:00.000Z",
       migrationId: "campaign-format-0.1.0-to-0.2.0",
+      sourceAuthorityDigest: await sourceAuthorityDigest(campaignPath),
       confirmed: false,
     },
   });
@@ -174,6 +281,7 @@ test("explicit confirmation migrates an older Campaign through a recoverable sna
       coordinatorId: "coordinator-current",
       confirmedAt: "2026-09-04T09:05:00.000Z",
       migrationId: "campaign-format-0.1.0-to-0.2.0",
+      sourceAuthorityDigest: await sourceAuthorityDigest(campaignPath),
       confirmed: true,
     },
   });
@@ -277,6 +385,7 @@ test("replaying an already completed confirmed migration is idempotent", async (
       coordinatorId: "coordinator-current",
       confirmedAt: "2026-09-04T09:10:00.000Z",
       migrationId: "campaign-format-0.1.0-to-0.2.0",
+      sourceAuthorityDigest: await sourceAuthorityDigest(campaignPath),
       confirmed: true,
     },
   };
@@ -355,7 +464,10 @@ test("resume fails closed without reinterpreting unsupported newer contracts", a
     await readFile(path.join(campaignPath, "records.jsonl")),
     recordsBefore,
   );
-  assert.equal((await readdir(campaignPath)).includes(".coordinator-locks"), false);
+  assert.equal(
+    (await readdir(campaignPath)).includes(".coordinator-locks"),
+    false,
+  );
 });
 
 test("inspection reports unsupported newer contracts with the same fail-closed diagnostic", async () => {
@@ -556,6 +668,107 @@ test("a manual version edit requires reconciliation instead of masquerading as a
   assert.deepEqual(await readFile(manifestPath), changedManifest);
 });
 
+test("search discovery surfaces a manually changed manifest for reconciliation", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-search-reconciliation-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-search-reconciliation-"),
+  );
+  const campaignPath = path.join(storagePath, "manual-manifest-change");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-search-reconciliation-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-search-reconciliation",
+      coordinatorId: "coordinator-original",
+      createdAt: "2025-09-04T11:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T11:30:00.000Z",
+    },
+  });
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.manualAnnotation = "changed outside the kernel";
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const changedManifest = await readFile(manifestPath);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-search-reconciliation-1",
+    command: "resumeCampaign",
+    payload: {
+      searchPath: storagePath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2025-09-04T12:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T12:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(result.response.error.details, [
+    "manifest integrity digest does not match",
+  ]);
+  assert.deepEqual(await readFile(manifestPath), changedManifest);
+  assert.equal(
+    (await readdir(campaignPath)).includes(".coordinator-locks"),
+    false,
+  );
+});
+
+test("search discovery does not reinterpret a manual version edit as a newer contract", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-search-version-reconciliation-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-search-reconciliation-"),
+  );
+  const campaignPath = path.join(storagePath, "manual-version-change");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-search-version-reconciliation-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-search-version-reconciliation",
+      coordinatorId: "coordinator-original",
+      createdAt: "2025-09-04T11:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T11:30:00.000Z",
+    },
+  });
+  const manifestPath = path.join(campaignPath, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.versions.campaignFormat = "9.0.0";
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "resume-search-version-reconciliation-1",
+    command: "resumeCampaign",
+    payload: {
+      searchPath: storagePath,
+      coordinatorId: "coordinator-current",
+      resumedAt: "2025-09-04T12:00:00.000Z",
+      leaseExpiresAt: "2025-09-04T12:30:00.000Z",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(
+    result.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(result.response.error.details, [
+    "manifest integrity digest does not match",
+  ]);
+  assert.equal((await readdir(campaignPath)).includes(".coordinator-locks"), false);
+});
+
 test("a deleted authoritative tail is detected and preserved", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-deleted-tail-",
@@ -673,6 +886,45 @@ test("missing authoritative history stops with recovery choices instead of inven
   assert.equal((await readdir(campaignPath)).includes("records.jsonl"), false);
 });
 
+test("evidence inspection preserves precise authority recovery choices", async () => {
+  const { kernelPath } = await buildPackagedScout(
+    "solo-venture-scout-evidence-authority-diagnostic-",
+  );
+  const storagePath = await mkdtemp(
+    path.join(tmpdir(), "solo-venture-scout-current-campaign-"),
+  );
+  const campaignPath = path.join(storagePath, "evidence-missing-authority");
+  await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "create-evidence-missing-authority-1",
+    command: "createCampaign",
+    payload: {
+      campaignPath,
+      campaignId: "campaign-evidence-missing-authority",
+      coordinatorId: "coordinator-original",
+      createdAt: "2026-09-04T12:00:00.000Z",
+      leaseExpiresAt: "2026-09-04T12:30:00.000Z",
+    },
+  });
+  await rm(path.join(campaignPath, "records.jsonl"));
+
+  const result = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "inspect-evidence-missing-authority-1",
+    command: "inspectEvidence",
+    payload: {
+      campaignPath,
+      entryIds: ["observation-not-readable"],
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.equal(result.response.error.code, "SVS-CAMPAIGN-AUTHORITY-MISSING");
+  assert.match(result.response.error.action, /trusted backup/i);
+  assert.match(result.response.error.action, /migration snapshot/i);
+  assert.match(result.response.error.action, /start a new one/i);
+});
+
 test("a corrupt authoritative tail is preserved with precise recovery choices", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-corrupt-authority-",
@@ -750,6 +1002,7 @@ test("a failed migration restores the prior authority and keeps its snapshot rec
       coordinatorId: "coordinator-current",
       confirmedAt: "2026-09-04T14:00:00.000Z",
       migrationId: "campaign-format-0.1.0-to-0.2.0",
+      sourceAuthorityDigest: await sourceAuthorityDigest(campaignPath),
       confirmed: true,
     },
   };

@@ -489,8 +489,9 @@ native agent state:
    and next permitted actions exactly from the validated response.
 4. If the response contains `migration.required`, show the complete forward-only
    plan and ask for explicit confirmation. Run `migrateCampaign` with the exact
-   returned migration identity only after confirmation, then retry Resume. Never
-   treat inspection, silence, or a general request to continue as migration consent.
+   returned migration identity and source-authority digest only after confirmation,
+   then retry Resume. Never treat inspection, silence, or a general request to
+   continue as migration consent.
 5. If another coordinator holds the lease or validation fails, report the returned
    action and stop without continuing Campaign work.
 

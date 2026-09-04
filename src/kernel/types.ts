@@ -72,6 +72,7 @@ export type MigrateCampaignCommand = {
     coordinatorId: string;
     confirmedAt: string;
     migrationId: string;
+    sourceAuthorityDigest: string;
     confirmed: true;
   };
 };
