@@ -4568,8 +4568,12 @@ test("selecting multiple Non-Dominated Opportunities creates separately marked i
         row.conclusion === "Developer selection preference",
     );
     assert.deepEqual(preferenceTrace.entryIds, [
-      "decision-inconclusive-comparison-1",
+      "select-inconclusive-opportunities-1",
     ]);
+    assert.equal(
+      brief.selectionProvenance.responseRequestId,
+      "select-inconclusive-opportunities-1",
+    );
     assert.equal(
       preferenceTrace.entryIds.some((/** @type {string} */ id) =>
         id.startsWith("inference-"),
@@ -4636,6 +4640,10 @@ test("selecting multiple Non-Dominated Opportunities creates separately marked i
     );
     assert.match(brief, /Developer-Selected Opportunity/);
     assert.match(brief, /developer Preference, not market evidence/i);
+    assert.match(
+      brief,
+      /Selection response.+select-inconclusive-opportunities-1/i,
+    );
     assert.doesNotMatch(brief, /Scout-recommended Leading Opportunity/);
     assert.match(brief, /Optional separate Wayfinder handoff/i);
     assert.match(brief, /not been started/i);

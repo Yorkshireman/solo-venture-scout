@@ -3061,6 +3061,7 @@ export function buildDeveloperSelectedOpportunityBriefs(
   report: InconclusiveComparisonReport,
   selections: DeveloperOpportunitySelection[],
   selectedAt: string,
+  responseRequestId: string,
 ): OpportunityBrief[] {
   return selections.map((selection) =>
     buildDeveloperSelectedOpportunityBrief(
@@ -3068,6 +3069,7 @@ export function buildDeveloperSelectedOpportunityBriefs(
       report,
       selection,
       selectedAt,
+      responseRequestId,
     ),
   );
 }
@@ -3196,6 +3198,7 @@ export function inconclusiveComparisonResponseRecords(
   firstSequence: number,
 ) {
   const responseRecord: InconclusiveComparisonResponseRecord = {
+    requestId: command.requestId,
     reportId: command.payload.reportId,
     respondedAt: command.payload.respondedAt,
     response: command.payload.response,
@@ -3208,6 +3211,7 @@ export function inconclusiveComparisonResponseRecords(
           report,
           command.payload.response.selections,
           command.payload.respondedAt,
+          command.requestId,
         )
       : [];
   return campaignRecordPair({
@@ -3327,6 +3331,7 @@ export function applyInconclusiveComparisonResponse(
         activeReport,
         selection,
         responseRecord.respondedAt,
+        responseRecord.requestId,
       );
       if (JSON.stringify(briefs[index]) !== JSON.stringify(expected)) {
         return "Developer-Selected Opportunity Brief does not match authoritative Campaign history";
@@ -4807,6 +4812,7 @@ export const authoritativeOperationDescriptors = {
       const responseRecord =
         outcome.responseRecord as unknown as InconclusiveComparisonResponseRecord;
       if (
+        responseRecord.requestId !== outcome.requestId ||
         intent.reportId !== responseRecord.reportId ||
         intent.responseKind !== responseRecord.response.kind ||
         validateRespondInconclusiveComparisonFields({

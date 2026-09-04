@@ -37,6 +37,7 @@ export type OpportunityBriefBuildInput = {
   selection: {
     rationale: string;
     decisionId: string;
+    traceabilityEntryId: string;
     evidenceEntryIds: string[];
     limitations: string[];
     traceabilityConclusion: string;
@@ -813,7 +814,7 @@ export function createLeadingOpportunityModule({
       {
         conclusion: input.selection.traceabilityConclusion,
         entryIds: [
-          input.selection.decisionId,
+          input.selection.traceabilityEntryId,
           ...input.selection.evidenceEntryIds,
         ],
       },
@@ -909,6 +910,7 @@ export function createLeadingOpportunityModule({
       selection: {
         rationale: comparison.decision.rationale,
         decisionId: comparison.decision.id,
+        traceabilityEntryId: comparison.decision.id,
         evidenceEntryIds: comparison.decision.evidenceEntryIds,
         limitations: comparison.decision.limitations,
         traceabilityConclusion: "Leading Opportunity selection",
@@ -986,6 +988,7 @@ export function renderOpportunityBrief(brief: OpportunityBrief): string {
       ? []
       : [
           `**Selection provenance:** ${briefText(brief.selectionProvenance.rationale)} (developer Preference, not market evidence; never a Leading Opportunity)`,
+          `**Selection response:** ${briefText(brief.selectionProvenance.responseRequestId)}`,
         ]),
     `**Opportunity:** ${briefText(brief.opportunity.id)}`,
     `**Customer:** ${briefText(brief.opportunity.customer)}`,

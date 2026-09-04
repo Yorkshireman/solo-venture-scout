@@ -55,6 +55,35 @@ async function campaignSnapshot(campaignPath) {
  */
 export const compactTranscriptForEvaluation = compactTranscript;
 
+/**
+ * Keep copied Campaign artifacts navigable for the evaluator while removing
+ * references to the disposable coordinator workspace.
+ *
+ * @param {{
+ *   invocation: { transcript: Record<string, any>, output: Record<string, any> },
+ *   workingDirectory: string,
+ *   campaignPath: string,
+ *   durableCampaignPath: string,
+ * }} input
+ */
+export function relocateCoordinatorTranscript({
+  invocation,
+  workingDirectory,
+  campaignPath,
+  durableCampaignPath,
+}) {
+  const durableCampaignToken = "$DURABLE_CAMPAIGN_PATH";
+  return JSON.parse(
+    JSON.stringify({
+      ...invocation.transcript,
+      final: invocation.output,
+    })
+      .replaceAll(campaignPath, durableCampaignToken)
+      .replaceAll(workingDirectory, "$RUN_DIRECTORY")
+      .replaceAll(durableCampaignToken, durableCampaignPath),
+  );
+}
+
 /** @param {Record<string, any>} input */
 export async function calibrateEvaluator({ profile, rubric, goldenSet }) {
   const workingDirectory = await mkdtemp(
@@ -235,13 +264,15 @@ export async function runCoordinator({
     recursive: true,
     errorOnExist: true,
   });
-  const transcript = JSON.parse(
-    JSON.stringify({
-      ...invocation.transcript,
-      precondition,
-      final: invocation.output,
-    }).replaceAll(workingDirectory, "$RUN_DIRECTORY"),
-  );
+  const transcript = {
+    ...relocateCoordinatorTranscript({
+      invocation,
+      workingDirectory,
+      campaignPath,
+      durableCampaignPath,
+    }),
+    precondition,
+  };
   await rm(workingDirectory, { recursive: true, force: true });
   return {
     sessionId: invocation.sessionId,

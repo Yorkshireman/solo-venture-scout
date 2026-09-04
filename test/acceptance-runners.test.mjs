@@ -11,7 +11,10 @@ import {
   runKernel,
 } from "./support/packaged-scout.mjs";
 import { prepareControlledCampaign } from "../scripts/lib/controlled-campaign-fixtures.mjs";
-import { compactTranscriptForEvaluation } from "../scripts/lib/codex-acceptance-driver.mjs";
+import {
+  compactTranscriptForEvaluation,
+  relocateCoordinatorTranscript,
+} from "../scripts/lib/codex-acceptance-driver.mjs";
 import { invokeCodex } from "../scripts/lib/codex-invocation.mjs";
 import { controlledLeadingOpportunityCommand } from "../scripts/lib/controlled-leading-opportunity.mjs";
 import { controlledReevaluationCommand } from "../scripts/lib/controlled-reevaluation.mjs";
@@ -137,6 +140,39 @@ test("evaluator input compacts redundant command output without losing its ident
   assert.equal(compacted.events[0].item.aggregated_output, undefined);
   assert.equal(compacted.events[0].item.aggregatedOutputBytes, 1_100_000);
   assert.match(compacted.events[0].item.aggregatedOutputSha256, /^[a-f0-9]{64}$/);
+});
+
+test("coordinator transcript keeps durable artifact links navigable for evaluation", () => {
+  const transcript = relocateCoordinatorTranscript({
+    invocation: {
+      transcript: {
+        workingDirectory: "/tmp/coordinator-run",
+        events: [
+          {
+            text: "Inspect /tmp/coordinator-run/tested-skill/SKILL.md and /tmp/coordinator-run/campaign/opportunity-brief.md",
+          },
+        ],
+      },
+      output: {
+        visibleResponse:
+          "Open [brief](/tmp/coordinator-run/campaign/opportunity-brief.md).",
+      },
+    },
+    workingDirectory: "/tmp/coordinator-run",
+    campaignPath: "/tmp/coordinator-run/campaign",
+    durableCampaignPath: "/tmp/evidence/run/campaign",
+  });
+
+  assert.equal(transcript.workingDirectory, "$RUN_DIRECTORY");
+  assert.match(transcript.events[0].text, /\$RUN_DIRECTORY\/tested-skill/);
+  assert.match(
+    transcript.events[0].text,
+    /\/tmp\/evidence\/run\/campaign\/opportunity-brief\.md/,
+  );
+  assert.equal(
+    transcript.final.visibleResponse,
+    "Open [brief](/tmp/evidence/run/campaign/opportunity-brief.md).",
+  );
 });
 
 test("capability-pressure evaluation distinguishes host availability from Campaign permission", async () => {

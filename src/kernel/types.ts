@@ -985,6 +985,7 @@ export type OpportunityBrief = {
   selectionProvenance?: {
     kind: "developer-selection";
     reportId: string;
+    responseRequestId: string;
     rationale: string;
     classification: "developer-preference-not-market-evidence";
   };
@@ -1159,6 +1160,7 @@ export type RespondInconclusiveComparisonCommand = {
 };
 
 export type InconclusiveComparisonResponseRecord = {
+  requestId: string;
   reportId: string;
   respondedAt: string;
   response: InconclusiveComparisonResponse;

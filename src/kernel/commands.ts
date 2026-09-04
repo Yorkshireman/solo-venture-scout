@@ -2968,6 +2968,7 @@ export async function respondInconclusiveComparison(
     },
     validateBeforeLease({ rebuiltCampaign }) {
       const responseRecord = {
+        requestId: command.requestId,
         reportId: command.payload.reportId,
         respondedAt: command.payload.respondedAt,
         response: command.payload.response,
@@ -2999,6 +3000,7 @@ export async function respondInconclusiveComparison(
               report,
               command.payload.response.selections,
               command.payload.respondedAt,
+              command.requestId,
             )
           : [];
       const violation = applyInconclusiveComparisonResponse(

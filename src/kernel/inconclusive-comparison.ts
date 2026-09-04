@@ -238,6 +238,7 @@ export function createInconclusiveComparisonModule({
     report: InconclusiveComparisonReport,
     selection: DeveloperOpportunitySelection,
     selectedAt: string,
+    responseRequestId: string,
   ): OpportunityBrief {
     const adversarialReservationIds = [...history.reservations.values()]
       .filter((reservation) => reservation.researchClass === "adversarial")
@@ -257,12 +258,14 @@ export function createInconclusiveComparisonModule({
       selectionProvenance: {
         kind: "developer-selection",
         reportId: report.id,
+        responseRequestId,
         rationale: selection.rationale,
         classification: "developer-preference-not-market-evidence",
       },
       selection: {
         rationale: selection.rationale,
         decisionId: report.comparison.decision.id,
+        traceabilityEntryId: responseRequestId,
         evidenceEntryIds: [],
         limitations: report.comparison.decision.limitations,
         traceabilityConclusion: "Developer selection preference",
