@@ -60,8 +60,12 @@ test("the release contract, scenario pack, rubric, and golden set are versioned 
     assert.equal(scenario.coordinatorInput.evidence.length > 0, true, scenario.id);
     assert.equal(
       scenario.coordinatorInput.evidence.every(
-        (/** @type {{ entryId?: string }} */ item) =>
-          typeof item.entryId === "string",
+        (/** @type {{ entryId?: string, lineageId?: string, freshness?: { entryId?: string, assessment?: string }, copyrightSafe?: boolean }} */ item) =>
+          typeof item.entryId === "string" &&
+          typeof item.lineageId === "string" &&
+          typeof item.freshness?.entryId === "string" &&
+          typeof item.freshness?.assessment === "string" &&
+          item.copyrightSafe === true,
       ),
       true,
       scenario.id,

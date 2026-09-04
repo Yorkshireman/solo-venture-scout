@@ -414,6 +414,90 @@ test("acceptance reports retain exact suite, artifact, contract, and runtime ide
     path.join(evidenceDirectory, "deterministic.json"),
     `${JSON.stringify(deterministicEvidence)}\n`,
   );
+  await writeFile(
+    path.join(evidenceDirectory, "behavioral.json"),
+    `${JSON.stringify({
+      evidenceVersion: "1.0.0",
+      gateId: "behavioral",
+      releaseVersion: "1.0.0",
+      status: "passed",
+      skill: deterministicEvidence.skill,
+      profiles: [
+        {
+          id: "codex-local-web",
+          host: "Codex CLI",
+          hostVersion: "codex-cli 1.2.3",
+          runtime: deterministicEvidence.runtime,
+          coordinatorModel: "gpt-5.6-sol",
+          reasoningEffort: "xhigh",
+          coordinatorCount: 1,
+          evaluator: {
+            model: "gpt-5.6-sol",
+            version: "1.0.0",
+            calibration: { rubricVersion: "1.0.0", goldenSetVersion: "1.0.0" },
+          },
+          runs: [
+            {
+              runId: "human-report-run",
+              scenarioId: "genuine-tie-stop",
+              repetition: 1,
+              status: "passed",
+              invariants: [
+                { id: "history-preserved", status: "passed", details: "History remained append-only." },
+              ],
+              evaluation: {
+                rubricVersion: "1.0.0",
+                evaluatorSessionId: "evaluator-session",
+                evaluationId: "evaluation-id",
+                failures: [],
+                ratings: [
+                  { dimension: "evidence-fidelity", rating: "strong", rationale: "Traceable." },
+                ],
+                adjudication: {
+                  status: "accepted",
+                  version: "1.0.0",
+                  rationale: "All inspected evidence passed.",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    })}\n`,
+  );
+  await writeFile(
+    path.join(evidenceDirectory, "live-retrieval.json"),
+    `${JSON.stringify({
+      evidenceVersion: "1.0.0",
+      gateId: "live-retrieval",
+      releaseVersion: "1.0.0",
+      status: "passed",
+      skill: deterministicEvidence.skill,
+      profiles: [
+        {
+          id: "codex-local-web",
+          methods: [
+            {
+              id: "codex-web-search",
+              status: "passed",
+              assertions: [
+                { id: "prompt-injection-resisted", status: "passed", details: "Safe." },
+              ],
+              failures: [],
+              safetyEvaluation: {
+                failures: [],
+                adjudication: {
+                  status: "accepted",
+                  version: "1.0.0",
+                  rationale: "No hostile instruction was followed.",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    })}\n`,
+  );
 
   await assert.rejects(
     execFileAsync(process.execPath, ["scripts/qualify-release.mjs"], {
@@ -445,6 +529,17 @@ test("acceptance reports retain exact suite, artifact, contract, and runtime ide
   assert.match(humanReport, /Contracts.+campaignFormat: 0\.2\.0/is);
   assert.match(humanReport, /Runtime.+Node 24\.14\.0.+darwin arm64/is);
   assert.match(humanReport, /fault-recovery.+1 tests.+0 failures/is);
+  assert.match(humanReport, /Invariant assertions: history-preserved=passed/);
+  assert.match(humanReport, /Rubric 1\.0\.0: evidence-fidelity=strong/);
+  assert.match(humanReport, /Evaluator failures: none/);
+  assert.match(humanReport, /Adjudication rationale: All inspected evidence passed/);
+  assert.match(humanReport, /Assertions: prompt-injection-resisted=passed/);
+  assert.match(humanReport, /Retrieval failures: none/);
+  assert.match(humanReport, /Live-safety failures: none/);
+  assert.match(
+    humanReport,
+    /Live-safety adjudication rationale: No hostile instruction was followed/,
+  );
 });
 
 test("qualification rejects gate evidence produced from different generated skill trees", async () => {

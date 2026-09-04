@@ -1869,6 +1869,31 @@ export async function prepareNoQualifyingOpportunityCampaign(
     assert.equal(response.code, 0, response.stderr);
   }
 
+  const freshness = await runKernel(kernelPath, {
+    envelopeVersion: "0.1.0",
+    requestId: "record-no-qualifying-opportunity-source-freshness",
+    command: "recordEvidenceReasoning",
+    payload: {
+      campaignPath,
+      coordinatorId: "coordinator-primary",
+      recordedAt: "2026-09-01T09:58:00.000Z",
+      entries: [
+        {
+          type: "source-freshness",
+          id: "freshness-dispatch-study",
+          sourceId: "source-dispatch-study",
+          observationId: "observation-dispatch-time-loss",
+          intendedUse: "Assess a current time-sensitive qualification claim.",
+          assessment: "high",
+          timeSensitivity: "Buyer behavior and operating conditions may change.",
+          rationale: "The evidence was published within the current quarter.",
+          limitations: ["The next material market change requires reassessment."],
+        },
+      ],
+    },
+  });
+  assert.equal(freshness.code, 0, freshness.stderr);
+
   const capacityEvidence = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
     requestId: "record-solo-capacity-inference-1",

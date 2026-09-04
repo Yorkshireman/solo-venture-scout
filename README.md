@@ -147,7 +147,7 @@ newer file format, an unresolved approval, or another active session.
    does not hide those trade-offs inside a weighted score or made-up probability.
 6. **Challenge the Leading Opportunity.** Part of the research allowance is saved
    specifically to look for reasons the apparent Leading Opportunity is wrong or
-   another candidate is stronger.
+   another Eligible Opportunity is stronger.
 7. **Write the result.** The final document is generated from the recorded history so
    it can be checked and reproduced.
 

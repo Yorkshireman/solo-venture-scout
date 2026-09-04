@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,8 +11,47 @@ import {
 } from "./support/packaged-scout.mjs";
 import { prepareControlledCampaign } from "../scripts/lib/controlled-campaign-fixtures.mjs";
 import { compactTranscriptForEvaluation } from "../scripts/lib/codex-acceptance-driver.mjs";
+import { invokeCodex } from "../scripts/lib/codex-invocation.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("shared Codex invocation preserves policy, identity, output, and sanitized paths", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-codex-invocation-"));
+  const executable = path.join(root, "fake-codex.mjs");
+  const schemaPath = path.join(root, "schema.json");
+  await writeFile(schemaPath, "{}\n");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+      import { writeFile } from "node:fs/promises";
+      const args = process.argv.slice(2);
+      const responsePath = args[args.indexOf("--output-last-message") + 1];
+      await writeFile(responsePath, JSON.stringify({ status: "passed" }));
+      process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "test-session" }) + "\\n");
+    `,
+  );
+  await chmod(executable, 0o755);
+
+  const result = await invokeCodex({
+    prompt: "Return passed.",
+    schema: schemaPath,
+    model: "test-model",
+    reasoningEffort: "test",
+    workingDirectory: root,
+    executionPolicyArguments: ["--sandbox", "read-only"],
+    workingDirectoryPlaceholder: "$RUN_DIRECTORY",
+    responsePrefix: "solo-venture-scout-test-response-",
+    executable,
+  });
+
+  assert.equal(result.sessionId, "test-session");
+  assert.deepEqual(result.output, { status: "passed" });
+  assert.deepEqual(result.transcript.final, result.output);
+  assert.equal(result.transcript.arguments.includes(root), false);
+  assert.equal(result.transcript.arguments.includes("$RUN_DIRECTORY"), true);
+  assert.equal(result.transcript.arguments.includes("--sandbox"), true);
+  assert.equal(result.transcript.arguments.includes("read-only"), true);
+});
 
 test("evaluator input compacts redundant command output without losing its identity", () => {
   const transcript = {
@@ -125,6 +164,27 @@ test("every preconditioned controlled scenario binds its declared intake and evi
       );
     }
   }
+
+  const mismatchedLineage = structuredClone(scenarios[0]);
+  mismatchedLineage.coordinatorInput.evidence[0].lineageId = "lineage-not-persisted";
+  await assert.rejects(
+    prepareControlledCampaign({
+      scenario: mismatchedLineage,
+      campaignPath: path.join(runDirectory, "mismatched-lineage"),
+      kernelPath,
+    }),
+    /does not match declared Source Lineage/,
+  );
+  const mismatchedFreshness = structuredClone(scenarios[0]);
+  mismatchedFreshness.coordinatorInput.evidence[0].freshness.assessment = "low";
+  await assert.rejects(
+    prepareControlledCampaign({
+      scenario: mismatchedFreshness,
+      campaignPath: path.join(runDirectory, "mismatched-freshness"),
+      kernelPath,
+    }),
+    /does not match declared Freshness/,
+  );
 });
 
 test("deterministic acceptance runner records every suite against the exact generated skill", async () => {

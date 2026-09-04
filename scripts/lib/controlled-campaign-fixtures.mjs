@@ -314,6 +314,7 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
     `${scenario.id} persisted a Campaign Intake that differs from its declared input`,
   );
 
+  /** @type {Record<string, any>} */
   let evidenceLedger = {};
   try {
     evidenceLedger = JSON.parse(
@@ -327,6 +328,20 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
   const evidenceEntries = Object.values(evidenceLedger)
     .filter(Array.isArray)
     .flat();
+  const authorityRecords = (await readFile(
+    path.join(campaignPath, "records.jsonl"),
+    "utf8",
+  ))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const sourceLineages = authorityRecords.flatMap(
+    (/** @type {Record<string, any>} */ record) =>
+      (record.assessments ?? []).flatMap(
+        (/** @type {Record<string, any>} */ assessment) =>
+          assessment.independentSourceLineages ?? [],
+      ),
+  );
   const boundEvidence = (scenario.coordinatorInput.evidence ?? [])
     .filter((/** @type {Record<string, any>} */ item) => typeof item.entryId === "string")
     .map((/** @type {Record<string, any>} */ item) => {
@@ -341,7 +356,37 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
           `${scenario.id} evidence ${item.entryId} differs from its declared observation`,
         );
       }
-      return { entryId: item.entryId, entry };
+      assert.equal(
+        item.copyrightSafe,
+        true,
+        `${scenario.id} evidence ${item.entryId} is not declared copyright-safe`,
+      );
+      const lineage = sourceLineages.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.id === item.lineageId &&
+          candidate.sourceIds?.includes(entry.sourceId),
+      );
+      assert.ok(
+        lineage,
+        `${scenario.id} evidence ${item.entryId} does not match declared Source Lineage ${item.lineageId}`,
+      );
+      const freshness = evidenceLedger.sourceFreshnesses?.find(
+        (/** @type {Record<string, any>} */ candidate) =>
+          candidate.id === item.freshness?.entryId &&
+          candidate.sourceId === entry.sourceId &&
+          candidate.observationId === entry.id &&
+          candidate.assessment === item.freshness?.assessment,
+      );
+      assert.ok(
+        freshness,
+        `${scenario.id} evidence ${item.entryId} does not match declared Freshness ${item.freshness?.entryId}`,
+      );
+      return {
+        declaration: item,
+        entry,
+        lineage,
+        freshness,
+      };
     });
   if (
     !["confirmed-intake", "ambiguous-approved-research-reservation"].includes(
@@ -365,7 +410,8 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
       declaredCampaignIntakeSha256: sha256(JSON.stringify(expectedIntake)),
       persistedCampaignIntakeSha256: sha256(JSON.stringify(persistedIntakeValue)),
       boundEvidenceEntryIds: boundEvidence.map(
-        (/** @type {{ entryId: string }} */ item) => item.entryId,
+        (/** @type {{ declaration: { entryId: string } }} */ item) =>
+          item.declaration.entryId,
       ),
       boundEvidenceSha256: sha256(JSON.stringify(boundEvidence)),
       workViewSha256: sha256(JSON.stringify(workView)),

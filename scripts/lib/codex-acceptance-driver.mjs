@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { sha256, treeSha256 } from "./artifact-identity.mjs";
+import { invokeCodex } from "./codex-invocation.mjs";
 import { filesUnder } from "./files-under.mjs";
 import { prepareControlledCampaign } from "./controlled-campaign-fixtures.mjs";
 import { repositoryRoot } from "./release-paths.mjs";
@@ -25,97 +25,6 @@ const calibrationSchema = path.join(
   "evaluation",
   "calibration-output.schema.json",
 );
-
-/**
- * @param {{ prompt: string, schema: string, model: string, reasoningEffort: string, workingDirectory: string, readableSkillRoot?: string }} input
- */
-async function invokeCodex({
-  prompt,
-  schema,
-  model,
-  reasoningEffort,
-  workingDirectory,
-  readableSkillRoot,
-}) {
-  const responseDirectory = await mkdtemp(
-    path.join(tmpdir(), "solo-venture-scout-codex-response-"),
-  );
-  const responsePath = path.join(responseDirectory, "response.json");
-  const arguments_ = [
-    "exec",
-    "--ephemeral",
-    "--ignore-user-config",
-    "--skip-git-repo-check",
-    "--approve-for-me",
-    "--model",
-    model,
-    "--config",
-    `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`,
-    "--cd",
-    workingDirectory,
-    ...(readableSkillRoot ? ["--add-dir", readableSkillRoot] : []),
-    "--output-schema",
-    schema,
-    "--output-last-message",
-    responsePath,
-    "--json",
-    "-",
-  ];
-  const startedAt = new Date().toISOString();
-  const execution = await new Promise((resolve, reject) => {
-    const child = spawn(process.env.SVS_CODEX_EXECUTABLE ?? "codex", arguments_, {
-      cwd: workingDirectory,
-      env: process.env,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    child.stdin.end(prompt);
-  });
-  const completedAt = new Date().toISOString();
-  if (execution.code !== 0) {
-    await rm(responseDirectory, { recursive: true, force: true });
-    const diagnostic = (/** @type {string} */ value) =>
-      value.length <= 16_000 ? value : `${value.slice(0, 8_000)}\n…\n${value.slice(-8_000)}`;
-    throw new Error(
-      `Codex acceptance invocation failed (exit ${execution.code}).\nstdout:\n${diagnostic(execution.stdout)}\nstderr:\n${diagnostic(execution.stderr)}`,
-    );
-  }
-  /** @type {Array<Record<string, any>>} */
-  const events = String(execution.stdout)
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line));
-  const sessionId =
-    events.find((event) => event.type === "thread.started")?.thread_id ??
-    events.find((event) => typeof event.thread_id === "string")?.thread_id;
-  if (typeof sessionId !== "string") {
-    throw new Error("Codex acceptance invocation did not report an independent session identity");
-  }
-  const result = {
-    sessionId,
-    startedAt,
-    completedAt,
-    output: JSON.parse(await readFile(responsePath, "utf8")),
-    transcript: {
-      arguments: arguments_.slice(0, -1).map((argument) =>
-        argument === responsePath
-          ? "$RESPONSE_PATH"
-          : argument === workingDirectory
-            ? "$WORKING_DIRECTORY"
-            : argument === readableSkillRoot
-              ? "$SKILL_ROOT"
-              : argument,
-      ),
-      events,
-    },
-  };
-  await rm(responseDirectory, { recursive: true, force: true });
-  return result;
-}
 
 /** @param {string} campaignPath */
 async function campaignSnapshot(campaignPath) {

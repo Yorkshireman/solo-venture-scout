@@ -1,9 +1,4 @@
-import { createHash } from "node:crypto";
-
-/** @param {string} value */
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
+import { sha256 } from "./artifact-identity.mjs";
 
 /** @param {string} hostname @param {string[]} allowedHosts */
 function hostIsAllowed(hostname, allowedHosts) {

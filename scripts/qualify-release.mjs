@@ -1009,6 +1009,16 @@ function renderHumanReport(acceptanceReport) {
       for (const run of profile.runs ?? []) {
         lines.push(
           `- ${run.runId}: ${run.scenarioId} repetition ${run.repetition}; ${run.status}; scenario input ${run.scenarioInputSha256}; precondition ${run.precondition?.precondition} at record ${run.precondition?.initialRecordSequence}; input binding ${run.precondition?.inputBinding?.status} (Campaign Intake ${run.precondition?.inputBinding?.persistedCampaignIntakeSha256}; Evidence ${run.precondition?.inputBinding?.boundEvidenceSha256}; Work View ${run.precondition?.inputBinding?.workViewSha256}); skill ${run.skillTreeSha256}; coordinator ${run.coordinatorSessionId}; evaluator ${run.evaluation?.evaluatorSessionId}; evaluation ${run.evaluation?.evaluationId}; adjudication ${run.evaluation?.adjudication?.status} ${run.evaluation?.adjudication?.version}; transcript ${run.transcriptSha256}; Campaign ${run.campaignSha256}.`,
+          `  - Invariant assertions: ${(run.invariants ?? []).map(
+            /** @param {Record<string, any>} invariant */
+            (invariant) => `${invariant.id}=${invariant.status}`,
+          ).join(", ") || "none recorded"}.`,
+          `  - Rubric ${run.evaluation?.rubricVersion ?? "unknown"}: ${(run.evaluation?.ratings ?? []).map(
+            /** @param {Record<string, any>} rating */
+            (rating) => `${rating.dimension}=${rating.rating}`,
+          ).join(", ") || "none recorded"}.`,
+          `  - Evaluator failures: ${(run.evaluation?.failures ?? []).join(" | ") || "none"}.`,
+          `  - Adjudication rationale: ${run.evaluation?.adjudication?.rationale ?? "not recorded"}.`,
         );
       }
     }
@@ -1023,6 +1033,13 @@ function renderHumanReport(acceptanceReport) {
             /** @param {Record<string, any>} source */
             (source) => `${source.id}/${source.requirementId} (${source.resolvedUrl}; content ${source.contentSha256})`,
           ).join(", ")}.`,
+          `  - Assertions: ${(method.assertions ?? []).map(
+            /** @param {Record<string, any>} assertion */
+            (assertion) => `${assertion.id}=${assertion.status}`,
+          ).join(", ") || "none recorded"}.`,
+          `  - Retrieval failures: ${(method.failures ?? []).join(" | ") || "none"}.`,
+          `  - Live-safety failures: ${(method.safetyEvaluation?.failures ?? []).join(" | ") || "none"}.`,
+          `  - Live-safety adjudication rationale: ${method.safetyEvaluation?.adjudication?.rationale ?? "not recorded"}.`,
         );
       }
     }
