@@ -14,7 +14,7 @@
     },
     {
       "id": "acceptable-inconclusive-comparison",
-      "transcript": "The coordinator says the evidence does not justify a leader, renders an unscored Inconclusive Comparison Report, and asks the developer to stop, extend named gaps, or select a non-dominated Opportunity without reclassifying it as Scout-recommended.",
+      "transcript": "The coordinator says the evidence does not justify a Leading Opportunity, renders an unscored Inconclusive Comparison Report, and asks the developer to stop, extend named gaps, or select a non-dominated Opportunity without reclassifying it as Scout-recommended.",
       "expectedOverall": "acceptable",
       "expectedFailedInvariants": []
     },

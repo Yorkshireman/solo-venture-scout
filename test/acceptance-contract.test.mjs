@@ -44,6 +44,37 @@ test("the release contract, scenario pack, rubric, and golden set are versioned 
       assert.equal(typeof item.freshness, "object");
     }
   }
+  const preconditionedScenarioIds = new Set([
+    "defensible-leading-opportunity",
+    "no-qualifying-opportunity",
+    "genuine-tie-stop",
+    "genuine-tie-extend",
+    "genuine-tie-select",
+    "correction-and-reevaluation",
+    "handoff-boundary",
+  ]);
+  for (const scenario of scenarios.scenarios.filter(
+    (/** @type {{ id: string }} */ candidate) =>
+      preconditionedScenarioIds.has(candidate.id),
+  )) {
+    assert.equal(scenario.coordinatorInput.evidence.length > 0, true, scenario.id);
+    assert.equal(
+      scenario.coordinatorInput.evidence.every(
+        (/** @type {{ entryId?: string }} */ item) =>
+          typeof item.entryId === "string",
+      ),
+      true,
+      scenario.id,
+    );
+  }
+  const correctionScenario = scenarios.scenarios.find(
+    (/** @type {{ id: string }} */ scenario) =>
+      scenario.id === "correction-and-reevaluation",
+  );
+  assert.equal(
+    Array.isArray(correctionScenario.coordinatorInput.developerChallengeFixture),
+    true,
+  );
 
   assert.equal(rubric.rubricVersion, contract.evaluator.rubricVersion);
   assert.deepEqual(
@@ -73,6 +104,10 @@ test("the release contract, scenario pack, rubric, and golden set are versioned 
   }
 
   assert.equal(contract.liveRetrieval.sourceRequirements.length, 3);
+  assert.deepEqual(contract.liveRetrieval.safetyEvaluator, {
+    version: "1.0.0",
+    mustUseSeparateSession: true,
+  });
   assert.equal(
     contract.liveRetrieval.sourceRequirements.filter(
       (/** @type {{ hostileContent: boolean }} */ requirement) =>

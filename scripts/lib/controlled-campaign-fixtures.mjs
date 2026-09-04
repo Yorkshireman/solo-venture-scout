@@ -7,24 +7,10 @@ import {
   enterInconclusiveComparison,
   prepareDeveloperSelectedCampaign,
   prepareEligibleCampaign,
-  prepareNoQualifierCampaign,
+  prepareNoQualifyingOpportunityCampaign,
 } from "../../test/discovery.test.mjs";
 import { runKernel } from "../../test/support/packaged-scout.mjs";
-
-const baselineStatements = [
-  {
-    id: "preference-low-operating-burden",
-    text: "Prefer low ongoing operating burden.",
-    classification: "preference",
-    importance: "major",
-  },
-  {
-    id: "advantage-operations-domain",
-    text: "Existing access to operations workflow expertise.",
-    classification: "advantage",
-    rationale: "The expertise can reduce validation and acquisition effort.",
-  },
-];
+import { sha256 } from "./artifact-identity.mjs";
 
 /** @type {Record<string, string>} */
 const preconditions = {
@@ -40,6 +26,7 @@ const preconditions = {
 
 /** @param {Record<string, any>} input */
 function intakeStatements(input) {
+  if (Array.isArray(input.statements)) return input.statements;
   return [
     ...(input.hardConstraints ?? []).map(
       /** @param {string} text @param {number} index */
@@ -82,11 +69,52 @@ function commercialOutcomeTarget(target) {
   };
 }
 
+/** @param {Record<string, any>} scenario @param {string} [capturedAt] */
+function campaignIntakeForScenario(
+  scenario,
+  capturedAt = scenario.coordinatorInput.deterministic.now,
+) {
+  const input = scenario.coordinatorInput;
+  const intake = input.campaignIntake;
+  const sourceCap = intake.sourceCap ?? 30;
+  return {
+    version: intake.version,
+    explicitlyConfirmed: true,
+    developerProfileSnapshot: {
+      capturedAt,
+      capacity: { state: "known", value: intake.capacity ?? "Solo operation" },
+      capabilities: { state: "known", value: input.capabilityProfile.host },
+      access:
+        input.capabilityProfile.access === undefined
+          ? { state: "none" }
+          : { state: "known", value: input.capabilityProfile.access },
+      boundaries: { state: "known", value: input.capabilityProfile.retrieval },
+      operatingPreferences: {
+        state: "known",
+        value: "Use only the controlled scenario fixtures.",
+      },
+      riskTolerance: { state: "known", value: "Low irreversible downside" },
+    },
+    commercialOutcomeTarget: commercialOutcomeTarget(intake.target),
+    statements: intakeStatements(intake),
+    researchBudget: {
+      profile: intake.budgetProfile ?? (sourceCap === 5 ? "custom" : "quick"),
+      sourceCap,
+      discoverySweepCap: intake.discoverySweepCap ?? (sourceCap === 5 ? 1 : 4),
+      sourceFamilyMinimum: intake.sourceFamilyMinimum ?? (sourceCap === 5 ? 1 : 3),
+      deepenedOpportunityCap: intake.deepenedOpportunityCap ?? 2,
+      minimumComparisonSet: intake.minimumComparisonSet ?? 2,
+      adversarialSourceReserve:
+        intake.adversarialSourceReserve ?? (sourceCap === 5 ? 1 : 6),
+      paidSpendCap: intake.paidSpendCap ?? { amount: 0, currency: "GBP" },
+    },
+  };
+}
+
 /** @param {Record<string, any>} scenario @param {string} campaignPath @param {string} kernelPath */
 async function createScenarioIntake(scenario, campaignPath, kernelPath) {
   const input = scenario.coordinatorInput;
-  const intake = input.campaignIntake;
-  const sourceCap = scenario.id === "budget-and-capability-pressure" ? 5 : 30;
+  const intake = campaignIntakeForScenario(scenario);
   const commands = [
     {
       envelopeVersion: "0.1.0",
@@ -108,40 +136,7 @@ async function createScenarioIntake(scenario, campaignPath, kernelPath) {
         campaignPath,
         coordinatorId: "coordinator-primary",
         confirmedAt: input.deterministic.now,
-        intake: {
-          version: intake.version,
-          explicitlyConfirmed: true,
-          developerProfileSnapshot: {
-            capturedAt: input.deterministic.now,
-            capacity: { state: "known", value: "Solo operation" },
-            capabilities: {
-              state: "known",
-              value: input.capabilityProfile.host,
-            },
-            access: { state: "none" },
-            boundaries: {
-              state: "known",
-              value: input.capabilityProfile.retrieval,
-            },
-            operatingPreferences: {
-              state: "known",
-              value: "Use only the controlled scenario fixtures.",
-            },
-            riskTolerance: { state: "known", value: "Low irreversible downside" },
-          },
-          commercialOutcomeTarget: commercialOutcomeTarget(intake.target),
-          statements: intakeStatements(intake),
-          researchBudget: {
-            profile: sourceCap === 5 ? "custom" : "quick",
-            sourceCap,
-            discoverySweepCap: sourceCap === 5 ? 1 : 4,
-            sourceFamilyMinimum: sourceCap === 5 ? 1 : 3,
-            deepenedOpportunityCap: 2,
-            minimumComparisonSet: 2,
-            adversarialSourceReserve: sourceCap === 5 ? 1 : 6,
-            paidSpendCap: { amount: 0, currency: "GBP" },
-          },
-        },
+        intake,
       },
     },
   ];
@@ -151,8 +146,12 @@ async function createScenarioIntake(scenario, campaignPath, kernelPath) {
   }
 }
 
-/** @param {string} campaignPath @param {string} kernelPath */
-async function prepareInterruptedResearch(campaignPath, kernelPath) {
+/**
+ * @param {string} campaignPath
+ * @param {string} kernelPath
+ * @param {Record<string, unknown>} campaignIntake
+ */
+async function prepareInterruptedResearch(campaignPath, kernelPath, campaignIntake) {
   const approvalScope = {
     id: "decision-interrupted-report-access",
     access: "restricted-and-paid",
@@ -200,36 +199,7 @@ async function prepareInterruptedResearch(campaignPath, kernelPath) {
         campaignPath,
         coordinatorId: "coordinator-primary",
         confirmedAt: "2026-09-04T10:11:00.000Z",
-        intake: {
-          version: 1,
-          explicitlyConfirmed: true,
-          developerProfileSnapshot: {
-            capturedAt: "2026-09-04T10:11:00.000Z",
-            capacity: { state: "known", value: "Solo operation" },
-            capabilities: { state: "known", value: "TypeScript" },
-            access: { state: "known", value: "Developer-controlled authenticated access" },
-            boundaries: { state: "known", value: "No repeated ambiguous charges" },
-            operatingPreferences: { state: "unknown" },
-            riskTolerance: { state: "known", value: "Low irreversible downside" },
-          },
-          commercialOutcomeTarget: {
-            amount: 9_000,
-            currency: "GBP",
-            metric: "monthly recurring revenue",
-            deadline: "2027-11-30",
-          },
-          statements: [],
-          researchBudget: {
-            profile: "quick",
-            sourceCap: 30,
-            discoverySweepCap: 4,
-            sourceFamilyMinimum: 3,
-            deepenedOpportunityCap: 2,
-            minimumComparisonSet: 2,
-            adversarialSourceReserve: 6,
-            paidSpendCap: { amount: 20, currency: "GBP" },
-          },
-        },
+        intake: campaignIntake,
       },
     },
     {
@@ -295,19 +265,93 @@ async function prepareInterruptedResearch(campaignPath, kernelPath) {
  */
 export async function prepareControlledCampaign({ scenario, campaignPath, kernelPath }) {
   const precondition = preconditions[scenario.id] ?? "confirmed-intake";
+  const capturedAt =
+    precondition === "ambiguous-approved-research-reservation"
+      ? "2026-09-04T10:11:00.000Z"
+      : precondition === "confirmed-intake"
+        ? scenario.coordinatorInput.deterministic.now
+        : "2026-09-01T09:04:00.000Z";
+  const expectedIntake = campaignIntakeForScenario(scenario, capturedAt);
   if (precondition === "eligible-after-adversarial-challenge") {
-    await prepareEligibleCampaign(kernelPath, campaignPath, baselineStatements);
+    await prepareEligibleCampaign(
+      kernelPath,
+      campaignPath,
+      [],
+      expectedIntake,
+    );
     await completeAdversarialResearch(kernelPath, campaignPath);
   } else if (precondition === "no-qualifying-opportunity-ready") {
-    await prepareNoQualifierCampaign(kernelPath, campaignPath);
+    await prepareNoQualifyingOpportunityCampaign(
+      kernelPath,
+      campaignPath,
+      expectedIntake,
+    );
   } else if (precondition === "inconclusive-comparison") {
-    await enterInconclusiveComparison(kernelPath, campaignPath);
+    await enterInconclusiveComparison(
+      kernelPath,
+      campaignPath,
+      undefined,
+      expectedIntake,
+    );
   } else if (precondition === "developer-selected-terminal") {
-    await prepareDeveloperSelectedCampaign(kernelPath, campaignPath);
+    await prepareDeveloperSelectedCampaign(kernelPath, campaignPath, expectedIntake);
   } else if (precondition === "ambiguous-approved-research-reservation") {
-    await prepareInterruptedResearch(campaignPath, kernelPath);
+    await prepareInterruptedResearch(campaignPath, kernelPath, expectedIntake);
   } else {
     await createScenarioIntake(scenario, campaignPath, kernelPath);
+  }
+  const persistedIntake = JSON.parse(
+    await readFile(path.join(campaignPath, "campaign-intake.json"), "utf8"),
+  );
+  const {
+    campaignId: _campaignId,
+    confirmedAt: _confirmedAt,
+    ...persistedIntakeValue
+  } = persistedIntake;
+  assert.deepEqual(
+    persistedIntakeValue,
+    expectedIntake,
+    `${scenario.id} persisted a Campaign Intake that differs from its declared input`,
+  );
+
+  let evidenceLedger = {};
+  try {
+    evidenceLedger = JSON.parse(
+      await readFile(path.join(campaignPath, "evidence-ledger.json"), "utf8"),
+    );
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+  const evidenceEntries = Object.values(evidenceLedger)
+    .filter(Array.isArray)
+    .flat();
+  const boundEvidence = (scenario.coordinatorInput.evidence ?? [])
+    .filter((/** @type {Record<string, any>} */ item) => typeof item.entryId === "string")
+    .map((/** @type {Record<string, any>} */ item) => {
+      const entry = evidenceEntries.find(
+        (/** @type {Record<string, any>} */ candidate) => candidate.id === item.entryId,
+      );
+      assert.ok(entry, `${scenario.id} is missing declared evidence entry ${item.entryId}`);
+      if (typeof item.observation === "string") {
+        assert.equal(
+          entry.text ?? entry.question,
+          item.observation,
+          `${scenario.id} evidence ${item.entryId} differs from its declared observation`,
+        );
+      }
+      return { entryId: item.entryId, entry };
+    });
+  if (
+    !["confirmed-intake", "ambiguous-approved-research-reservation"].includes(
+      precondition,
+    )
+  ) {
+    assert.ok(
+      boundEvidence.length > 0,
+      `${scenario.id} must bind at least one declared evidence entry to its precondition`,
+    );
   }
   const workView = JSON.parse(
     await readFile(path.join(campaignPath, "work-view.json"), "utf8"),
@@ -316,5 +360,15 @@ export async function prepareControlledCampaign({ scenario, campaignPath, kernel
     precondition,
     activeCoordinatorId: "coordinator-primary",
     initialRecordSequence: workView.recordSequence,
+    inputBinding: {
+      status: "passed",
+      declaredCampaignIntakeSha256: sha256(JSON.stringify(expectedIntake)),
+      persistedCampaignIntakeSha256: sha256(JSON.stringify(persistedIntakeValue)),
+      boundEvidenceEntryIds: boundEvidence.map(
+        (/** @type {{ entryId: string }} */ item) => item.entryId,
+      ),
+      boundEvidenceSha256: sha256(JSON.stringify(boundEvidence)),
+      workViewSha256: sha256(JSON.stringify(workView)),
+    },
   };
 }

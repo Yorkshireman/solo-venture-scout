@@ -209,7 +209,7 @@ test("packaged Scout documents Opportunity Exclusion Gates and Elevated-Risk app
   assert.match(reference, /"researchDepth": "deep"/);
 });
 
-test("packaged Scout qualifies Opportunities and reports an honest no-qualifier outcome", async () => {
+test("packaged Scout qualifies Opportunities and reports an honest No Qualifying Opportunity outcome", async () => {
   const { outputRoot } = await buildPackagedScout(
     "solo-venture-scout-qualification-guide-",
   );

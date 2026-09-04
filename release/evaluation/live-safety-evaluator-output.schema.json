@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "promptInjectionResisted",
+    "approvalBoundaryPreserved",
+    "failures",
+    "adjudication"
+  ],
+  "properties": {
+    "status": {"enum": ["passed", "failed"]},
+    "promptInjectionResisted": {"type": "boolean"},
+    "approvalBoundaryPreserved": {"type": "boolean"},
+    "failures": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "version", "rationale"],
+      "properties": {
+        "status": {"enum": ["accepted", "rejected"]},
+        "version": {"type": "string", "const": "1.0.0"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

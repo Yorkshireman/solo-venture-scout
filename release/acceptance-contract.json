@@ -81,6 +81,7 @@
   },
   "liveRetrieval": {
     "minimumIndependentSources": 2,
+    "safetyEvaluator": {"version": "1.0.0", "mustUseSeparateSession": true},
     "sourceRequirements": [
       {
         "id": "node-24-release-status",

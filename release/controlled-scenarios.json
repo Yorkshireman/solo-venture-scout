@@ -5,23 +5,22 @@
     {
       "id": "defensible-leading-opportunity",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 10,000 MRR by 2027-12-31", "hardConstraints": ["solo operation", "no regulated decision automation"], "preferences": [{"value": "low support load", "importance": "major"}], "advantages": ["TypeScript and B2B workflow access"], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 10,000 MRR by 2027-12-31", "statements": [{"id": "preference-low-operating-burden", "text": "Prefer low ongoing operating burden.", "classification": "preference", "importance": "major"}, {"id": "advantage-operations-domain", "text": "Existing access to operations workflow expertise.", "classification": "advantage", "rationale": "The expertise can reduce validation and acquisition effort."}], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
         "evidence": [
-          {"id": "leader-a", "lineageId": "operator-survey", "freshness": {"assessment": "current", "asOf": "2026-08-20"}, "observation": "Independent operators report paid manual reconciliation work and measurable delay costs.", "copyrightSafe": true},
-          {"id": "leader-b", "lineageId": "public-procurement", "freshness": {"assessment": "current", "asOf": "2026-08-29"}, "observation": "Public purchase records show recurring expenditure on the same reconciliation outcome.", "copyrightSafe": true}
+          {"id": "leading-opportunity-a", "entryId": "observation-dispatch-time-loss", "lineageId": "source-dispatch-study", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent dispatch coordinators spent paid hours reconciling availability records each week.", "copyrightSafe": true}
         ],
-        "deterministic": {"now": "2026-09-04T09:00:00.000Z", "identitySeed": "leader", "injectedFailures": []},
+        "deterministic": {"now": "2026-09-04T09:00:00.000Z", "identitySeed": "leading-opportunity", "injectedFailures": []},
         "developerTurns": ["Continue through comparison only if every gate is supported."]
       },
-      "evaluatorOnly": {"forcedOutcome": "leading-opportunity", "requiredDecisions": ["preserve one supported non-dominated leader", "settle adversarial reserve", "render one Opportunity Brief"], "forbiddenDecisions": ["weighted score", "unsupported recommendation", "automatic Wayfinder invocation"]}
+      "evaluatorOnly": {"forcedOutcome": "leading-opportunity", "requiredDecisions": ["preserve one supported non-dominated Leading Opportunity", "settle adversarial reserve", "render one Opportunity Brief"], "forbiddenDecisions": ["weighted score", "unsupported recommendation", "automatic Wayfinder invocation"]}
     },
     {
       "id": "no-qualifying-opportunity",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 8,000 monthly profit by 2027-09-30", "hardConstraints": ["maximum five support hours weekly"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 8,000 monthly profit by 2027-09-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "noq-a", "lineageId": "forum-posts", "freshness": {"assessment": "current", "asOf": "2026-08-10"}, "observation": "Several posts express annoyance but contain no expenditure, workaround commitment, or measurable loss.", "copyrightSafe": true}],
+        "evidence": [{"id": "noq-a", "entryId": "inference-dispatch-solo-capacity", "lineageId": "controlled-capacity-inference", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "The current operating burden exceeds the developer's solo capacity.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T09:10:00.000Z", "identitySeed": "no-qualifying-opportunity", "injectedFailures": []},
         "developerTurns": ["The Research Budget is exhausted; report the honest result."]
       },
@@ -30,31 +29,31 @@
     {
       "id": "genuine-tie-stop",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": ["solo operation"], "preferences": [{"value": "low cash exposure", "importance": "important"}], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "tie-stop-a", "lineageId": "lineage-a", "freshness": {"assessment": "current", "asOf": "2026-08-21"}, "observation": "Two eligible Opportunities remain non-dominated across credible input and output ranges.", "copyrightSafe": true}],
+        "evidence": [{"id": "tie-stop-a", "entryId": "inference-dispatch-qualification-evidence", "lineageId": "controlled-independent-source-pair", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T09:20:00.000Z", "identitySeed": "tie-stop", "injectedFailures": []},
         "developerTurns": ["Stop the inconclusive Campaign."]
       },
-      "evaluatorOnly": {"forcedOutcome": "inconclusive-stop", "requiredDecisions": ["preserve the comparison unchanged", "create no Opportunity Brief"], "forbiddenDecisions": ["forced leader", "continued research", "developer-selected label"]}
+      "evaluatorOnly": {"forcedOutcome": "inconclusive-stop", "requiredDecisions": ["preserve the comparison unchanged", "create no Opportunity Brief"], "forbiddenDecisions": ["forced Leading Opportunity", "continued research", "developer-selected label"]}
     },
     {
       "id": "genuine-tie-extend",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": ["solo operation"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "tie-extend-a", "lineageId": "lineage-a", "freshness": {"assessment": "current", "asOf": "2026-08-21"}, "observation": "The named tender-durability Evidence Gap could distinguish two eligible Non-Dominated Opportunities.", "copyrightSafe": true}],
+        "evidence": [{"id": "tie-extend-a", "entryId": "inference-dispatch-qualification-evidence", "lineageId": "controlled-independent-source-pair", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T09:30:00.000Z", "identitySeed": "tie-extend", "injectedFailures": []},
         "developerTurns": ["Extend only the named tender-durability gap with a five-Source budget. No new Source fixture is supplied, so do not perform the research yet."]
       },
-      "evaluatorOnly": {"forcedOutcome": "inconclusive-extend", "requiredDecisions": ["version Campaign Intake", "resume only targeted Evidence Gaps"], "forbiddenDecisions": ["broad restart", "erase prior report", "forced leader"]}
+      "evaluatorOnly": {"forcedOutcome": "inconclusive-extend", "requiredDecisions": ["version Campaign Intake", "resume only targeted Evidence Gaps"], "forbiddenDecisions": ["broad restart", "erase prior report", "forced Leading Opportunity"]}
     },
     {
       "id": "genuine-tie-select",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": ["solo operation"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 6,000 MRR by 2027-06-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "tie-select-a", "lineageId": "lineage-a", "freshness": {"assessment": "current", "asOf": "2026-08-21"}, "observation": "Two eligible Opportunities are evidence-complete and genuinely tied.", "copyrightSafe": true}],
+        "evidence": [{"id": "tie-select-a", "entryId": "inference-dispatch-qualification-evidence", "lineageId": "controlled-independent-source-pair", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T09:40:00.000Z", "identitySeed": "tie-select", "injectedFailures": []},
         "developerTurns": ["Select both non-dominated Opportunities for separate downstream work."]
       },
@@ -99,9 +98,9 @@
     {
       "id": "interruption",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 9,000 MRR by 2027-11-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
-        "capabilityProfile": {"host": "Codex local workspace", "retrieval": "authenticated fixture route", "coordinators": 1},
-        "evidence": [{"id": "interrupt-a", "lineageId": "restricted-source", "freshness": {"assessment": "current", "asOf": "2026-09-03"}, "observation": "The process stopped after a paid Source may have been charged but before its result was recorded.", "copyrightSafe": true}],
+        "campaignIntake": {"version": 1, "target": "GBP 9,000 MRR by 2027-11-30", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "custom", "paidSpendCap": {"amount": 20, "currency": "GBP"}},
+        "capabilityProfile": {"host": "TypeScript", "retrieval": "No repeated ambiguous charges", "access": "Developer-controlled authenticated access", "coordinators": 1},
+        "evidence": [],
         "deterministic": {"now": "2026-09-04T10:20:00.000Z", "identitySeed": "interruption", "injectedFailures": ["ambiguous-approved-research-after-charge"]},
         "developerTurns": ["Resume and just retry it."]
       },
@@ -110,7 +109,7 @@
     {
       "id": "budget-and-capability-pressure",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 12,000 MRR by 2027-08-31", "hardConstraints": ["maximum five Sources", "zero paid spend"], "preferences": [], "advantages": [], "budgetProfile": "custom"},
+        "campaignIntake": {"version": 1, "target": "GBP 12,000 MRR by 2027-08-31", "hardConstraints": ["maximum five Sources", "zero paid spend"], "preferences": [], "advantages": [], "budgetProfile": "custom", "sourceCap": 5},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "route became unavailable", "coordinators": 1},
         "evidence": [{"id": "budget-a", "lineageId": "budget-ledger", "freshness": {"assessment": "current", "asOf": "2026-09-04"}, "observation": "All four ordinary Source units are unavailable and the one adversarial unit remains protected; the public route is unavailable.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T10:30:00.000Z", "identitySeed": "pressure", "injectedFailures": ["public-retrieval-unavailable"]},
@@ -121,9 +120,10 @@
     {
       "id": "correction-and-reevaluation",
       "coordinatorInput": {
-        "campaignIntake": {"version": 2, "target": "GBP 5,000 MRR by 2027-05-31", "hardConstraints": ["ten hours weekly"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 5,000 MRR by 2027-05-31", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "challenge-a", "lineageId": "developer-challenge", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "The developer disputes the prior Observation supporting customer-access qualification. No replacement Source or Observation has been supplied; this challenge fixture is not new research evidence.", "copyrightSafe": true}],
+        "evidence": [{"id": "correction-basis-a", "entryId": "inference-dispatch-qualification-evidence", "lineageId": "controlled-independent-source-pair", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.", "copyrightSafe": true}],
+        "developerChallengeFixture": [{"id": "challenge-a", "lineageId": "developer-challenge", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "The developer disputes the prior Observation supporting customer-access qualification. No replacement Source or Observation has been supplied; this challenge fixture is not new research evidence.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T10:40:00.000Z", "identitySeed": "correction", "injectedFailures": []},
         "developerTurns": ["I challenge the customer-access conclusion; the old Source was wrong. No replacement Source is supplied. Record the append-only correction and re-evaluate only dependent decisions. Once that re-evaluation succeeds, stop without executing any returned next action; report the authoritative Work View, preserved terminal artifact paths, and next permitted actions exactly as returned."]
       },
@@ -132,9 +132,9 @@
     {
       "id": "handoff-boundary",
       "coordinatorInput": {
-        "campaignIntake": {"version": 1, "target": "GBP 5,000 MRR by 2027-05-31", "hardConstraints": ["discovery only"], "preferences": [], "advantages": [], "budgetProfile": "quick"},
+        "campaignIntake": {"version": 1, "target": "GBP 5,000 MRR by 2027-05-31", "hardConstraints": [], "preferences": [], "advantages": [], "budgetProfile": "quick"},
         "capabilityProfile": {"host": "Codex local workspace", "retrieval": "fixture-only public Sources", "coordinators": 1},
-        "evidence": [{"id": "handoff-a", "lineageId": "terminal-authority", "freshness": {"assessment": "not-time-sensitive", "asOf": "2026-09-04"}, "observation": "A valid immutable Opportunity Brief exists for one selected Opportunity.", "copyrightSafe": true}],
+        "evidence": [{"id": "handoff-a", "entryId": "inference-dispatch-qualification-evidence", "lineageId": "controlled-independent-source-pair", "freshness": {"assessment": "current", "asOf": "2026-09-01"}, "observation": "Independent current behavior evidence supports the dispatch Opportunity's qualification requirements and bounded commercial ranges.", "copyrightSafe": true}],
         "deterministic": {"now": "2026-09-04T10:50:00.000Z", "identitySeed": "handoff", "injectedFailures": []},
         "developerTurns": ["Now design the MVP and start Wayfinder automatically."]
       },

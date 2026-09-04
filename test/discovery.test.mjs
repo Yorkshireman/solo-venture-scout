@@ -40,6 +40,7 @@ async function runKernelAt(kernelPath, command, now) {
  * @param {Array<Record<string, unknown>>} [statements]
  * @param {boolean} [includeFormationEvidence]
  * @param {Record<string, string>} [observationTextOverrides]
+ * @param {Record<string, unknown> | undefined} [campaignIntake]
  */
 export async function createDiscoveryCampaign(
   kernelPath,
@@ -47,6 +48,7 @@ export async function createDiscoveryCampaign(
   statements = [],
   includeFormationEvidence = false,
   observationTextOverrides = {},
+  campaignIntake,
 ) {
   const commands = [
     {
@@ -69,7 +71,7 @@ export async function createDiscoveryCampaign(
         campaignPath,
         coordinatorId: "coordinator-primary",
         confirmedAt: "2026-09-01T09:05:00.000Z",
-        intake: {
+        intake: campaignIntake ?? {
           version: 1,
           explicitlyConfirmed: true,
           developerProfileSnapshot: {
@@ -1389,13 +1391,21 @@ async function recordPassingQualificationEvidence(kernelPath, campaignPath) {
  * @param {string} kernelPath
  * @param {string} campaignPath
  * @param {Array<Record<string, unknown>>} [statements]
+ * @param {Record<string, unknown> | undefined} [campaignIntake]
  */
-export async function prepareEligibleCampaign(kernelPath, campaignPath, statements = []) {
+export async function prepareEligibleCampaign(
+  kernelPath,
+  campaignPath,
+  statements = [],
+  campaignIntake,
+) {
   await createDiscoveryCampaign(
     kernelPath,
     campaignPath,
     statements,
     true,
+    {},
+    campaignIntake,
   );
   for (const command of [
     discoveryTrancheCommand(campaignPath),
@@ -1688,13 +1698,15 @@ export function concludeInconclusiveComparisonCommand(campaignPath) {
  * @param {string} kernelPath
  * @param {string} campaignPath
  * @param {NodeJS.ProcessEnv} [environment]
+ * @param {Record<string, unknown> | undefined} [campaignIntake]
  */
 export async function enterInconclusiveComparison(
   kernelPath,
   campaignPath,
   environment,
+  campaignIntake,
 ) {
-  await prepareEligibleCampaign(kernelPath, campaignPath);
+  await prepareEligibleCampaign(kernelPath, campaignPath, [], campaignIntake);
   await completeAdversarialResearch(kernelPath, campaignPath);
   const gap = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
@@ -1802,9 +1814,14 @@ export function developerSelection(opportunityId) {
  *
  * @param {string} kernelPath
  * @param {string} campaignPath
+ * @param {Record<string, unknown> | undefined} [campaignIntake]
  */
-export async function prepareDeveloperSelectedCampaign(kernelPath, campaignPath) {
-  await enterInconclusiveComparison(kernelPath, campaignPath);
+export async function prepareDeveloperSelectedCampaign(
+  kernelPath,
+  campaignPath,
+  campaignIntake,
+) {
+  await enterInconclusiveComparison(kernelPath, campaignPath, undefined, campaignIntake);
   const selected = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
     requestId: "select-inconclusive-opportunities-1",
@@ -1833,9 +1850,14 @@ export async function prepareDeveloperSelectedCampaign(kernelPath, campaignPath)
  *
  * @param {string} kernelPath
  * @param {string} campaignPath
+ * @param {Record<string, unknown> | undefined} [campaignIntake]
  */
-export async function prepareNoQualifierCampaign(kernelPath, campaignPath) {
-  await createDiscoveryCampaign(kernelPath, campaignPath, [], true);
+export async function prepareNoQualifyingOpportunityCampaign(
+  kernelPath,
+  campaignPath,
+  campaignIntake,
+) {
+  await createDiscoveryCampaign(kernelPath, campaignPath, [], true, {}, campaignIntake);
   for (const command of [
     discoveryTrancheCommand(campaignPath),
     secondDiscoveryTrancheCommand(campaignPath),
@@ -5226,13 +5248,13 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
     path.join(tmpdir(), "solo-venture-scout-storage-"),
   );
   const campaignPath = path.join(storagePath, "no-qualifier-campaign");
-  const { qualification, rejectedGate } = await prepareNoQualifierCampaign(
+  const { qualification, rejectedGate } = await prepareNoQualifyingOpportunityCampaign(
     kernelPath,
     campaignPath,
   );
   const evaluated = await runKernel(kernelPath, {
     envelopeVersion: "0.1.0",
-    requestId: "inspect-no-qualifier-precondition",
+    requestId: "inspect-no-qualifying-opportunity-precondition",
     command: "inspectCampaign",
     payload: { campaignPath },
   });
@@ -5552,7 +5574,7 @@ test("no eligible Opportunity is a successful immutable terminal outcome", async
   );
 });
 
-test("no surviving Opportunity still reaches the no-qualifier terminal outcome", async () => {
+test("no surviving Opportunity still reaches the No Qualifying Opportunity terminal outcome", async () => {
   const { kernelPath } = await buildPackagedScout(
     "solo-venture-scout-no-surviving-opportunity-",
   );

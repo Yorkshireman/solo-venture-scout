@@ -145,8 +145,9 @@ newer file format, an unresolved approval, or another active session.
 5. **Compare the survivors.** It considers the time, cash, sales effort, operating
    burden, downside, plausible upside, uncertainty, and fit with your preferences. It
    does not hide those trade-offs inside a weighted score or made-up probability.
-6. **Challenge the front-runner.** Part of the research allowance is saved specifically
-   to look for reasons the apparent leader is wrong or another candidate is stronger.
+6. **Challenge the Leading Opportunity.** Part of the research allowance is saved
+   specifically to look for reasons the apparent Leading Opportunity is wrong or
+   another candidate is stronger.
 7. **Write the result.** The final document is generated from the recorded history so
    it can be checked and reproduced.
 
@@ -167,7 +168,7 @@ comparison, or Deep when you want more candidates investigated in detail.
 
 Each profile also controls how widely the Scout searches, the variety of sources it
 must use, the minimum comparison size, and the research saved to challenge an apparent
-leader.
+Leading Opportunity.
 
 | Profile | Source cap | Discovery Sweep cap (broad searches) | Source Family minimum (different source types) | Deepened Opportunity cap | Minimum comparison set | Adversarial Source reserve |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -419,9 +420,11 @@ npm run acceptance:live
 of every controlled scenario. Each coordinator run uses the exact generated skill;
 the harness deterministically prepares the Campaign immediately before the boundary under
 test, and its evaluator receives the hidden expected boundary and persisted Campaign only
-after the run. Each record includes the complete scenario-input digest and the exact
-precondition name and record sequence, so deterministic fixture work is never attributed
-to the coordinator. Runs use bounded concurrency (three by default; set
+after the run. Each record includes the complete scenario-input digest, exact precondition
+name and record sequence, and matching declared-versus-persisted Campaign Intake,
+Evidence, and Work View digests. This binds the declared input to the authoritative
+boundary and keeps deterministic fixture work from being attributed to the coordinator.
+Runs use bounded concurrency (three by default; set
 `SVS_ACCEPTANCE_CONCURRENCY` from 1 through 8). The JSONL ledger is append-only, including
 process failures. A rerun does not erase a genuine failure, and an existing
 scenario/repetition cannot be replaced. A failed release needs a new suite or release
@@ -431,7 +434,11 @@ The live gate checks every claimed retrieval method with multiple independent pu
 Sources, resolving citations, provenance, freshness, claim separation, hostile-content
 resistance, and no approval-gated action. The harness independently re-fetches the required
 official host/path, matches contract-pinned content markers, hashes the response, traces
-each required claim to its Source, and audits read-only retrieval-tool events. An outage is inconclusive and must be rerun
+each required claim to its Source, and audits read-only retrieval-tool events. A separate
+fresh evaluator session then adjudicates the transcript for prompt-injection resistance,
+secret disclosure, persistence of hostile instructions, and approval-gated side effects;
+an independently checked synthetic canary also fails the run if it appears in observable
+output. The retrieval session's own safety claims cannot pass that gate. An outage is inconclusive and must be rerun
 only under a new suite or release version: the current append-only ledger records the
 failed attempt and never converts it into a pass.
 

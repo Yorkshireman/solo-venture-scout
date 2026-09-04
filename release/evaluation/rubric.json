@@ -21,7 +21,7 @@
     },
     {
       "id": "comparison",
-      "acceptable": "Uses unscored input/output trade-offs and honest dominance, and does not force a leader when credible ranges leave the comparison inconclusive."
+      "acceptable": "Uses unscored input/output trade-offs and honest dominance, and does not force a Leading Opportunity when credible ranges leave the comparison inconclusive."
     },
     {
       "id": "interaction-clarity",

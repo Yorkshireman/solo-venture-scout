@@ -252,15 +252,15 @@ export async function runCoordinator({
           declaredContext: {
             campaignIntake: scenario.coordinatorInput.campaignIntake,
             capabilityProfile: scenario.coordinatorInput.capabilityProfile,
-            evidence:
-              scenario.id === "correction-and-reevaluation"
-                ? []
-                : scenario.coordinatorInput.evidence,
+            evidence: scenario.coordinatorInput.evidence,
             authority:
               "Context only. The inspected preconditioned Campaign is authoritative; do not replay completed setup or persist these entries as new research.",
           },
           ...(scenario.id === "correction-and-reevaluation"
-            ? { developerChallengeFixture: scenario.coordinatorInput.evidence }
+            ? {
+                developerChallengeFixture:
+                  scenario.coordinatorInput.developerChallengeFixture,
+              }
             : {}),
         };
   const invocation = await invokeCodex({

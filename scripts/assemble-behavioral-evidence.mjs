@@ -160,6 +160,17 @@ const status = profiles.every(
         /^[a-f0-9]{64}$/.test(run.scenarioInputSha256) &&
         typeof run.precondition?.precondition === "string" &&
         Number.isSafeInteger(run.precondition?.initialRecordSequence) &&
+        run.precondition?.inputBinding?.status === "passed" &&
+        /^[a-f0-9]{64}$/.test(
+          run.precondition?.inputBinding?.declaredCampaignIntakeSha256,
+        ) &&
+        run.precondition?.inputBinding?.declaredCampaignIntakeSha256 ===
+          run.precondition?.inputBinding?.persistedCampaignIntakeSha256 &&
+        Array.isArray(run.precondition?.inputBinding?.boundEvidenceEntryIds) &&
+        /^[a-f0-9]{64}$/.test(
+          run.precondition?.inputBinding?.boundEvidenceSha256,
+        ) &&
+        /^[a-f0-9]{64}$/.test(run.precondition?.inputBinding?.workViewSha256) &&
         run.evaluation?.status === "passed",
     ),
 );
