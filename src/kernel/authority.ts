@@ -127,10 +127,16 @@ import {
 import {
   commitStagedOperation,
   completeOperationRecovery,
+  manifestDigest,
+  recordDigest,
   injectPersistenceFault,
   recoverInterruptedOperations,
   stageOperationIntent,
 } from "./recovery.js";
+import {
+  campaignAuthorityFailure,
+  NewerCampaignContractsError,
+} from "./campaign-errors.js";
 import type {
   InterruptedOperationRecovery,
   RecoveredOperation,
@@ -4873,11 +4879,12 @@ export const authoritativeOperationDescriptors = {
         command as ReevaluateCampaignCommand,
         outcomeSequence - 1,
       )[1];
+      const { recordDigest: _recordDigest, ...outcomeWithoutDigest } = outcome;
       if (
         validateReevaluateCampaignFields(command).length > 0 ||
         campaignReevaluationViolation(history, command as ReevaluateCampaignCommand) !==
           undefined ||
-        JSON.stringify(outcome) !== JSON.stringify(expectedOutcome) ||
+        JSON.stringify(outcomeWithoutDigest) !== JSON.stringify(expectedOutcome) ||
         applyCampaignReevaluation(
           history,
           reevaluation as unknown as CampaignReevaluation,
@@ -5625,23 +5632,72 @@ export async function readJson(targetPath: string): Promise<unknown> {
 }
 
 export async function readCampaignRecords(campaignPath: string): Promise<unknown[]> {
-  return (await readFile(path.join(campaignPath, "records.jsonl"), "utf8"))
+  const text = await readFile(path.join(campaignPath, "records.jsonl"), "utf8");
+  if (text.trim() === "") {
+    throw new Error("authoritative history is empty");
+  }
+  return text
     .trimEnd()
     .split("\n")
-    .map((line) => JSON.parse(line) as unknown);
+    .map((line, index) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch {
+        throw new Error(
+          `authoritative record line ${index + 1} is not valid JSON; damaged tail was preserved`,
+        );
+      }
+    });
 }
 
-export function matchesContracts(value: Record<string, unknown>): boolean {
-  const entries = Object.entries(contracts);
+export function matchesContracts(
+  value: Record<string, unknown>,
+  expectedContracts: Record<string, string> = contracts,
+): boolean {
+  const entries = Object.entries(expectedContracts);
   return (
     Object.keys(value).length === entries.length &&
     entries.every(([name, version]) => value[name] === version)
   );
 }
 
+function semanticVersionParts(version: unknown): number[] | undefined {
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+    return undefined;
+  }
+  return version.split(".").map(Number);
+}
+
+function isNewerVersion(found: unknown, supported: string): boolean {
+  const foundParts = semanticVersionParts(found);
+  const supportedParts = semanticVersionParts(supported)!;
+  if (foundParts === undefined) {
+    return false;
+  }
+  for (let index = 0; index < supportedParts.length; index += 1) {
+    if (foundParts[index]! !== supportedParts[index]!) {
+      return foundParts[index]! > supportedParts[index]!;
+    }
+  }
+  return false;
+}
+
+export function newerContractDetails(
+  foundVersions: Record<string, unknown>,
+  supportedVersions: Record<string, string> = contracts,
+): string[] {
+  return Object.entries(supportedVersions).flatMap(([name, supported]) => {
+    const found = foundVersions[name];
+    return isNewerVersion(found, supported)
+      ? [`${name}: found ${String(found)}; supported ${supported}.`]
+      : [];
+  });
+}
+
 export type CampaignManifest = {
   campaignId: string;
   createdAt: string;
+  manifestDigest?: string;
   versions: Record<string, unknown>;
   authority: { records: "records.jsonl" };
   projections: {
@@ -5654,14 +5710,39 @@ export type CampaignManifest = {
   };
 };
 
-export function parseCampaignManifest(value: unknown): CampaignManifest | undefined {
+export function parseCampaignManifest(
+  value: unknown,
+  expectedContracts: Record<string, string> = contracts,
+): CampaignManifest | undefined {
+  if (
+    expectedContracts.campaignFormat === contracts.campaignFormat &&
+    isRecord(value) &&
+    isRecord(value.versions)
+  ) {
+    const newerContracts = newerContractDetails(value.versions);
+    if (newerContracts.length > 0) {
+      throw new NewerCampaignContractsError(newerContracts);
+    }
+  }
+  if (
+    expectedContracts.campaignFormat === contracts.campaignFormat &&
+    isRecord(value) &&
+    isRecord(value.versions) &&
+    matchesContracts(value.versions, expectedContracts) &&
+    (
+      typeof value.manifestDigest !== "string" ||
+      value.manifestDigest !== manifestDigest(value)
+    )
+  ) {
+    throw new Error("manifest integrity digest does not match");
+  }
   if (
     !isRecord(value) ||
     typeof value.campaignId !== "string" ||
     value.campaignId.trim() === "" ||
     !isIsoInstant(value.createdAt) ||
     !isRecord(value.versions) ||
-    !matchesContracts(value.versions) ||
+    !matchesContracts(value.versions, expectedContracts) ||
     !isRecord(value.authority) ||
     value.authority.records !== "records.jsonl" ||
     !isRecord(value.projections) ||
@@ -5683,10 +5764,14 @@ export function parseCampaignManifest(value: unknown): CampaignManifest | undefi
   return value as unknown as CampaignManifest;
 }
 
-export async function rebuildCampaignFromAuthority(campaignPath: string) {
+export async function rebuildCampaignFromAuthority(
+  campaignPath: string,
+  expectedContracts: Record<string, string> = contracts,
+) {
   const resolvedPath = path.resolve(campaignPath);
   const manifest = parseCampaignManifest(
     await readJson(path.join(resolvedPath, "manifest.json")),
+    expectedContracts,
   );
   if (manifest === undefined) {
     throw new Error("manifest is missing identity or supported contract versions");
@@ -5744,7 +5829,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       !isRecord(record) ||
       record.sequence !== sequence ||
       record.campaignId !== manifest.campaignId ||
-      record.recordVersion !== contracts.records ||
+      record.recordVersion !== expectedContracts.records ||
       record.recordId !== expectedRecordId ||
       typeof record.requestId !== "string" ||
       record.requestId.trim() === "" ||
@@ -5754,6 +5839,15 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       !isIsoInstant(record.recordedAt)
     ) {
       throw new Error(`authoritative record ${sequence} is invalid`);
+    }
+    if (
+      expectedContracts.records === contracts.records &&
+      (typeof record.recordDigest !== "string" ||
+        record.recordDigest !== recordDigest(record))
+    ) {
+      throw new Error(
+        `authoritative record ${sequence} integrity digest does not match`,
+      );
     }
     const operationDescriptor = isRecord(record)
       ? authoritativeOperationDescriptor(record.operation)
@@ -5784,13 +5878,22 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
       !isRecord(outcome) ||
       outcome.sequence !== outcomeSequence ||
       outcome.campaignId !== manifest.campaignId ||
-      outcome.recordVersion !== contracts.records ||
+      outcome.recordVersion !== expectedContracts.records ||
       outcome.recordId !== expectedOutcomeId ||
       outcome.requestId !== record.requestId ||
       outcome.recordedAt !== record.recordedAt ||
       outcome.type !== operationDescriptor.outcome
     ) {
       throw new Error(`authoritative record ${outcomeSequence} is invalid`);
+    }
+    if (
+      expectedContracts.records === contracts.records &&
+      (typeof outcome.recordDigest !== "string" ||
+        outcome.recordDigest !== recordDigest(outcome))
+    ) {
+      throw new Error(
+        `authoritative record ${outcomeSequence} integrity digest does not match`,
+      );
     }
     if (
       !isAuthoritativeOperation(record.operation) ||
@@ -6828,7 +6931,7 @@ export async function rebuildCampaignFromAuthority(campaignPath: string) {
     campaign: {
       id: manifest.campaignId,
       path: resolvedPath,
-      versions: contracts,
+      versions: manifest.versions,
     },
     records,
     workView,
@@ -7307,18 +7410,23 @@ export async function inspectCampaign(
       },
     };
   } catch (error) {
+    const authorityFailure = campaignAuthorityFailure(error);
     return {
       envelopeVersion: contracts.commandEnvelope,
       requestId: command.requestId,
       command: command.command,
       ok: false as const,
-      error: {
-        code: "SVS-CAMPAIGN-INVALID",
-        message: "Scouting Campaign could not be located and validated.",
-        action:
-          "Check the explicit Campaign path and preserve its contents for recovery; do not continue the Campaign.",
-        details: [error instanceof Error ? error.message : "unknown validation error"],
-      },
+      error:
+        authorityFailure ??
+        {
+          code: "SVS-CAMPAIGN-INVALID",
+          message: "Scouting Campaign could not be located and validated.",
+          action:
+            "Check the explicit Campaign path and preserve its contents for recovery; do not continue the Campaign.",
+          details: [
+            error instanceof Error ? error.message : "unknown validation error",
+          ],
+        },
     };
   }
 }

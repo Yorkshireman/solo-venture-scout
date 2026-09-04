@@ -487,13 +487,21 @@ native agent state:
 3. Run `resumeCampaign`. Report completed work, current phase or pause, the exclusive
    lease, recovered operations, regenerated projections, unresolved reservations,
    and next permitted actions exactly from the validated response.
-4. If another coordinator holds the lease or validation fails, report the returned
+4. If the response contains `migration.required`, show the complete forward-only
+   plan and ask for explicit confirmation. Run `migrateCampaign` with the exact
+   returned migration identity only after confirmation, then retry Resume. Never
+   treat inspection, silence, or a general request to continue as migration consent.
+5. If another coordinator holds the lease or validation fails, report the returned
    action and stop without continuing Campaign work.
 
 Resume completes safe durable intents before recording takeover, rebuilds damaged
 Work Views, leases, checkpoints, budgets, Evidence Ledgers, and deterministic terminal
 renderings from authoritative history, and continues autonomously only when no
 Pending Decision remains. Never bypass or replace an interruption-recovery decision.
+Contract compatibility is fail-closed: never reinterpret an unsupported newer
+contract, migrate backward, invent missing records, discard a corrupt tail, or repair
+a manually changed authoritative record autonomously. Preserve the Campaign and give
+the exact reconciliation or snapshot-recovery choices returned by the kernel.
 
 Replaying the same create, resume, intake-confirmation, reservation, or evidence-import
 request is safe. Reuse its request identity and payload for a retry; do not invent a

@@ -119,8 +119,8 @@ test("package validation checks the generated artifacts that ship", async () => 
   ]);
   assert.deepEqual(report.versions, {
     release: "0.1.0",
-    campaignFormat: "0.1.0",
-    records: "0.1.0",
+    campaignFormat: "0.2.0",
+    records: "0.2.0",
     commandEnvelope: "0.1.0",
     researchPackages: "0.1.0",
     renderTemplates: "0.1.0",

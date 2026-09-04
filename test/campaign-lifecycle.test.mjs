@@ -15,8 +15,8 @@ import { buildPackagedScout, runProcess } from "./support/packaged-scout.mjs";
 
 const contracts = {
   release: "0.1.0",
-  campaignFormat: "0.1.0",
-  records: "0.1.0",
+  campaignFormat: "0.2.0",
+  records: "0.2.0",
   commandEnvelope: "0.1.0",
   researchPackages: "0.1.0",
   renderTemplates: "0.1.0",
@@ -560,8 +560,9 @@ test("inspection fails closed on malformed authoritative records", async () => {
 
   assert.equal(result.code, 3);
   assert.equal(result.response.ok, false);
-  assert.equal(result.response.error.code, "SVS-CAMPAIGN-INVALID");
+  assert.equal(result.response.error.code, "SVS-CAMPAIGN-AUTHORITY-DAMAGED");
   assert.match(result.response.error.details[0], /record 1/i);
+  assert.match(result.response.error.action, /restore.*trusted backup/i);
 });
 
 test("manifest discovery ignores unrelated manifests", async () => {

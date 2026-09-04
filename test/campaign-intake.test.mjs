@@ -329,7 +329,7 @@ test("Campaign Intake confirmation is idempotent and cannot overwrite its first 
   );
 });
 
-test("Campaign Intake remains compatible with an earlier 0.1.0 Campaign manifest", async () => {
+test("Campaign Intake refuses a current Campaign manifest edited into an earlier shape", async () => {
   const { kernelPath } = await buildPackagedScout("solo-venture-scout-intake-compat-");
   const storagePath = await mkdtemp(path.join(tmpdir(), "solo-venture-scout-storage-"));
   const campaignPath = path.join(storagePath, "earlier-manifest");
@@ -349,11 +349,23 @@ test("Campaign Intake remains compatible with an earlier 0.1.0 Campaign manifest
     command: "inspectCampaign",
     payload: { campaignPath },
   });
+  const recordsBefore = await readFile(path.join(campaignPath, "records.jsonl"));
   const confirmed = await runKernel(kernelPath, quickIntakeCommand(campaignPath));
 
-  assert.equal(inspected.code, 0, inspected.stderr);
-  assert.equal(confirmed.code, 0, confirmed.stderr);
-  assert.equal(confirmed.response.result.intake.version, 1);
+  assert.equal(inspected.code, 3);
+  assert.equal(
+    inspected.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.equal(confirmed.code, 3);
+  assert.equal(
+    confirmed.response.error.code,
+    "SVS-CAMPAIGN-RECONCILIATION-REQUIRED",
+  );
+  assert.deepEqual(
+    await readFile(path.join(campaignPath, "records.jsonl")),
+    recordsBefore,
+  );
 });
 
 test("Campaign Intake rejects impossible deadlines and incoherent custom budgets", async () => {

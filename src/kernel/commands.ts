@@ -99,8 +99,18 @@ import {
   inconclusiveComparisonArtifactPath,
 } from "./authority.js";
 import type { CoordinatorOperationLock } from "./authority.js";
-import { commandDigest } from "./recovery.js";
+import {
+  addManifestDigest,
+  addRecordDigests,
+  commandDigest,
+} from "./recovery.js";
 import type { CampaignRecovery } from "./authority.js";
+import { campaignAuthorityFailure } from "./campaign-errors.js";
+import {
+  discoverSupportedCampaignMigration,
+  supportedCampaignMigrationPlan,
+  unsupportedNewerCampaignContracts,
+} from "./compatibility.js";
 
 export type CoordinatorCommand =
   | ResumeCampaignCommand
@@ -226,6 +236,7 @@ export async function runCoordinatorOperation<
       descriptor.requireCampaignManifest !== false &&
       !(await hasCampaignManifest(campaignPath))
     ) {
+      await rebuildCampaignFromAuthority(campaignPath);
       throw new Error("Campaign manifest is missing or invalid");
     }
     coordinatorLock = await acquireCoordinatorOperationLock(
@@ -355,14 +366,15 @@ export async function runCoordinatorOperation<
     if (records[0] !== undefined) {
       records[0].commandDigest = requestedCommandDigest;
     }
-    const operation = records[0]?.operation;
+    const protectedRecords = addRecordDigests(records);
+    const operation = protectedRecords[0]?.operation;
     if (!isAuthoritativeOperation(operation)) {
       throw new Error("coordinator operation records contain an unknown operation");
     }
     const extensionViolation = inconclusiveResearchExtensionViolation(
       rebuiltCampaign.authoritativeHistory,
       operation,
-      records[1] ?? {},
+      protectedRecords[1] ?? {},
     );
     if (extensionViolation !== undefined) {
       return coordinatorOperationFailure(command, {
@@ -374,15 +386,24 @@ export async function runCoordinatorOperation<
         details: [extensionViolation],
       });
     }
-    const after = await appendCampaignRecordsAndPersist(campaignPath, records);
+    const after = await appendCampaignRecordsAndPersist(
+      campaignPath,
+      protectedRecords,
+    );
     return coordinatorOperationSuccess(
       command,
       descriptor.successResult(command, after, context),
     );
   } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "unknown validation error";
+    const authorityFailure = campaignAuthorityFailure(error);
+    if (authorityFailure !== undefined) {
+      return coordinatorOperationFailure(command, authorityFailure);
+    }
     return coordinatorOperationFailure(command, {
       ...descriptor.invalidCampaign,
-      details: [error instanceof Error ? error.message : "unknown validation error"],
+      details: [detail],
     });
   } finally {
     if (coordinatorLock !== undefined) {
@@ -481,6 +502,47 @@ export async function reevaluateCampaign(
 }
 
 export async function resumeCampaign(command: ResumeCampaignCommand, currentTime: string) {
+  {
+    const explicitCampaignPath = command.payload.campaignPath;
+    const campaignPath =
+      explicitCampaignPath === undefined
+        ? undefined
+        : path.resolve(explicitCampaignPath);
+    const newerContracts =
+      campaignPath === undefined
+        ? undefined
+        : await unsupportedNewerCampaignContracts(campaignPath).catch(
+            () => undefined,
+          );
+    if (newerContracts !== undefined) {
+      return coordinatorOperationFailure(command, {
+        code: "SVS-CAMPAIGN-CONTRACT-NEWER",
+        message:
+          "Scouting Campaign uses contract versions newer than this release supports.",
+        action:
+          "Open it with a release that supports every listed version; do not reinterpret, edit, or migrate it backward.",
+        details: newerContracts,
+      });
+    }
+    let migration;
+    try {
+      migration =
+        campaignPath === undefined
+          ? await discoverSupportedCampaignMigration(command.payload.searchPath!)
+          : await supportedCampaignMigrationPlan(campaignPath);
+    } catch (error) {
+      const authorityFailure = campaignAuthorityFailure(error);
+      if (authorityFailure !== undefined) {
+        return coordinatorOperationFailure(command, authorityFailure);
+      }
+    }
+    if (migration !== undefined) {
+      return coordinatorOperationSuccess(command, {
+        resumed: false,
+        ...migration,
+      });
+    }
+  }
   const buildResumeResult = (
     resumed: boolean,
     campaign: LoadedCampaign,
@@ -3033,7 +3095,7 @@ export async function createCampaign(command: CreateCampaignCommand) {
   const stagingPath = await mkdtemp(path.join(parentPath, ".svs-create-"));
   await chmod(stagingPath, 0o700);
   try {
-    const records = campaignOperationRecords({
+    const records = addRecordDigests(campaignOperationRecords({
       campaignId: command.payload.campaignId,
       requestId: command.requestId,
       recordedAt: command.payload.createdAt,
@@ -3042,14 +3104,14 @@ export async function createCampaign(command: CreateCampaignCommand) {
       coordinatorId: command.payload.coordinatorId,
       leaseExpiresAt: command.payload.leaseExpiresAt,
       commandDigest: commandDigest(command),
-    });
+    }));
     const workView = initialWorkView(command.payload.campaignId);
     const lease: CoordinatorLease = {
       coordinatorId: command.payload.coordinatorId,
       acquiredAt: command.payload.createdAt,
       expiresAt: command.payload.leaseExpiresAt,
     };
-    const manifest = {
+    const manifest = addManifestDigest({
       campaignId: command.payload.campaignId,
       createdAt: command.payload.createdAt,
       versions: contracts,
@@ -3063,7 +3125,7 @@ export async function createCampaign(command: CreateCampaignCommand) {
           "no-qualifying-opportunity-report.md",
         opportunityBrief: "opportunity-brief.md",
       },
-    };
+    });
 
     await writeFile(
       path.join(stagingPath, "records.jsonl"),

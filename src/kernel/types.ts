@@ -63,6 +63,19 @@ export type ResumeCampaignCommand = {
   };
 };
 
+export type MigrateCampaignCommand = {
+  envelopeVersion: string;
+  requestId: string;
+  command: "migrateCampaign";
+  payload: {
+    campaignPath: string;
+    coordinatorId: string;
+    confirmedAt: string;
+    migrationId: string;
+    confirmed: true;
+  };
+};
+
 export type IntakeValue =
   | { state: "known"; value: string }
   | { state: "unknown" }

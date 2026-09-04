@@ -11,6 +11,7 @@ import type {
   InspectCampaignCommand,
   InspectEvidenceCommand,
   ResumeCampaignCommand,
+  MigrateCampaignCommand,
   ConfirmCampaignIntakeCommand,
   ReservePublicResearchCommand,
   ReserveApprovedResearchCommand,
@@ -60,6 +61,7 @@ import {
   validateRespondInterruptedResearchFields,
   validateReevaluateCampaignFields,
   validateResumeCampaignFields,
+  validateMigrateCampaignFields,
   isRecord,
 } from "./kernel/validation.js";
 import {
@@ -87,6 +89,7 @@ import {
   respondInterruptedResearch,
   resumeCampaign,
 } from "./kernel/commands.js";
+import { migrateCampaign } from "./kernel/compatibility.js";
 import { inspectCampaign, inspectEvidence } from "./kernel/authority.js";
 
 export type KernelEffects = {
@@ -162,6 +165,7 @@ export async function executeCommand(
       "inspectCampaign",
       "inspectEvidence",
       "resumeCampaign",
+      "migrateCampaign",
       "confirmCampaignIntake",
       "reservePublicResearch",
       "reserveApprovedResearch",
@@ -291,6 +295,29 @@ export async function executeCommand(
       command as unknown as ResumeCampaignCommand,
       effects.now?.() ?? new Date().toISOString(),
     );
+  }
+
+  if (command.command === "migrateCampaign") {
+    const invalidFields = validateMigrateCampaignFields(command);
+    if (typeof command.envelopeVersion !== "string") {
+      invalidFields.unshift("envelopeVersion must be a string.");
+    }
+    if (invalidFields.length > 0) {
+      return {
+        envelopeVersion: contracts.commandEnvelope,
+        requestId,
+        command: receivedCommand,
+        ok: false as const,
+        error: {
+          code: "SVS-CAMPAIGN-MIGRATION-INVALID",
+          message: "Campaign migration confirmation is invalid.",
+          action:
+            "Use the exact migration plan returned by resume and explicitly confirm it before retrying.",
+          details: invalidFields,
+        },
+      };
+    }
+    return migrateCampaign(command as unknown as MigrateCampaignCommand);
   }
 
   if (command.command === "confirmCampaignIntake") {

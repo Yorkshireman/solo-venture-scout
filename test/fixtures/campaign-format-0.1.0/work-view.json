@@ -1,0 +1,13 @@
+{
+  "campaignId": "campaign-legacy-fixture",
+  "recordSequence": 2,
+  "phase": "campaign-created",
+  "pause": null,
+  "completedWork": [
+    "Scouting Campaign created"
+  ],
+  "nextPermittedActions": [
+    "confirm-campaign-intake"
+  ],
+  "publicResearchAvailable": false
+}

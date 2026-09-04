@@ -55,6 +55,48 @@ succeeds only when it finds exactly one direct Scouting Campaign. Inspection val
 the manifest, authoritative records, Work View, latest checkpoint, and lease without
 changing Campaign state.
 
+## Migrate a supported older Campaign
+
+`resumeCampaign` opens a supported older Campaign read-only and returns a visible
+forward-only migration plan. It does not acquire a lease, append history, create a
+snapshot, or advance a version at this stage. Show the returned source and target
+versions and every planned step to the developer, then obtain explicit confirmation.
+
+After confirmation, send the exact migration identity returned by Resume:
+
+```json
+{
+  "envelopeVersion": "0.1.0",
+  "requestId": "migrate-campaign-stable-request-id",
+  "command": "migrateCampaign",
+  "payload": {
+    "campaignPath": "/developer-chosen/exact-campaign-path",
+    "coordinatorId": "stable-coordinator-id",
+    "confirmedAt": "2026-09-04T09:05:00.000Z",
+    "migrationId": "campaign-format-0.1.0-to-0.2.0",
+    "confirmed": true
+  }
+}
+```
+
+The migration validates the older authoritative history first, writes a private
+snapshot and step journal under `migrations/<migration-id>/`, adds integrity digests
+to the migrated records, validates a complete candidate Campaign, and advances the
+manifest versions only after candidate validation. It never migrates backward. On
+failure, preserve the returned snapshot and journal and retry only the same forward
+migration after resolving the diagnostic.
+
+Each release, Campaign format, record, command envelope, Research Result Package,
+and render-template contract has its own version in `references/versions.json`,
+preflight responses, and Campaign manifests. Do not infer one contract version from
+another.
+
+Unsupported newer contract versions stop before any Campaign mutation. Missing or
+corrupt `records.jsonl` stops with choices to restore a trusted backup, restore a
+migration snapshot, or preserve the Campaign and begin a new one. Record integrity
+changes made outside the kernel require explicit reconciliation against a trusted
+original or snapshot. Never invent authoritative records or remove a damaged tail.
+
 ## Confirm Campaign Intake
 
 The coordinator sends the complete review that the developer explicitly confirmed.

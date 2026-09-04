@@ -60,6 +60,34 @@ export function commandDigest(command: unknown): string {
     .digest("hex");
 }
 
+export function recordDigest(record: Record<string, unknown>): string {
+  const { recordDigest: _recordDigest, ...unsignedRecord } = record;
+  return commandDigest(unsignedRecord);
+}
+
+export function manifestDigest(manifest: Record<string, unknown>): string {
+  const { manifestDigest: _manifestDigest, ...unsignedManifest } = manifest;
+  return commandDigest(unsignedManifest);
+}
+
+export function addManifestDigest(
+  manifest: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...manifest,
+    manifestDigest: manifestDigest(manifest),
+  };
+}
+
+export function addRecordDigests(
+  records: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return records.map((record) => ({
+    ...record,
+    recordDigest: recordDigest(record),
+  }));
+}
+
 export function injectPersistenceFault(point: string): void {
   if (
     process.env.NODE_ENV === "test" &&
@@ -166,7 +194,15 @@ async function readAuthoritativeRecords(
   const lines = text.trimEnd().split("\n");
   return {
     text,
-    records: lines.map((line) => JSON.parse(line) as unknown),
+    records: lines.map((line, index) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch {
+        throw new Error(
+          `authoritative record line ${index + 1} is not valid JSON; damaged tail was preserved`,
+        );
+      }
+    }),
   };
 }
 
@@ -231,6 +267,25 @@ async function commitJournal(
   journal: OperationJournal,
 ): Promise<InterruptedOperationRecovery> {
   const authoritative = await readAuthoritativeRecords(campaignPath);
+  for (const [index, value] of authoritative.records.entries()) {
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      Array.isArray(value)
+    ) {
+      throw new Error(`authoritative record ${index + 1} is invalid`);
+    }
+    const record = value as Record<string, unknown>;
+    if (
+      record.recordVersion === contracts.records &&
+      (typeof record.recordDigest !== "string" ||
+        record.recordDigest !== recordDigest(record))
+    ) {
+      throw new Error(
+        `authoritative record ${index + 1} integrity digest does not match`,
+      );
+    }
+  }
   if (
     recordsMatch(
       authoritative.records,

@@ -149,6 +149,40 @@ export function validateResumeCampaignFields(command: Record<string, unknown>): 
   return details;
 }
 
+export function validateMigrateCampaignFields(
+  command: Record<string, unknown>,
+): string[] {
+  if (!isRecord(command.payload)) {
+    return ["payload must be an object."];
+  }
+  const details: string[] = [];
+  for (const field of [
+    "campaignPath",
+    "coordinatorId",
+    "migrationId",
+  ] as const) {
+    if (
+      typeof command.payload[field] !== "string" ||
+      command.payload[field].trim() === ""
+    ) {
+      details.push(`payload.${field} must be a non-empty string.`);
+    }
+  }
+  if (
+    typeof command.payload.campaignPath === "string" &&
+    !path.isAbsolute(command.payload.campaignPath)
+  ) {
+    details.push("payload.campaignPath must be an absolute path.");
+  }
+  if (!isIsoInstant(command.payload.confirmedAt)) {
+    details.push("payload.confirmedAt must be an ISO 8601 UTC instant.");
+  }
+  if (command.payload.confirmed !== true) {
+    details.push("payload.confirmed must be true after explicit confirmation.");
+  }
+  return details;
+}
+
 export function validateInspectEvidenceFields(command: Record<string, unknown>): string[] {
   if (!isRecord(command.payload)) {
     return ["payload must be an object."];

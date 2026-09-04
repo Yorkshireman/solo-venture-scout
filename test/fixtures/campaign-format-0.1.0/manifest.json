@@ -1,0 +1,23 @@
+{
+  "campaignId": "campaign-legacy-fixture",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "versions": {
+    "release": "0.1.0",
+    "campaignFormat": "0.1.0",
+    "records": "0.1.0",
+    "commandEnvelope": "0.1.0",
+    "researchPackages": "0.1.0",
+    "renderTemplates": "0.1.0"
+  },
+  "authority": {
+    "records": "records.jsonl"
+  },
+  "projections": {
+    "workView": "work-view.json",
+    "campaignIntake": "campaign-intake.json",
+    "researchBudget": "research-budget.json",
+    "evidenceLedger": "evidence-ledger.json",
+    "noQualifyingOpportunityReport": "no-qualifying-opportunity-report.md",
+    "opportunityBrief": "opportunity-brief.md"
+  }
+}
